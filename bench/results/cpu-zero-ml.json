@@ -1,0 +1,194 @@
+{
+  "harness": "bench.routing_latency",
+  "recordedAt": "2026-10-08T05:22:22+00:00",
+  "config": {
+    "embedding": "hash",
+    "decision": "deterministic",
+    "requestedDevice": "cpu",
+    "mode": "performance",
+    "iterations": 30,
+    "warmup": 3,
+    "batchSizes": [
+      1,
+      8,
+      32
+    ],
+    "threads": null
+  },
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Linux-5.15.0-174-generic-x86_64-with-glibc2.35",
+    "machine": "x86_64",
+    "cpuCount": 112,
+    "loadAvg1m": 93.25,
+    "gitCommit": "80b0076"
+  },
+  "device": "cpu",
+  "backends": {
+    "embedding": {
+      "backend": "hash-v1",
+      "requested": "hash",
+      "modelId": null,
+      "revision": null,
+      "precision": "float32",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "loadSeconds": 0.0
+    },
+    "decision": {
+      "backend": "deterministic-v1",
+      "requested": "deterministic",
+      "modelId": null,
+      "revision": null,
+      "precision": "float32",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "loadSeconds": 0.0
+    }
+  },
+  "coldLoadSeconds": 0.0,
+  "embedMs": {
+    "1": {
+      "n": 30,
+      "p50": 0.22,
+      "p95": 0.23,
+      "p99": 0.26,
+      "min": 0.18,
+      "max": 0.26,
+      "mean": 0.22
+    },
+    "8": {
+      "n": 30,
+      "p50": 1.12,
+      "p95": 1.57,
+      "p99": 1.58,
+      "min": 0.98,
+      "max": 1.58,
+      "mean": 1.16
+    },
+    "32": {
+      "n": 30,
+      "p50": 6.28,
+      "p95": 7.06,
+      "p99": 7.41,
+      "min": 3.97,
+      "max": 7.43,
+      "mean": 5.65
+    }
+  },
+  "decisionMs": {
+    "choice5": {
+      "n": 30,
+      "p50": 0.08,
+      "p95": 0.09,
+      "p99": 0.09,
+      "min": 0.08,
+      "max": 0.09,
+      "mean": 0.08
+    },
+    "noul": {
+      "n": 30,
+      "p50": 0.04,
+      "p95": 0.05,
+      "p99": 0.06,
+      "min": 0.04,
+      "max": 0.07,
+      "mean": 0.04
+    },
+    "scoreBatch1": {
+      "n": 30,
+      "p50": 0.08,
+      "p95": 0.08,
+      "p99": 0.08,
+      "min": 0.08,
+      "max": 0.08,
+      "mean": 0.08
+    },
+    "scoreSequential1": {
+      "n": 30,
+      "p50": 0.11,
+      "p95": 0.11,
+      "p99": 0.13,
+      "min": 0.09,
+      "max": 0.14,
+      "mean": 0.11
+    },
+    "scoreBatch8": {
+      "n": 30,
+      "p50": 0.77,
+      "p95": 0.81,
+      "p99": 0.83,
+      "min": 0.76,
+      "max": 0.83,
+      "mean": 0.77
+    },
+    "scoreSequential8": {
+      "n": 15,
+      "p50": 0.85,
+      "p95": 0.87,
+      "p99": 0.87,
+      "min": 0.84,
+      "max": 0.87,
+      "mean": 0.85
+    },
+    "scoreBatch32": {
+      "n": 30,
+      "p50": 3.0,
+      "p95": 3.04,
+      "p99": 3.78,
+      "min": 1.95,
+      "max": 4.08,
+      "mean": 2.69
+    },
+    "scoreSequential32": {
+      "n": 3,
+      "p50": 3.41,
+      "p95": 3.42,
+      "p99": 3.42,
+      "min": 3.4,
+      "max": 3.42,
+      "mean": 3.41
+    }
+  },
+  "routeCompositeMs": {
+    "1": {
+      "n": 30,
+      "p50": 0.55,
+      "p95": 0.56,
+      "p99": 0.57,
+      "min": 0.53,
+      "max": 0.57,
+      "mean": 0.55
+    },
+    "8": {
+      "n": 30,
+      "p50": 0.82,
+      "p95": 1.12,
+      "p99": 1.33,
+      "min": 0.81,
+      "max": 1.36,
+      "mean": 0.87
+    },
+    "32": {
+      "n": 30,
+      "p50": 3.47,
+      "p95": 3.53,
+      "p99": 3.58,
+      "min": 2.47,
+      "max": 3.59,
+      "mean": 3.16
+    }
+  },
+  "memory": {
+    "rssBytes": 50569216,
+    "peakRssBytes": 50569216
+  },
+  "parity": {
+    "skipped": "not requested"
+  },
+  "targets": {
+    "warmRouteP95Ms": 150,
+    "vramTypicalBytes": 4294967296,
+    "note": "SPEC \u00a73/\u00a710 engineering targets; only meaningful on the target GPU"
+  }
+}
