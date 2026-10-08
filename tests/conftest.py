@@ -34,6 +34,8 @@ def _db_available() -> bool:
 requires_db = pytest.mark.skipif(not _db_available(), reason="compose db not running")
 
 _CLEAN_TABLES = [
+    "approval_requests",
+    "eval_results",
     "execution_records",
     "routing_decisions",
     "duplicate_suggestions",
@@ -41,6 +43,7 @@ _CLEAN_TABLES = [
     "policy_rules",
     "agent_principals",
     "mcp_tools",
+    "mcp_server_credentials",
     "mcp_servers",
 ]
 
