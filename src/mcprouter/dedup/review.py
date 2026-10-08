@@ -11,19 +11,31 @@ model has no resolution columns yet (see INTEGRATION_NOTES-registry.md).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from mcprouter.analytics.funnel import merged_funnel, pair_evidence
+from mcprouter.analytics.window import parse_window
 from mcprouter.models import DuplicateSuggestion, MCPServerRecord, MCPToolRecord, utcnow
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.errors import InvalidArgument, InvalidTransition, SuggestionNotFound
-from mcprouter.registry.wire import SuggestionOut, SuggestionToolRef, suggestion_out
+from mcprouter.registry.wire import (
+    SuggestionEvidence,
+    SuggestionOut,
+    SuggestionToolRef,
+    suggestion_out,
+)
 
 STATUSES = ("open", "accepted", "dismissed")
 MAX_JUSTIFICATION = 2000
+EVIDENCE_WINDOW = "30d"
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -56,9 +68,47 @@ def list_suggestions(
         )
     )
     refs = _tool_refs(session, rows)
-    return SuggestionPage(
-        items=[suggestion_out(r, refs) for r in rows], total=int(total), limit=limit, offset=offset
-    )
+    items = [suggestion_out(r, refs) for r in rows]
+    evidence = _usage_evidence(session, [r for r in rows if r.status == "open"])
+    items = [
+        it.model_copy(update={"usage_evidence": evidence[it.id]}) if it.id in evidence else it
+        for it in items
+    ]
+    return SuggestionPage(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def _usage_evidence(
+    session: Session, rows: list[DuplicateSuggestion]
+) -> dict[str, SuggestionEvidence]:
+    """Read-only routing evidence (wave-2 analytics) for open pairs."""
+    if not rows:
+        return {}
+    window = parse_window(EVIDENCE_WINDOW, utcnow())
+    involved = sorted({r.tool_a_id for r in rows} | {r.tool_b_id for r in rows})
+    try:
+        # SAVEPOINT: evidence is optional decoration; an analytics failure
+        # (e.g. statement timeout) degrades to usageEvidence=null instead of
+        # failing the core review listing.
+        with session.begin_nested():
+            funnel = merged_funnel(session, window, {}, only=involved)
+            pairs = pair_evidence(session, window, [(r.tool_a_id, r.tool_b_id) for r in rows])
+    except SQLAlchemyError as exc:
+        log.warning("dedup.usage_evidence_failed exc_type=%s", type(exc).__name__)
+        return {}
+    out: dict[str, SuggestionEvidence] = {}
+    for r in rows:
+        ev = pairs.get((r.tool_a_id, r.tool_b_id))
+        fa, fb = funnel.get(r.tool_a_id), funnel.get(r.tool_b_id)
+        out[r.id] = SuggestionEvidence(
+            window=EVIDENCE_WINDOW,
+            tool_a_surfaced=fa.surfaced if fa else 0,
+            tool_b_surfaced=fb.surfaced if fb else 0,
+            co_surfaced=ev.co_surfaced if ev else 0,
+            tool_a_selected=ev.a_selected if ev else 0,
+            tool_b_selected=ev.b_selected if ev else 0,
+            both_selected=ev.both_selected if ev else 0,
+        )
+    return out
 
 
 def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, SuggestionToolRef]:

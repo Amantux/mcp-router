@@ -55,6 +55,7 @@ def _dispose_engines(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN202 - generat
 
 
 _CLEAN_TABLES = [
+    "tool_stats_daily",
     "approval_requests",
     "eval_results",
     "execution_records",

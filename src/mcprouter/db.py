@@ -35,6 +35,10 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolution_note TEXT",
     # wave 2 (budgets): per-principal distinct-server cap, NULL = unlimited.
     "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_servers INTEGER",
+    # Wave-2 analytics: execution -> routing-decision attribution.
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS route_request_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
+    " ON execution_records (route_request_id)",
 )
 
 

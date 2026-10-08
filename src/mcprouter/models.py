@@ -12,11 +12,23 @@ Conventions:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 384
@@ -186,6 +198,31 @@ class ExecutionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, index=True
     )
+    # Wave-2 analytics: the RoutingDecisionRecord.id (route request_id) this
+    # call followed, when the caller knows it. NULL = unattributed (legacy rows,
+    # approvals, direct calls) — analytics treats NULL as "not in the funnel".
+    route_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+
+
+class ToolStatsDaily(Base):
+    """Per-tool, per-UTC-day funnel rollup (wave-2 analytics).
+
+    Written ONLY by `analytics.rollup.recompute_day` (DELETE+INSERT per day,
+    idempotent). `tool_id` has no FK on purpose: history outlives a deleted
+    tool. The day is the DECISION's UTC day (executions are attributed to the
+    decision they followed)."""
+
+    __tablename__ = "tool_stats_daily"
+
+    tool_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
+    surfaced: Mapped[int] = mapped_column(Integer, default=0)
+    selected: Mapped[int] = mapped_column(Integer, default=0)
+    succeeded: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    sum_rank: Mapped[int] = mapped_column(BigInteger, default=0)  # 1-based ranks summed
+    exposed_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class DuplicateSuggestion(Base):

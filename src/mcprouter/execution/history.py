@@ -25,6 +25,7 @@ class ExecutionRow:
     detail: str
     latency_ms: float | None
     created_at: datetime
+    route_request_id: str | None = None  # wave-2 attribution; None = unattributed
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ def list_executions(
             detail=r.detail,
             latency_ms=r.latency_ms,
             created_at=r.created_at,
+            route_request_id=r.route_request_id,
         )
         for r, tool_name, server_name in rows
     ]

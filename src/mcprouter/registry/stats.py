@@ -1,5 +1,10 @@
 """Per-tool usage stats, updated by the execution manager after each call.
 
+This is the ONE writer of `call_count` / `error_count` / `avg_latency_ms`
+(`ExecutionManager._finalize` calls it for ok/error/timeout outcomes; refused
+and cancelled attempts do not count). Wave-2 unified the two former
+implementations here (docs/INTEGRATION_NOTES-wave2-analytics.md).
+
 `avg_latency_ms` is an exponential moving average with EMA_ALPHA = 0.2:
     avg <- latency                         (first observation)
     avg <- (1 - 0.2) * avg + 0.2 * latency (thereafter)
