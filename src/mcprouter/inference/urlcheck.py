@@ -12,8 +12,13 @@ API validation.
 Network posture (owner decision, wave 3):
 - Link-local and cloud-metadata addresses are ALWAYS refused when the host is
   an IP literal, for any scheme: 169.254.0.0/16, fe80::/10, 100.100.100.200
-  (Alibaba-style metadata) and fd00:ec2::254 (AWS IPv6 IMDS), including their
-  IPv4-mapped IPv6 forms.
+  (Alibaba-style metadata) and fd00:ec2::254 (AWS IPv6 IMDS).
+  IPv4 hosts are normalised with ``inet_aton`` semantics first (what the
+  resolver will actually connect to), so decimal (``2852039166``), hex
+  (``0xa9fea9fe``), octal and short-dotted (``169.254.43518``) spellings are
+  refused too. IPv6 hosts embedding an IPv4 address are unwrapped before the
+  check: IPv4-mapped ``::ffff:0:0/96``, SIIT ``::ffff:0:0:0/96``,
+  IPv4-compatible ``::/96`` (except ``::`` and ``::1``) and NAT64 ``64:ff9b::/96``.
 - RFC 1918 / ULA private ranges are deliberately ALLOWED: a LAN edge router is
   the intended remote.
 - DNS names are NOT resolved here. Residual: a DNS name that resolves to a
@@ -23,6 +28,7 @@ Network posture (owner decision, wave 3):
 from __future__ import annotations
 
 import ipaddress
+import socket
 from urllib.parse import urlsplit
 
 import httpx
@@ -39,14 +45,34 @@ _FORBIDDEN_NETS = tuple(
 _MALFORMED = "endpoint URL is malformed"
 
 
-def _forbidden_literal(host: str) -> bool:
+_EMBEDDED_V4_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("::ffff:0:0:0/96", "::/96", "64:ff9b::/96")
+)
+
+
+def _literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The address an IP-literal host will connect to, or None for a DNS name."""
+    if host.startswith("[") or ":" in host:
+        try:
+            ip6 = ipaddress.IPv6Address(host.strip("[]").split("%", 1)[0])
+        except ValueError:
+            return None
+        if ip6.ipv4_mapped is not None:
+            return ip6.ipv4_mapped
+        if any(ip6 in net for net in _EMBEDDED_V4_NETS) and int(ip6) & 0xFFFFFFFF > 1:
+            return ipaddress.IPv4Address(int(ip6) & 0xFFFFFFFF)
+        return ip6
     try:
-        ip = ipaddress.ip_address(host.strip("[]").split("%", 1)[0])
-    except ValueError:
-        return False  # a DNS name: not resolved here (documented residual)
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return any(ip in net for net in _FORBIDDEN_NETS)
+        # inet_aton accepts the decimal/hex/octal/short-dotted forms that
+        # ipaddress rejects but getaddrinfo connects to.
+        return ipaddress.IPv4Address(socket.inet_aton(host))
+    except (OSError, ValueError):
+        return None  # a DNS name: not resolved here (documented residual)
+
+
+def _forbidden_literal(host: str) -> bool:
+    ip = _literal_ip(host)
+    return ip is not None and any(ip in net for net in _FORBIDDEN_NETS)
 
 
 class InvalidEndpointError(InferenceError):

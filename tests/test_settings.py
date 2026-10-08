@@ -122,3 +122,18 @@ def test_decision_max_retries_bounded(raw, monkeypatch) -> None:  # type: ignore
     monkeypatch.setenv("MCPR_DECISION_MAX_RETRIES", raw)
     with pytest.raises(ValueError, match="MCPR_DECISION_MAX_RETRIES"):
         Settings.from_env()
+
+
+@pytest.mark.parametrize("bad", ["kéy", "k ey", "k\x01ey"])
+def test_decision_key_must_be_printable_ascii(bad: str, monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MCPR_DECISION_API_KEY", bad)
+    with pytest.raises(ValueError) as ei:
+        Settings.from_env()
+    assert bad not in str(ei.value)
+    monkeypatch.delenv("MCPR_DECISION_API_KEY")
+    f = tmp_path / "key"
+    f.write_text(bad + "\n", encoding="utf-8")
+    monkeypatch.setenv("MCPR_DECISION_API_KEY_FILE", str(f))
+    with pytest.raises(ValueError) as ei:
+        Settings.from_env()
+    assert bad not in str(ei.value)

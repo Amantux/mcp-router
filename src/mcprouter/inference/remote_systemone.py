@@ -25,6 +25,7 @@ import logging
 import math
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -33,7 +34,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from mcprouter.execution.redaction import redact
-from mcprouter.inference.errors import DecisionRuntimeError
+from mcprouter.inference.errors import DecisionRuntimeError, InferenceError
 from mcprouter.inference.urlcheck import validate_outbound_url
 from mcprouter.interfaces import ChoiceResult, ScoreResult
 
@@ -47,6 +48,16 @@ _BACKOFF_BASE_S = 0.25
 _MAX_RETRY_SLEEP_S = 5.0  # a longer Retry-After is not waited out: we fail fast
 _FOREIGN_MASS_TOLERANCE = 1e-6
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
+_KEY_RE = re.compile(r"[\x21-\x7e]+")  # printable ASCII, no whitespace/control
+# str.isdigit() accepts '\xb2' etc., which int()/float() reject: ASCII digits only.
+# Capped length: int() refuses > 4300 digits, and 15 digits already means "huge".
+_DIGITS_RE = re.compile(r"[0-9]{1,15}")
+_ANY_DIGITS_RE = re.compile(r"[0-9]+")
+
+
+class RemoteKeyFormatError(InferenceError):
+    """The configured API key is not printable ASCII. Curated message: it
+    never contains the key (a UnicodeEncodeError's ``.object`` would)."""
 
 
 class RemoteDecisionError(DecisionRuntimeError):
@@ -136,8 +147,13 @@ class RemoteSystemOneModel:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        if api_key and not _KEY_RE.fullmatch(api_key):
+            raise RemoteKeyFormatError(
+                "remote decision API key must be printable ASCII with no whitespace"
+            )
         self._endpoint = resolve_endpoint(endpoint)
         self.__api_key = api_key
+        self._transport = transport
         self.model = model
         self.name = f"remote:{model}"
         self._max_retries = max(0, max_retries)
@@ -160,7 +176,7 @@ class RemoteSystemOneModel:
         a = self._ask(state, {"q0": q})["q0"]
         picked = a.get("choice")
         raw = a.get("probabilities")
-        if not isinstance(picked, str) or not isinstance(raw, dict):
+        if not isinstance(picked, str) or not isinstance(raw, dict) or picked not in options:
             raise RemoteResponseError("remote decision response has a malformed choice answer")
         _refuse_foreign_mass(raw, set(options))
         ps = _normalize([_prob(raw.get(o, 0.0)) for o in options])
@@ -224,6 +240,10 @@ class RemoteSystemOneModel:
         url = validate_outbound_url(self._endpoint)  # point of use, every call
         if not self.__api_key:
             raise RemoteAuthError("remote decision backend has no API key configured")
+        if not _KEY_RE.fullmatch(self.__api_key):
+            raise RemoteKeyFormatError(
+                "remote decision API key must be printable ASCII with no whitespace"
+            )
         deadline = self._clock() + self._timeout_s
         payload = json.dumps(body).encode()
         attempt = 0
@@ -259,14 +279,54 @@ class RemoteSystemOneModel:
         self, url: str, payload: bytes, remaining: float, deadline: float
     ) -> bytes | tuple[int, str]:
         """One HTTP attempt: the 200 body, or (status, retry-after) to classify.
+
+        Hard stop (inner bound): httpx's timeout is per socket operation, so a
+        peer trickling response HEADERS one byte at a time never trips it. A
+        ``threading.Timer(remaining)`` closes this attempt's own client (and so
+        its connection) when the budget runs out; the blocked read then fails
+        within one trickle interval and is reported as a timeout. The engine's
+        DeadlineDecisionModel stays the outer bound. With an injected transport
+        (tests) the shared client is used and the timer closes the response.
+
         An httpx failure only sets a flag inside ``except``; the curated error
         is raised after the block, so nothing chains the httpx exception."""
-        headers = {"Authorization": f"Bearer {self.__api_key}", "Accept": "application/json"}
         failure = ""
+        fired = threading.Event()
+        own = self._transport is None
+        client = (
+            httpx.Client(timeout=remaining, follow_redirects=False, trust_env=False)
+            if own
+            else self._client
+        )
+        holder: list[httpx.Response] = []
+
+        def hard_stop() -> None:
+            fired.set()
+            if own:
+                client.close()
+            for r in holder:
+                r.close()
+
+        timer = threading.Timer(remaining, hard_stop)
+        timer.daemon = True
+        timer.start()
         try:
-            with self._client.stream(
-                "POST", url, content=payload, headers=headers, timeout=remaining
-            ) as resp:
+            resp = client.send(
+                client.build_request(
+                    "POST",
+                    url,
+                    content=payload,
+                    # built inline: no frame local holds the key for error reporters
+                    headers={
+                        "Authorization": "Bearer " + self.__api_key,
+                        "Accept": "application/json",
+                    },
+                    timeout=remaining,
+                ),
+                stream=True,
+            )
+            holder.append(resp)
+            try:
                 status = resp.status_code
                 rid = resp.headers.get("x-request-id", "")
                 rid = rid if _REQUEST_ID_RE.fullmatch(rid) else "-"
@@ -274,17 +334,25 @@ class RemoteSystemOneModel:
                     return self._read_capped(resp, deadline)
                 log.warning("remote decision call failed: status=%d request_id=%s", status, rid)
                 return status, resp.headers.get("retry-after", "")
+            finally:
+                resp.close()
         except httpx.TimeoutException:
             failure = "timeout"
-        except httpx.HTTPError:
-            failure = "unreachable"
+        except (httpx.HTTPError, OSError):
+            failure = "timeout" if fired.is_set() else "unreachable"
+        finally:
+            timer.cancel()
+            if own:
+                client.close()
         if failure == "timeout":
             raise RemoteTimeoutError("remote decision call timed out")
         raise RemoteDecisionError("remote decision service is unreachable")
 
     def _read_capped(self, resp: httpx.Response, deadline: float) -> bytes:
         declared = resp.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+        if _ANY_DIGITS_RE.fullmatch(declared) and (
+            not _DIGITS_RE.fullmatch(declared) or int(declared) > MAX_RESPONSE_BYTES
+        ):
             raise RemoteResponseError("remote decision response is too large")
         buf = bytearray()
         for chunk in resp.iter_bytes():
@@ -302,7 +370,9 @@ class RemoteSystemOneModel:
         asked us to wait longer than we are willing to."""
         delay = _BACKOFF_BASE_S * (2**attempt)
         ra = retry_after.strip()
-        if ra.isdigit():
+        if _ANY_DIGITS_RE.fullmatch(ra):
+            if not _DIGITS_RE.fullmatch(ra):
+                return None  # absurdly long: longer than we will ever wait
             delay = max(delay, float(ra))
         if delay > _MAX_RETRY_SLEEP_S:
             return None

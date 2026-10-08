@@ -11,11 +11,12 @@ from typing import Any
 import httpx
 import pytest
 
-from mcprouter.inference.errors import DecisionProtocolError, DecisionRuntimeError
+from mcprouter.inference.errors import DecisionRuntimeError
 from mcprouter.inference.remote_systemone import (
     MAX_RESPONSE_BYTES,
     RemoteAuthError,
     RemoteDecisionError,
+    RemoteKeyFormatError,
     RemoteRateLimitedError,
     RemoteResponseError,
     RemoteSystemOneModel,
@@ -86,7 +87,7 @@ def test_novel_option_refused_by_validator() -> None:
         )
 
     m, _ = make(h)
-    with pytest.raises(DecisionProtocolError):
+    with pytest.raises(RemoteResponseError):  # refused in-backend now
         ValidatedDecisionModel(m).choice("s", "q", ["a", "b"])
 
 
@@ -568,3 +569,180 @@ def test_link_local_and_metadata_literals_refused(url: str) -> None:
 )
 def test_private_lan_remote_allowed(url: str) -> None:
     assert validate_outbound_url(url) == url
+
+
+def test_non_ascii_key_refused_without_echo() -> None:
+    with pytest.raises(RemoteKeyFormatError) as ei:
+        RemoteSystemOneModel(
+            endpoint=EP,
+            api_key="sk-SECR\u00c9T",
+            transport=httpx.MockTransport(lambda r: answers()),
+        )
+    assert "SECR" not in str(ei.value)
+
+
+@pytest.mark.parametrize("hdr", ["retry-after", "content-length"])
+def test_superscript_digit_headers_do_not_crash(hdr: str) -> None:
+    status = 503 if hdr == "retry-after" else 200
+    m, _ = make(
+        lambda r: httpx.Response(status, headers={hdr: "\u00b2".encode("latin-1")}, content=b"{}"),
+        max_retries=1,
+    )
+    with pytest.raises(RemoteDecisionError):
+        m.noul("s", "q")
+
+
+# ------------------------------------------------------------ wave-3 FIX-2
+def _trickle_server(interval: float) -> tuple[str, Callable[[], None]]:
+    """A loopback server that trickles response HEADERS one byte per interval."""
+    import socket
+    import threading
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    stop = threading.Event()
+
+    def serve() -> None:
+        try:
+            conn, _ = srv.accept()
+        except OSError:
+            return
+        with conn:
+            conn.recv(65536)
+            data = b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 10_000
+            for b in data:
+                if stop.wait(interval):
+                    return
+                try:
+                    conn.sendall(bytes([b]))
+                except OSError:
+                    return
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def shutdown() -> None:
+        stop.set()
+        srv.close()
+
+    return f"http://127.0.0.1:{srv.getsockname()[1]}/v1/decisions", shutdown
+
+
+def test_trickled_headers_hit_the_hard_stop() -> None:
+    import time as _time
+
+    url, shutdown = _trickle_server(0.3)
+    m = RemoteSystemOneModel(endpoint=url, api_key=KEY, timeout_s=0.5, max_retries=0)
+    t0 = _time.monotonic()
+    try:
+        with pytest.raises(RemoteTimeoutError):
+            m.noul("s", "q")
+    finally:
+        shutdown()
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 0.5 + 0.3 + 0.2, elapsed
+
+
+@pytest.mark.parametrize("bad", ["sk-été", "sk key", "sk\tkey", "sk\x7fkey", "k "])
+def test_non_printable_key_refused_without_leaking(bad: str) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        return answers(q0={"type": "noul", "noul": 0.5})
+
+    with pytest.raises(RemoteKeyFormatError) as ei:
+        RemoteSystemOneModel(endpoint=EP, api_key=bad, transport=httpx.MockTransport(handler))
+    assert not calls
+    exc: BaseException | None = ei.value
+    while exc is not None:
+        assert bad not in repr(exc) and bad not in str(exc)
+        assert all(bad not in repr(a) for a in exc.args)
+        assert getattr(exc, "object", None) is None
+        exc = exc.__cause__ or exc.__context__
+
+
+@pytest.mark.parametrize("hdr", ["\xb2", "1\xb2", "٣", "9" * 5000])
+def test_hostile_retry_after_is_not_a_crash(hdr: str) -> None:
+    n = {"i": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        n["i"] += 1
+        if n["i"] == 1:
+            return httpx.Response(503, headers={"retry-after": hdr.encode("latin-1", "replace")})
+        return answers(q0={"type": "noul", "noul": 0.5})
+
+    m, _ = make(handler, timeout_s=30.0)
+    try:
+        assert m.noul("s", "q") == 0.5
+    except RemoteRateLimitedError:
+        assert hdr == "9" * 5000  # absurd Retry-After: fail fast, never ValueError
+
+
+@pytest.mark.parametrize("hdr", [b"\xb2", b"1\xb2", b"9" * 5000])
+def test_hostile_content_length_is_typed(hdr: bytes) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        body = json.dumps({"answers": {"q0": {"type": "noul", "noul": 0.5}}}).encode()
+        return httpx.Response(
+            200, headers=[(b"content-length", hdr)], stream=httpx.ByteStream(body)
+        )
+
+    m, _ = make(handler)
+    try:
+        m.noul("s", "q")
+    except (RemoteResponseError, RemoteDecisionError):
+        pass
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "2852039166",
+        "0xa9fea9fe",
+        "0251.0376.0251.0376",
+        "169.254.43518",
+        "169.16689662",
+        "[::a9fe:a9fe]",
+        "[::ffff:0:a9fe:a9fe]",
+        "[64:ff9b::a9fe:a9fe]",
+        "[::ffff:169.254.169.254]",
+        "[::ffff:100.100.100.200]",
+        "1684301000",  # 100.100.100.200 as decimal
+    ],
+)
+def test_alternative_metadata_encodings_refused(host: str) -> None:
+    with pytest.raises(InvalidEndpointError):
+        validate_outbound_url(f"https://{host}/v1/decisions")
+
+
+@pytest.mark.parametrize("host", ["10.0.0.5", "[fd12::1]", "[::1]", "edge.lan", "[64:ff9b::a00:5]"])
+def test_lan_and_names_still_allowed(host: str) -> None:
+    assert validate_outbound_url(f"https://{host}/v1/decisions")
+
+
+def test_key_absent_from_traceback_locals() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=req)
+
+    m, _ = make(handler, max_retries=0)
+    with pytest.raises(RemoteDecisionError) as ei:
+        m.noul("s", "q")
+    tb = ei.value.__traceback__
+    seen = 0
+    while tb is not None:
+        for v in tb.tb_frame.f_locals.values():
+            assert KEY not in repr(v)
+            if isinstance(v, dict):
+                assert all(KEY not in repr(x) for x in v.values())
+        seen += 1
+        tb = tb.tb_next
+    assert seen >= 2
+
+
+def test_choice_outside_options_refused() -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return answers(q0={"type": "choice", "choice": "zzz", "probabilities": {"a": 1.0}})
+
+    m, _ = make(handler)
+    with pytest.raises(RemoteResponseError):
+        m.choice("s", "q", ["a", "b"])

@@ -53,7 +53,9 @@ timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
   The URL is parsed with `httpx.URL`, so NUL/control bytes, IDNA-invalid hosts and an unbalanced `[::1` are
   refused with a curated message that never echoes the host.
 - **Network posture (owner decision).** Link-local and metadata IP literals are always refused, for any
-  scheme: `169.254.0.0/16`, `fe80::/10`, `100.100.100.200`, `fd00:ec2::254` (IPv4-mapped forms too).
+  scheme: `169.254.0.0/16`, `fe80::/10`, `100.100.100.200`, `fd00:ec2::254` plus their alternative encodings: inet_aton
+  forms (decimal `2852039166`, hex `0xa9fea9fe`, octal, short-dotted) and IPv6 forms embedding IPv4
+  (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96` except `::`/`::1`, NAT64 `64:ff9b::/96`).
   RFC 1918 / ULA private ranges are **allowed**, because a LAN edge router is the intended remote.
   DNS names are **not resolved** at validation time. Residual risk: a DNS name that resolves to a
   link-local or metadata address is not caught here.
@@ -65,8 +67,14 @@ timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
   httpx timeout. A retry whose planned sleep would end past the deadline is refused, and the deadline is
   re-checked after every response-body chunk. Any overrun raises `RemoteTimeoutError`.
   Bound: httpx applies the read timeout per read and fixes it when the attempt starts, so one stalled read
-  that straddles the deadline can overrun by up to that attempt's remaining budget. The worst case is under
-  2×`timeout_s`. A drip-feeding server is cut off within one chunk interval of the deadline.
+  that straddles the deadline can overrun by up to that attempt's remaining budget.
+  **Inner bound (hard stop):** httpx timeouts are per socket operation, so a peer trickling response
+  *headers* one byte at a time never trips them. Each attempt therefore starts a `threading.Timer(remaining)`
+  that closes that attempt's own `httpx.Client` (its connection); the blocked read fails within one trickle
+  interval and is reported as `RemoteTimeoutError`. Measured: headers trickled at 0.3 s/byte with
+  `timeout_s=0.5` time out in ~0.61 s (3 runs: 0.611/0.614/0.613), i.e. about `timeout_s` + one byte
+  interval + ~0.01 s. **Outer bound:** the engine's `DeadlineDecisionModel` still wraps every call.
+  The earlier "under 2×`timeout_s`" claim was wrong (trickled headers ran 9 s against `timeout_s=1.0`).
 - A probability on a key we did not offer (a choice option or score level) that totals more than 1e-6 is
   refused with `RemoteResponseError`. It is not dropped and renormalized away.
 - Response bodies over 1 MiB are refused (both a Content-Length pre-check and a streamed cap), as is
@@ -90,3 +98,14 @@ m = RemoteSystemOneModel(endpoint=s.decision_endpoint, api_key=s.decision_api_ke
 ValidatedDecisionModel(m)   # always wrap
 from mcprouter.inference.urlcheck import validate_outbound_url, InvalidEndpointError
 ```
+
+## FIX-2 notes (wave 3)
+
+- API keys must be printable ASCII with no whitespace/control characters (`[\x21-\x7e]`), enforced in
+  `Settings` (`MCPR_DECISION_API_KEY[_FILE]`) and in `RemoteSystemOneModel.__init__` (`RemoteKeyFormatError`,
+  an `InferenceError` with a curated message). A non-ASCII key would otherwise reach httpx and leak whole via
+  `UnicodeEncodeError.object`.
+- `Retry-After` / `Content-Length` are parsed only when they match `^[0-9]+$` (`str.isdigit()` accepts `²`).
+- A `choice` answer naming an option we did not offer is refused in-backend (`RemoteResponseError`).
+- Engine wiring: none required; the hard stop is internal to `_attempt` (one short-lived client per attempt
+  when no transport is injected).

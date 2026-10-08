@@ -5,6 +5,7 @@ pure function so tests can build differently-configured apps in one process)."""
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -144,7 +145,7 @@ def _secret(name: str, get: Callable[[str, str], str]) -> str:
     message names the variable, never the content."""
     path = get(f"{name}_FILE", "")
     if not path:
-        return get(name, "").strip()
+        return _printable_key(get(name, "").strip(), name)
     failed = False
     data = b""
     try:
@@ -162,7 +163,18 @@ def _secret(name: str, get: Callable[[str, str], str]) -> str:
         failed = True
     if failed:
         raise ValueError(f"{name}_FILE: key file is not UTF-8 text")
-    return text.strip()
+    return _printable_key(text.strip(), name)
+
+
+_KEY_RE = re.compile(r"[\x21-\x7e]*")
+
+
+def _printable_key(key: str, name: str) -> str:
+    """A key goes into an HTTP header: printable ASCII, no whitespace/control.
+    The message names the variable, never the key."""
+    if not _KEY_RE.fullmatch(key):
+        raise ValueError(f"{name}: key must be printable ASCII with no whitespace")
+    return key
 
 
 _MAX_KEY_FILE_BYTES = 64 * 1024
