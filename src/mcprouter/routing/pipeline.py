@@ -39,6 +39,11 @@ from the decision model => retrieval-score-only ranking, `fallback_used=True`.
 Retrieval/DB errors are NOT swallowed — they are not model failures.
 
 Every decision is persisted as a RoutingDecisionRecord (id = request_id).
+
+Route cache (routing/cache.py): a hit skips stages a-e but is re-validated
+against current eligibility + `scope.permits` before it is returned (never
+skips authorization); its decision row is marked `model_version =
+"cached/<model>"`.
 """
 
 from __future__ import annotations
@@ -49,9 +54,10 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.generation import catalog_generation, policy_generation
 from mcprouter.interfaces import (
     BatchScoringDecisionModel,
     DecisionModel,
@@ -62,8 +68,10 @@ from mcprouter.interfaces import (
     ScopeFilter,
     ToolCandidate,
 )
-from mcprouter.models import RoutingDecisionRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, RoutingDecisionRecord
 from mcprouter.routing.budgets import cap_servers
+from mcprouter.routing.cache import CachedRoute, CachedTool, RouteCache, normalize_query
+from mcprouter.routing.retriever import eligibility_filters
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -87,6 +95,9 @@ SCOPE_OVERFETCH = 3  # retrieve extra so per-tool scope drops don't starve stage
 _KNOWN_OPS = ("read", "write", "execute")
 _DESC_MAX = 400  # bound model input per candidate
 _NOUL_DESC_MAX = 120  # per line of the no-match question
+# RoutingDecisionRecord.model_version prefix for a decision served from the
+# route cache (column-free convention: "cached/<model that made it>").
+CACHED_MARKER = "cached/"
 
 
 class ModelContractError(RuntimeError):
@@ -111,6 +122,9 @@ class RoutePipeline:
         self._retriever = retriever
         self._model = model
         self._settings = settings
+        self._cache = RouteCache.from_settings(
+            settings.route_cache_size, settings.route_cache_ttl_s
+        )
 
     @property
     def model_name(self) -> str:
@@ -124,6 +138,34 @@ class RoutePipeline:
         # Same clamp chain as the API (routing.budgets): the global cap still
         # applies to a RouteRequest built by any other caller.
         max_servers = _min_set(request.max_servers, self._settings.max_exposed_servers)
+
+        # Route cache: may skip retrieval + model calls, NEVER authorization —
+        # `_revalidate` re-runs eligibility and scope.permits on every hit.
+        base_key = self._cache_key(request, scope, max_tools, max_servers)
+        if base_key is not None and self._cache is not None:
+            # The model name is read at lookup AND at store time: an engine
+            # that lazy-loads during this route changes it ("x (not loaded)").
+            key = (*base_key, self._model.name)
+            hit = self._cache.get(key)
+            if hit is not None:
+                cached_tools = self._revalidate(hit, request, scope)
+                if cached_tools is not None:
+                    latency_ms = (time.perf_counter() - t0) * 1000.0
+                    model_version = f"{CACHED_MARKER}{hit.model_version}"[:80]
+                    self._persist(
+                        request, request_id, cached_tools, model_version, False, latency_ms
+                    )
+                    return RouteResult(
+                        request_id=request_id,
+                        tools=cached_tools,
+                        fallback_used=False,
+                        latency_ms=latency_ms,
+                        model_version=model_version,
+                        no_match=hit.no_match or not cached_tools,
+                        cached=True,
+                    )
+                # Something it held is no longer eligible/permitted: recompute.
+                self._cache.discard(key)
 
         candidates = self._scoped_candidates(request, scope)
         fallback = False
@@ -160,6 +202,17 @@ class RoutePipeline:
             )
             for r in selected
         ]
+        if base_key is not None and self._cache is not None and not fallback:
+            # Fallback results are never cached: a transient model timeout
+            # must not pin a degraded ranking for the TTL.
+            self._cache.put(
+                (*base_key, self._model.name),
+                CachedRoute(
+                    tools=tuple(CachedTool(t.tool_id, t.score) for t in tools),
+                    no_match=no_match or not tools,
+                    model_version=model_version,
+                ),
+            )
         latency_ms = (time.perf_counter() - t0) * 1000.0
         self._persist(request, request_id, tools, model_version, fallback, latency_ms)
         return RouteResult(
@@ -171,17 +224,82 @@ class RoutePipeline:
             no_match=no_match or not tools,
         )
 
+    # ------------------------------------------------------------- cache
+    def _cache_key(
+        self, request: RouteRequest, scope: ScopeFilter, max_tools: int, max_servers: int | None
+    ) -> tuple[object, ...] | None:
+        if self._cache is None:
+            return None
+        fingerprint = getattr(scope, "fingerprint", None)
+        fp = fingerprint() if callable(fingerprint) else None
+        if not isinstance(fp, str):
+            return None  # unknown ScopeFilter: cannot be keyed safely -> no caching
+        allowed = (
+            None if request.allowed_servers is None else tuple(sorted(set(request.allowed_servers)))
+        )
+        return (
+            request.agent_id,
+            normalize_query(request.query),
+            fp,
+            catalog_generation(),
+            policy_generation(),
+            max_tools,
+            max_servers,
+            allowed,
+        )
+
+    def _revalidate(
+        self, hit: CachedRoute, request: RouteRequest, scope: ScopeFilter
+    ) -> list[RoutedTool] | None:
+        """Re-authorize a cache hit against CURRENT state: catalog eligibility
+        (fresh rows: enabled/available/server enabled/not offline) and the
+        CURRENT scope (server ids + `permits` on the freshly loaded
+        operation). Returns None if any cached tool no longer passes."""
+        if not hit.tools:
+            return []
+        ids = [t.tool_id for t in hit.tools]
+        with self._factory() as s:
+            rows = s.execute(
+                select(
+                    MCPToolRecord.id,
+                    MCPToolRecord.server_id,
+                    MCPToolRecord.name,
+                    MCPServerRecord.name,
+                    MCPToolRecord.description,
+                    MCPToolRecord.domain,
+                    MCPToolRecord.operation,
+                )
+                .join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
+                .where(MCPToolRecord.id.in_(ids), *eligibility_filters())
+            ).all()
+        by_id = {r[0]: r for r in rows}
+        server_ids = _permitted_server_ids(request, scope)
+        permitted = None if server_ids is None else set(server_ids)
+        out: list[RoutedTool] = []
+        for ct in hit.tools:
+            row = by_id.get(ct.tool_id)
+            if row is None:
+                return None
+            cand = ToolCandidate(
+                tool_id=row[0],
+                server_id=row[1],
+                tool_name=row[2],
+                server_name=row[3],
+                description=row[4] or "",
+                domain=row[5],
+                operation=row[6],
+                retrieval_score=0.0,
+            )
+            if permitted is not None and cand.server_id not in permitted:
+                return None
+            if not scope.permits(cand):
+                return None
+            out.append(RoutedTool(cand.tool_id, cand.server_name, cand.tool_name, ct.score))
+        return out
+
     # ----------------------------------------------------------- stage a
     def _scoped_candidates(self, request: RouteRequest, scope: ScopeFilter) -> list[ToolCandidate]:
-        scope_ids = scope.server_ids()
-        server_ids: list[str] | None
-        if scope_ids is None:
-            server_ids = request.allowed_servers
-        elif request.allowed_servers is None:
-            server_ids = list(scope_ids)
-        else:
-            allowed = set(request.allowed_servers)
-            server_ids = [sid for sid in scope_ids if sid in allowed]
+        server_ids = _permitted_server_ids(request, scope)
         limit = self._settings.retrieval_candidates
         raw = self._retriever.retrieve(
             request.query, limit=limit * SCOPE_OVERFETCH, server_ids=server_ids
@@ -286,6 +404,18 @@ class RoutePipeline:
                 )
             )
             s.commit()
+
+
+def _permitted_server_ids(request: RouteRequest, scope: ScopeFilter) -> list[str] | None:
+    """Scope's server ids intersected with the request's allowed_servers
+    (None = no server-level restriction)."""
+    scope_ids = scope.server_ids()
+    if scope_ids is None:
+        return request.allowed_servers
+    if request.allowed_servers is None:
+        return list(scope_ids)
+    allowed = set(request.allowed_servers)
+    return [sid for sid in scope_ids if sid in allowed]
 
 
 def _cap(ranked: list[_Scored], max_tools: int, max_servers: int | None) -> list[_Scored]:

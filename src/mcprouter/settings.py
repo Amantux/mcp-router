@@ -31,6 +31,9 @@ class Settings:
     max_exposed_servers: int | None = None
     retrieval_candidates: int = 20
     route_confidence_floor: float = 0.35
+    # In-process route cache (routing/cache.py). 0 on either knob disables it.
+    route_cache_ttl_s: float = 60.0
+    route_cache_size: int = 1024
     # Per-call deadline for decision-model questions; a hung model becomes an
     # InferenceError and the route falls back deterministically (FR-06).
     decision_timeout_s: float = 2.0
@@ -65,6 +68,8 @@ class Settings:
                 get("MCPR_ROUTE_CONFIDENCE_FLOOR", str(d.route_confidence_floor))
             ),
             decision_timeout_s=float(get("MCPR_DECISION_TIMEOUT_S", str(d.decision_timeout_s))),
+            route_cache_ttl_s=float(get("MCPR_ROUTE_CACHE_TTL_S", str(d.route_cache_ttl_s))),
+            route_cache_size=int(get("MCPR_ROUTE_CACHE_SIZE", str(d.route_cache_size))),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),

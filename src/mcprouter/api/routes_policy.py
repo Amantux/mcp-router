@@ -29,6 +29,7 @@ from mcprouter.api.deps_auth import (
     require_admin,
 )
 from mcprouter.execution.manager import ApprovalError, ApprovalView, ExecutionManager
+from mcprouter.generation import bump_policy
 from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule
 
 router = APIRouter(prefix="/api/v1", tags=["policy"])
@@ -213,6 +214,7 @@ def create_principal(body: PrincipalIn, request: Request) -> PrincipalCreated:
             s.commit()
         except IntegrityError:
             raise HTTPException(status_code=409, detail="agentId already exists") from None
+        bump_policy()  # route cache (wave 2)
         return PrincipalCreated(**_p_out(p).model_dump(), api_key=key)
 
 
@@ -240,6 +242,7 @@ def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -
         if "max_servers" in body.model_fields_set:
             p.max_servers = body.max_servers
         s.commit()
+        bump_policy()  # route cache (wave 2)
         return _p_out(p)
 
 
@@ -264,6 +267,7 @@ def delete_principal(principal_id: str, request: Request) -> Response:
         s.execute(delete(PolicyRule).where(PolicyRule.agent_id == p.agent_id))
         s.delete(p)
         s.commit()
+        bump_policy()  # route cache (wave 2)
     return Response(status_code=204)
 
 
@@ -292,6 +296,7 @@ def create_rule(body: RuleIn, request: Request) -> RuleOut:
         )
         s.add(r)
         s.commit()
+        bump_policy()  # route cache (wave 2)
         return _r_out(r)
 
 
@@ -317,6 +322,7 @@ def patch_rule(rule_id: str, body: RulePatch, request: Request) -> RuleOut:
         if body.requires_approval is not None:
             r.requires_approval = body.requires_approval
         s.commit()
+        bump_policy()  # route cache (wave 2)
         return _r_out(r)
 
 
@@ -325,6 +331,7 @@ def delete_rule(rule_id: str, request: Request) -> Response:
     with _session(request) as s:
         s.delete(_get_rule_row(s, rule_id))
         s.commit()
+        bump_policy()  # route cache (wave 2)
     return Response(status_code=204)
 
 

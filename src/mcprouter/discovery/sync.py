@@ -46,6 +46,7 @@ from mcprouter.discovery.registry import (
     get_server,
     target_for,
 )
+from mcprouter.generation import bump_catalog
 from mcprouter.mcpclient import (
     Connector,
     ConnectorError,
@@ -310,12 +311,16 @@ class DiscoveryService:
             server = s.get(MCPServerRecord, server_id, with_for_update=True)
             if server is None:
                 return "offline"
+            before = server.status
             if ok:
                 server.status = self.health.success(server_id, server.status, latency_ms)
             else:
                 server.status = self.health.failure(server_id, server.status)
             server.last_health_at = utcnow()
-            return server.status
+            status = server.status
+        if (before == "offline") != (status == "offline"):
+            bump_catalog()  # routing eligibility changed; after commit (route cache)
+        return status
 
     async def _fetch(
         self, server: MCPServerRecord, target: ServerTarget
@@ -351,9 +356,13 @@ class DiscoveryService:
                     report = apply_listing(s, server_id, tools, info)
                     srv = s.get(MCPServerRecord, server_id)
                     assert srv is not None  # locked inside apply_listing
+                    was_offline = srv.status == "offline"
                     srv.status = self.health.success(server_id, srv.status, latency)
                     srv.last_health_at = srv.last_discovered_at
+                    crossed = was_offline != (srv.status == "offline")
                 report.latency_ms = latency
+                if report.changed or crossed:
+                    bump_catalog()  # after commit: invalidates cached routes
                 return report
 
             try:

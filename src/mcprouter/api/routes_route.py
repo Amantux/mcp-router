@@ -55,7 +55,7 @@ from mcprouter.models import AgentPrincipal
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import ensure_keyword_index
-from mcprouter.routing.scope import AllowAllScope
+from mcprouter.routing.scope import AllowAllScope, UncachedScope
 from mcprouter.routing.servers import resolve_server_names
 
 log = logging.getLogger(__name__)
@@ -142,6 +142,8 @@ class RouteResponse(BaseModel):
     # max_servers_applied = no distinct-server cap anywhere.
     max_tools_applied: int
     max_servers_applied: int | None
+    # Served from the route cache (authorization was re-checked on the hit).
+    cached: bool
 
 
 def install_routing(
@@ -261,6 +263,7 @@ def route(
         no_match=result.no_match,
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
+        cached=result.cached,
     )
 
 
@@ -298,7 +301,8 @@ def evaluate(
         pipeline,
         cases,
         session_factory=factory,
-        scope_resolver=scope_resolver,
+        # Uncached: a re-run within the TTL must measure the pipeline.
+        scope_resolver=lambda agent_id: UncachedScope(scope_resolver(agent_id)),
         max_tools=body.max_tools,
     )
     metrics = compute_metrics(outcomes)

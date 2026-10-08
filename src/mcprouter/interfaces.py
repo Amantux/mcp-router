@@ -116,6 +116,9 @@ class RouteResult:
     latency_ms: float
     model_version: str
     no_match: bool = False
+    # Appended (wave 2, route cache): True when served from the route cache
+    # (retrieval + model skipped; authorization re-checked on the hit).
+    cached: bool = False
 
 
 # ------------------------------------------- appended: inference workstream

@@ -93,6 +93,7 @@ def test_route_happy_path_wire_shape(seeded: dict[str, str]) -> None:
         "no_match",
         "max_tools_applied",
         "max_servers_applied",
+        "cached",
     }
     assert body["fallback_used"] is False and body["no_match"] is False
     assert len(body["tools"]) <= 2
