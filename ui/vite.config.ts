@@ -18,4 +18,17 @@ export default defineConfig({
     },
   },
   preview: { port: 5180, strictPort: true },
+  build: {
+    // Fluent v9 is one ~640 kB barrel chunk (~185 kB gzip); acceptable for a
+    // localhost admin tool. Raised so a real regression still warns.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom", "react-router"],
+          fluent: ["@fluentui/react-components"],
+        },
+      },
+    },
+  },
 });

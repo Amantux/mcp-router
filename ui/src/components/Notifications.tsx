@@ -41,9 +41,15 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const api = useMemo<NotifyApi>(
     () => ({
       error: (what, err) => {
-        const id = nextId.current++;
         const { status, advice } = describeError(err);
-        setNotes((n) => [...n, { id, intent: "error", title: `${what} failed${status ? ` (${status})` : ""}`, body: advice }]);
+        const title = `${what} failed${status ? ` (${status})` : ""}`;
+        const id = nextId.current++;
+        // Polling must not stack identical bars: skip if this exact error is already showing.
+        setNotes((n) =>
+          n.some((x) => x.intent === "error" && x.title === title && x.body === advice)
+            ? n
+            : [...n, { id, intent: "error", title, body: advice }],
+        );
       },
       success: (message) => {
         const id = nextId.current++;
