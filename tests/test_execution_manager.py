@@ -573,3 +573,27 @@ async def test_agent_can_only_poll_own_approvals(
     pending = await mgr.execute(cat.principals["alice"], cat.tools["github.list_issues"], OK_ARGS)
     assert await mgr.get_approval(pending.approval_id or "", agent_id="alice") is not None
     assert await mgr.get_approval(pending.approval_id or "", agent_id="bob") is None
+
+
+async def test_approval_args_cleared_when_invoke_path_fails(
+    sec_db: sessionmaker[Session],
+    cat: Catalog,
+) -> None:
+    """A crash inside approve() must not leave raw arguments at rest."""
+    add_rule(sec_db, "alice", requires_approval=True)
+    inv = FakeInvoker()
+
+    class AuditDown(ExecutionManager):
+        def _audit(self, *a: Any, **kw: Any) -> str:
+            if a[3] == "started":
+                raise OSError("audit store unavailable")
+            return super()._audit(*a, **kw)
+
+    mgr = AuditDown(sec_db, inv, timeout_s=2.0, limiter=SlidingWindowLimiter(10), clock=Clock())
+    pending = await mgr.execute(cat.principals["alice"], cat.tools["github.list_issues"], OK_ARGS)
+    with pytest.raises(OSError):
+        await mgr.approve(pending.approval_id or "")
+    assert inv.calls == []
+    with sec_db() as s:
+        row = s.get(ApprovalRequest, pending.approval_id)
+        assert row is not None and row.status == "failed" and row.arguments is None

@@ -435,7 +435,15 @@ class ExecutionManager:
         except ArgumentValidationError as exc:
             return await refuse(f"approval {req.id}: arguments no longer valid: {exc.errors}")
 
-        res = await self._invoke(req.agent_id, loaded, args)
+        try:
+            res = await self._invoke(req.agent_id, loaded, args)
+        except BaseException:
+            # Never leave raw arguments at rest in a wedged 'executing' row.
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(
+                    self._close_approval, req.id, APPROVAL_FAILED, None, None
+                )
+            raise
         preview = None
         if res.result is not None:
             texts = [str(c.get("text", "")) for c in res.result.content if c.get("type") == "text"]
