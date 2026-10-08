@@ -190,6 +190,20 @@ class SuggestionToolRef(Wire):
     enabled: bool
 
 
+class SuggestionEvidence(Wire):
+    """Wave-2 analytics, read-only: routing evidence for a duplicate pair over
+    `window` (decision time). coSurfaced = decisions that exposed BOTH tools;
+    *Selected counts are attributed selections within those decisions."""
+
+    window: str
+    tool_a_surfaced: int
+    tool_b_surfaced: int
+    co_surfaced: int
+    tool_a_selected: int
+    tool_b_selected: int
+    both_selected: int
+
+
 class SuggestionOut(Wire):
     id: str
     tool_a: SuggestionToolRef | None  # None if the tool has since been removed
@@ -202,6 +216,8 @@ class SuggestionOut(Wire):
     resolved_at: datetime | None = None
     resolution_note: str | None = None
     created_at: datetime
+    # Populated by the list endpoint for OPEN suggestions (wave-2 analytics).
+    usage_evidence: SuggestionEvidence | None = None
 
 
 class SuggestionPageOut(Wire):
