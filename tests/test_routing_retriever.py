@@ -146,3 +146,31 @@ def test_limit_and_stopword_only_query(db: sessionmaker[Session]) -> None:
     # Only stopwords: keyword leg is skipped, vector leg still answers.
     got = r.retrieve("the and of", limit=10)
     assert all(m == "vector" for c in got for m in c.matched_on)
+
+
+def test_keyword_index_is_idempotent_and_matches_the_query(db: sessionmaker[Session]) -> None:
+    """The GIN expression index must be built from the SAME expression the
+    keyword leg queries, or Postgres silently stops using it."""
+    from sqlalchemy import text
+
+    from mcprouter.db import make_engine
+    from mcprouter.routing.retriever import _KEYWORD_SQL, KEYWORD_INDEX, ensure_keyword_index
+    from mcprouter.settings import Settings
+
+    from .conftest import TEST_DB_URL
+
+    eng = make_engine(Settings(database_url=TEST_DB_URL))
+    ensure_keyword_index(eng)
+    ensure_keyword_index(eng)
+    _seed(db, FakeHashEmbedder())
+    with db() as s:
+        s.execute(text("SET LOCAL enable_seqscan = off"))
+        s.execute(text("SET LOCAL enable_indexscan = off"))  # tiny table: force the choice
+        plan = "\n".join(
+            r[0]
+            for r in s.execute(
+                text("EXPLAIN " + str(_KEYWORD_SQL)),
+                {"words": ["issues"], "enabled_only": True, "server_ids": None, "lim": 5},
+            )
+        )
+    assert KEYWORD_INDEX in plan

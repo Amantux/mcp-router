@@ -34,6 +34,7 @@ from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_met
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
 from mcprouter.interfaces import RouteRequest, ScopeFilter
 from mcprouter.routing.pipeline import RoutePipeline
+from mcprouter.routing.retriever import ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope
 from mcprouter.routing.servers import resolve_server_names
 
@@ -78,6 +79,7 @@ class RouteResponse(BaseModel):
 def install_routing(
     app: FastAPI, pipeline: RoutePipeline, scope_resolver: ScopeResolver | None = None
 ) -> None:
+    ensure_keyword_index(app.state.engine)  # keyword-leg GIN index (idempotent)
     app.state.route_pipeline = pipeline
     app.state.route_scope_resolver = scope_resolver
     if scope_resolver is None:
