@@ -320,6 +320,7 @@ class RemoteSystemOneModel:
                     headers={
                         "Authorization": "Bearer " + self.__api_key,
                         "Accept": "application/json",
+                        "Content-Type": "application/json",
                     },
                     timeout=remaining,
                 ),
