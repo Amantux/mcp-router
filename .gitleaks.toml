@@ -1,0 +1,20 @@
+# Gitleaks config.
+#
+# The allowlist below covers test fixtures only, after manual verification of
+# each finding (2026-10-08): tests/test_servers_api.py and
+# tests/test_execution_manager.py contain DELIBERATELY FAKE secret-shaped
+# strings ("sk-live-TOPSECRET-42", "sk_live_SMUGGLEDNAME") whose entire purpose
+# is to prove the write-only-env and redaction guards catch secret-shaped
+# values; tests/test_routing_fakes.py line 6 is a docstring false positive
+# ("token-hash projection"). None are live credentials. New findings outside
+# tests/ must be investigated, never bulk-allowlisted.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures: fake secret-shaped strings that exercise redaction/write-only guards"
+paths = [
+  '''tests/.*\.py''',
+  '''ui/src/.*\.test\.tsx?''',
+]
