@@ -362,6 +362,10 @@ class InferenceEngine:
 
     # ------------------------------------------------------------------ modes
     @property
+    def requested_decision_backend(self) -> str:
+        return self._settings.decision_backend
+
+    @property
     def mode(self) -> str:
         return self._mode
 
@@ -474,18 +478,24 @@ class InferenceEngine:
     # -------------------------------------------------------------- handles
     def embedding_backend(self) -> _GatedEmbedder:
         """EmbeddingBackend for callers (pipeline, retrieval). Name = live provenance."""
-        with self._lock:
-            if not self.loaded:
-                self.load()
-            assert self._embedder is not None
-            return _GatedEmbedder(self, self._embedder.name)
+        # load() runs OUTSIDE _lock (a cold load must not stall health probes).
+        while True:
+            with self._lock:
+                if self._embedder is not None:
+                    return _GatedEmbedder(self, self._embedder.name)
+            self.load()
 
     def decision_model(self) -> _GatedDecisionModel:
+        while True:  # load() outside _lock, as in embedding_backend()
+            with self._lock:
+                if self._decider is not None:
+                    return _GatedDecisionModel(self, self._decider.name)
+            self.load()
+
+    def published_decision_name(self) -> str | None:
+        """The loaded decision model's name, or None — never triggers a load."""
         with self._lock:
-            if not self.loaded:
-                self.load()
-            assert self._decider is not None
-            return _GatedDecisionModel(self, self._decider.name)
+            return self._decider.name if self._decider is not None else None
 
     def fallback_decision_model(self) -> ValidatedDecisionModel:
         """Always-available deterministic model for per-request fallback."""

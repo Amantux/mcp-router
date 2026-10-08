@@ -72,3 +72,15 @@ def test_resolver_reads_current_rules_and_denies_unknown_agents(db) -> None:  # 
     assert scope.server_ids() == ["s1"]
     assert scope.permits(_cand("s1", "read_file", "read"))
     assert not scope.permits(_cand("s1", "write_file", "write"))
+
+
+@requires_db
+def test_dev_principal_only_in_dev_mode(db) -> None:  # noqa: ANN001
+    """Review N-1: 'dev' without a row is the synthetic principal ONLY while dev
+    mode is active (no keys, no admin token, no principals)."""
+    open_cfg = SecurityConfig(
+        agent_keys_configured=False, admin_token_hash=None, max_exposed_tools=8
+    )
+    assert isinstance(policy_scope_resolver(db, open_cfg)("dev"), PolicyScope)
+    locked = SecurityConfig(agent_keys_configured=True, admin_token_hash=None, max_exposed_tools=8)
+    assert isinstance(policy_scope_resolver(db, locked)("dev"), DenyAllScope)

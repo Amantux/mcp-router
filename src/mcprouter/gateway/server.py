@@ -453,7 +453,8 @@ class GatewayServer:
         with self._lock:
             sessions = list(self._legacy.get(agent_id, {}).items())
         dead: list[str] = []
-        for sid, session in sessions:
+
+        async def one(sid: str, session: ServerSession) -> None:
             with anyio.move_on_after(NOTIFY_TIMEOUT_S) as scope:
                 try:
                     await session.send_tool_list_changed()
@@ -461,6 +462,12 @@ class GatewayServer:
                     dead.append(sid)
             if scope.cancelled_caught:
                 dead.append(sid)
+
+        # Concurrently: N stalled sessions cost ~NOTIFY_TIMEOUT_S total, not N x
+        # (a /route caller blocks on this through apply_route_threadsafe).
+        async with anyio.create_task_group() as tg:
+            for sid, session in sessions:
+                tg.start_soon(one, sid, session)
         if dead:
             with self._lock:
                 live = self._legacy.get(agent_id)

@@ -238,7 +238,28 @@ Items not reconciled are in the gap list (#1, #3 below).
     * GPU name and utilization are not reported.
     * The response `tools[]` has no `tool_id`.
 
-## 9. Ports
+## 9. Review fixes (reviewer subagent, no blockers)
+
+* **SF-1.** `DeadlineDecisionModel.name` and the engine handles never load on
+  the request thread. `decision_model()` and `embedding_backend()` now load
+  outside the engine lock.
+* **SF-2.** Legacy-session `tools/list_changed` notifications are sent
+  concurrently, so N stalled sessions cost about one 2 s timeout.
+* **N-1.** The synthetic `dev` scope is granted only while dev mode is active.
+* **N-3.** A failure to publish exposure is logged and does not turn `/route`
+  into a 500.
+
+All four are mutation-checked. Two review items are noted here but not
+changed:
+
+* **N-2 (fails closed, as intended).** In dev mode, creating the first
+  principal through the API ends dev mode. With no `MCPR_ADMIN_TOKEN`, the
+  admin API then returns 403 until a restart with a token.
+* **CI Node version.** CI pins `node-version: "20"`, which matches the UI's
+  Node-20 pins (vite 7, vitest 4). Node 20 has been end-of-life since
+  2026-04. Bumping it means re-validating the UI toolchain on 22.
+
+## 10. Ports
 
 `tests/test_e2e_integration.py` uses 8700 (testbed fleet) and 8710 (uvicorn).
 `tests/test_execution_invoker.py` uses 8719 as a known-dead port. Other

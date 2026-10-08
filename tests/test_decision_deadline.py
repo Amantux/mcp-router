@@ -107,3 +107,23 @@ def test_pipeline_falls_back_when_the_model_hangs(db) -> None:  # noqa: ANN001
     assert res.fallback_used is True
     assert [t.tool_name for t in res.tools] == ["search_issues"]
     assert elapsed < 3.0
+
+
+def test_name_never_triggers_a_cold_load() -> None:
+    """Review SF-1: `name` is read outside the deadline, so it must not load."""
+    from mcprouter.inference.engine import InferenceEngine
+
+    loads: list[int] = []
+
+    def slow_loader(settings: Settings, device: str, embedder: object) -> SleepingModel:
+        loads.append(1)
+        time.sleep(1.0)
+        return SleepingModel(delay=0)
+
+    eng = InferenceEngine(Settings(decision_backend="laya"), decision_loader=slow_loader)  # type: ignore[arg-type]
+    m = DeadlineDecisionModel.for_engine(eng, timeout_s=5.0)
+    t0 = time.perf_counter()
+    assert m.name == "laya (not loaded)"
+    assert time.perf_counter() - t0 < 0.2 and loads == []
+    eng.load()
+    assert m.name == "sleeping-test"

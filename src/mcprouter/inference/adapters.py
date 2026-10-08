@@ -55,10 +55,14 @@ class DeadlineDecisionModel:
         timeout_s: float,
         *,
         max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
+        name_fn: Callable[[], str] | None = None,
     ) -> None:
         if timeout_s <= 0:
             raise ValueError("decision timeout must be > 0")
         self._provider = provider
+        # `name` is read on the request thread OUTSIDE the deadline, so it must
+        # never trigger a (possibly seconds-long) model load.
+        self._name_fn = name_fn or (lambda: provider().name)
         self._timeout_s = timeout_s
         self._max_in_flight = max_in_flight
         self._in_flight = 0
@@ -66,11 +70,16 @@ class DeadlineDecisionModel:
 
     @classmethod
     def for_engine(cls, engine: InferenceEngine, timeout_s: float) -> DeadlineDecisionModel:
-        return cls(engine.decision_model, timeout_s)
+        requested = engine.requested_decision_backend
+
+        def name() -> str:
+            return engine.published_decision_name() or f"{requested} (not loaded)"
+
+        return cls(engine.decision_model, timeout_s, name_fn=name)
 
     @property
     def name(self) -> str:
-        return self._provider().name
+        return self._name_fn()
 
     @name.setter
     def name(self, value: str) -> None:  # protocol attribute; the provider owns it

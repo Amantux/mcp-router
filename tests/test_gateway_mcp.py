@@ -489,3 +489,22 @@ async def test_non_http_scope_is_rejected(world: dict[str, Any]) -> None:
     app = _AuthASGI(inner, world["gw"])
     await app({"type": "websocket", "headers": [], "path": "/mcp"}, receive, send)
     assert reached == []
+
+
+async def test_stalled_sessions_are_notified_concurrently(world: dict[str, Any]) -> None:
+    """Review SF-2: N stalled legacy sessions must cost ~one notify timeout,
+    not N of them (a /route caller blocks on this)."""
+    from collections import OrderedDict
+
+    from mcprouter.gateway import server as gw_mod
+
+    class Stalled:
+        async def send_tool_list_changed(self) -> None:
+            await anyio.sleep(60)
+
+    gw = world["gw"]
+    gw._legacy["alice"] = OrderedDict((f"s{i}", Stalled()) for i in range(5))
+    t0 = time.perf_counter()
+    await gw.notify_tools_changed("alice")
+    assert time.perf_counter() - t0 < gw_mod.NOTIFY_TIMEOUT_S * 2
+    assert not gw._legacy["alice"]  # all pruned as dead

@@ -227,7 +227,14 @@ def route(
     if gateway is not None:
         # Publish to the agent's MCP sessions (tools/list_changed). Sync
         # endpoint => we are on an anyio worker thread.
-        gateway.apply_route_threadsafe(agent_id, result)
+        try:
+            gateway.apply_route_threadsafe(agent_id, result)
+        except Exception as exc:  # noqa: BLE001 — publish is best effort; the route stands
+            log.warning(
+                "route exposure publish failed request_id=%s exc_type=%s",
+                result.request_id,
+                type(exc).__name__,
+            )
     return RouteResponse(
         request_id=result.request_id,
         tools=[
