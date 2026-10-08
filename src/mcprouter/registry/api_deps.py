@@ -1,5 +1,5 @@
 """FastAPI glue shared by routes_tools and routes_dedup: DB session and the
-management-API admin gate."""
+management-API admin gate (delegating to the gateway's admin dependency)."""
 
 from __future__ import annotations
 
@@ -9,9 +9,11 @@ from contextlib import contextmanager
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from mcprouter.api.deps_auth import require_admin as gateway_require_admin
 from mcprouter.registry.errors import RegistryError
 
 DEV_ACTOR = "local-dev"
+ADMIN_ACTOR = "admin"
 
 
 def get_session(request: Request) -> Iterator[Session]:
@@ -27,18 +29,14 @@ def get_session(request: Request) -> Iterator[Session]:
 def require_admin(request: Request) -> str:
     """Management API gate. Returns the acting principal (for audit lines).
 
-    * No agent keys configured -> auth is disabled instance-wide (scoping §6;
-      create_app already logs the loud warning) -> dev actor.
-    * Agent keys configured -> FAIL CLOSED until integration wires a real admin
-      authenticator (override this dependency via
-      `app.dependency_overrides[require_admin]`). Never silently open.
+    Collapsed at integration onto the ONE admin dependency,
+    `mcprouter.api.deps_auth.require_admin` (MCPR_ADMIN_TOKEN; fails closed
+    outside dev mode). This wrapper only names the actor for audit lines:
+    `admin` when an admin token is configured, `local-dev` in dev mode.
     """
-    if not request.app.state.settings.agent_keys:
-        return DEV_ACTOR
-    raise HTTPException(
-        status_code=403,
-        detail="Admin authentication is not configured; the management API is locked.",
-    )
+    gateway_require_admin(request)  # raises 401/403/503; never returns on failure
+    security = request.app.state.security
+    return ADMIN_ACTOR if security.admin_token_hash is not None else DEV_ACTOR
 
 
 @contextmanager

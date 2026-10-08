@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from mcprouter.api.deps_auth import require_admin
 from mcprouter.api.routes_models import router
 from mcprouter.inference.engine import InferenceEngine
 from mcprouter.inference.errors import ModelUnavailableError
@@ -15,6 +16,8 @@ from mcprouter.settings import Settings
 def _app(engine: InferenceEngine | None) -> TestClient:
     app = FastAPI()
     app.include_router(router)
+    # Admin auth is covered in tests/test_integration_auth.py; these test the probe.
+    app.dependency_overrides[require_admin] = lambda: None
     if engine is not None:
         app.state.inference_engine = engine
     return TestClient(app)

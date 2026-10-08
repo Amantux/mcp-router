@@ -147,10 +147,8 @@ def test_fallback_flag_on_the_wire(seeded: dict[str, str]) -> None:
 
 
 def test_unconfigured_pipeline_is_503(seeded: dict[str, str]) -> None:
-    from mcprouter.api.routes_route import router
-
-    app = create_app(Settings(database_url=TEST_DB_URL))
-    app.include_router(router)
+    app = _app()
+    app.state.route_pipeline = None  # create_app installs one; simulate "not installed"
     r = TestClient(app).post("/api/v1/route", json={"query": "x", "agent_id": "a1"})
     assert r.status_code == 503
     assert "not configured" in r.json()["detail"]

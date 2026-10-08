@@ -1,33 +1,134 @@
-"""App factory. Routers register here at integration; each workstream ships
-its router module and ONE include line lands in this file."""
+"""App factory: the one place every workstream's seam is wired.
+
+Order matters:
+  schema (init_db + registry/routing indexes) -> security (tables, env
+  principals, app.state.security) -> inference engine (constructed, loaded in
+  the lifespan) -> management routers (admin-gated) -> routing (policy-backed
+  scope, decision deadline) -> execution manager (connector invoker) ->
+  policy/approval routes -> MCP gateway at /mcp (wraps the lifespan).
+
+Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
+routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
+"""
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+from collections.abc import AsyncIterator, Mapping
 
+import anyio.to_thread
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
+from mcprouter.api import routes_dedup, routes_tools
+from mcprouter.api.deps_auth import configure_security
+from mcprouter.api.routes_executions import router as executions_router
+from mcprouter.api.routes_models import router as models_router
+from mcprouter.api.routes_policy import router as policy_router
+from mcprouter.api.routes_route import install_routing
+from mcprouter.api.routes_servers import router as servers_router
 from mcprouter.db import init_db, make_engine, make_session_factory
+from mcprouter.discovery import DiscoveryService
+from mcprouter.execution.invoker import ConnectorToolInvoker
+from mcprouter.execution.manager import ExecutionManager
+from mcprouter.gateway.server import build_gateway
+from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
+from mcprouter.inference.engine import InferenceEngine
+from mcprouter.interfaces import RouteRequest, RouteResult
+from mcprouter.policy.scope import policy_scope_resolver
+from mcprouter.registry.schema import init_registry
+from mcprouter.routing.pipeline import RoutePipeline
+from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
 
+# Third-party clients that log full upstream request URLs at INFO (a token in
+# a query string would land in logs). Raised to WARNING at startup.
+_NOISY_CLIENT_LOGGERS = ("httpx", "httpx2", "httpcore", "mcp.client")
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+
+def _quiet_client_loggers() -> None:
+    for name in _NOISY_CLIENT_LOGGERS:
+        logger = logging.getLogger(name)
+        if logger.level == logging.NOTSET:  # respect an operator's explicit level
+            logger.setLevel(logging.WARNING)
+
+
+def create_app(
+    settings: Settings | None = None, *, env: Mapping[str, str] | None = None
+) -> FastAPI:
+    """`env` carries secrets that never enter Settings (MCPR_ADMIN_TOKEN);
+    defaults to os.environ. Tests pass an explicit mapping (pure)."""
     settings = settings or Settings.from_env()
-    app = FastAPI(title="MCP Router", version="0.1.0", docs_url="/docs")
+    env = os.environ if env is None else env
+    _quiet_client_loggers()
+
+    inference = InferenceEngine(
+        settings,
+        idle_unload_s=settings.idle_unload_s,
+        embed_batch_size=settings.embed_batch_size,
+    )
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # SPEC §7 "load once at startup" — off the event loop (Laya: seconds).
+        await anyio.to_thread.run_sync(inference.load)
+        try:
+            yield
+        finally:
+            await anyio.to_thread.run_sync(inference.unload)
+
+    app = FastAPI(title="MCP Router", version="0.1.0", docs_url="/docs", lifespan=lifespan)
     engine = make_engine(settings)
-    init_db(engine)
+    init_db(engine)  # Base + approval_requests + eval_results (Alembic deferred)
+    init_registry(engine)  # FTS + dedup-pair indexes (idempotent)
+    factory = make_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine
-    app.state.session_factory = make_session_factory(engine)
+    app.state.session_factory = factory
 
-    if not settings.agent_keys:
+    # Auth: dev mode only when agent keys, admin token AND principals are all
+    # absent — deps_auth logs the per-request `auth.dev_mode` warning.
+    security = configure_security(app, env)
+    if security.dev_mode_possible:
         log.warning(
-            "MCPR_AGENT_KEYS is unset — gateway auth is DISABLED. Dev only; "
-            "never expose this instance beyond localhost."
+            "No MCPR_AGENT_KEYS and no MCPR_ADMIN_TOKEN: auth is DISABLED while no agent "
+            "principals exist (dev mode; admin API open). Never expose beyond localhost."
         )
+
+    app.state.inference_engine = inference
+    app.state.discovery = DiscoveryService(factory)
+
+    # Management API — all admin-gated by the gateway's require_admin
+    # (servers/models/executions at the router; tools/dedup via the registry
+    # wrapper; route/evaluate and policy routes per endpoint).
+    app.include_router(servers_router)
+    app.include_router(routes_tools.router)
+    app.include_router(routes_dedup.router)
+    app.include_router(models_router)
+    app.include_router(executions_router)
+
+    # Routing: policy-backed scope (ONE policy implementation) + model deadline.
+    scope_resolver = policy_scope_resolver(factory, security)
+    pipeline = RoutePipeline(
+        factory,
+        HybridRetriever(factory, EngineEmbedder(inference)),
+        DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s),
+        settings,
+    )
+    install_routing(app, pipeline, scope_resolver=scope_resolver)
+
+    def route_fn(request: RouteRequest) -> RouteResult:
+        # The gateway redacts the query before calling this (find_tools).
+        return pipeline.route(request, scope_resolver(request.agent_id))
+
+    manager = ExecutionManager.from_settings(settings, factory, ConnectorToolInvoker(factory))
+    app.state.execution_manager = manager
+    app.include_router(policy_router)
+    build_gateway(app, manager=manager, route_fn=route_fn)  # /mcp; wraps the lifespan
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

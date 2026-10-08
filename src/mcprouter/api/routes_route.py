@@ -33,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
+from mcprouter.api.deps_auth import require_admin
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
@@ -221,7 +222,9 @@ class EvaluateResponse(BaseModel):
     metrics: dict[str, Any]
 
 
-@router.post("/route/evaluate", response_model=EvaluateResponse)
+@router.post(
+    "/route/evaluate", response_model=EvaluateResponse, dependencies=[Depends(require_admin)]
+)
 def evaluate(
     body: EvaluateBody,
     request: Request,

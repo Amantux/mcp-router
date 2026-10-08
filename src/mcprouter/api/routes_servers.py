@@ -19,13 +19,14 @@ from typing import Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import anyio.to_thread
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.api.deps_auth import require_admin
 from mcprouter.discovery import (
     DiscoveryService,
     DuplicateServerError,
@@ -44,7 +45,13 @@ from mcprouter.discovery.registry import get_server, tool_counts
 from mcprouter.mcpclient import ConnectorError
 from mcprouter.models import MCPServerRecord
 
-router = APIRouter(prefix="/api/v1/servers", tags=["servers"])
+# Admin-only (integration security blocker): stdio registration is arbitrary
+# command execution and refresh dials stored targets. The gateway's admin
+# dependency fails closed outside dev mode. tests/test_integration_auth.py
+# fails if this dependency is removed.
+router = APIRouter(
+    prefix="/api/v1/servers", tags=["servers"], dependencies=[Depends(require_admin)]
+)
 
 _DUPLICATE = "a server with this name already exists"
 

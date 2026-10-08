@@ -17,9 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from mcprouter.api.deps_auth import require_admin
 from mcprouter.inference.engine import InferenceEngine
 
-router = APIRouter(prefix="/api/v1/models", tags=["models"])
+# Admin-only: exposes model ids/revisions/package versions/RSS (operator
+# information), and in battery mode the probe can unload models.
+router = APIRouter(prefix="/api/v1/models", tags=["models"], dependencies=[Depends(require_admin)])
 
 
 class _Camel(BaseModel):
