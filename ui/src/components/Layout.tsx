@@ -10,6 +10,7 @@ import {
   ShieldKeyholeRegular,
 } from "@fluentui/react-icons";
 import type { ReactNode } from "react";
+import { NotificationStack } from "./Notifications";
 
 export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
@@ -51,7 +52,7 @@ const useStyles = makeStyles({
   main: { overflow: "auto", padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, minWidth: 0 },
 });
 
-export function Layout({ banner }: { banner?: ReactNode }) {
+export function Layout() {
   const s = useStyles();
   return (
     <div className={s.shell}>
@@ -67,7 +68,7 @@ export function Layout({ banner }: { banner?: ReactNode }) {
         ))}
       </nav>
       <main className={s.main}>
-        {banner}
+        <NotificationStack />
         <Outlet />
       </main>
     </div>

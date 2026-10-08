@@ -5,12 +5,15 @@ import { RouterProvider } from "react-router";
 import "./index.css";
 import { router } from "./routes";
 import { useColorScheme } from "./hooks/useColorScheme";
+import { NotificationsProvider } from "./components/Notifications";
 
 function Root() {
   const scheme = useColorScheme();
   return (
     <FluentProvider theme={scheme === "dark" ? webDarkTheme : webLightTheme} style={{ height: "100%" }}>
-      <RouterProvider router={router} />
+      <NotificationsProvider>
+        <RouterProvider router={router} />
+      </NotificationsProvider>
     </FluentProvider>
   );
 }
