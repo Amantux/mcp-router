@@ -444,3 +444,48 @@ async def test_e2e_modern_listen_receives_only_own_changes(served: dict[str, Any
             assert type(event).__name__ == "ToolsListChanged"
         names = [t.name for t in (await session.list_tools()).tools]
         assert names == ["github.list_issues", "github.create_issue", META_TOOL]
+
+
+# ------------------------------------------------- adversarial-pass findings
+async def test_catalog_tool_cannot_shadow_meta_tool(world: dict[str, Any]) -> None:
+    """A discovered server named 'router' with a 'find_tools' tool must not
+    produce a duplicate (uncallable) tool name next to the meta tool."""
+    gw, cat, db = world["gw"], world["cat"], world["db"]
+    with db() as s:
+        srv = MCPServerRecord(name="router", transport="stdio")
+        s.add(srv)
+        s.flush()
+        s.add(
+            MCPToolRecord(
+                server_id=srv.id,
+                name="find_tools",
+                schema_hash="h",
+                operation="read",
+                call_count=999,
+            )
+        )
+        s.commit()
+    add_rule(db, "alice")
+    names = await _names(gw, cat, "alice")
+    assert names.count(META_TOOL) == 1
+
+
+async def test_non_http_scope_is_rejected(world: dict[str, Any]) -> None:
+    from mcprouter.gateway.server import _AuthASGI
+
+    reached: list[str] = []
+
+    async def inner(scope: Any, receive: Any, send: Any) -> None:
+        reached.append(scope["type"])
+
+    sent: list[Any] = []
+
+    async def send(msg: Any) -> None:
+        sent.append(msg)
+
+    async def receive() -> Any:
+        return {"type": "websocket.connect"}
+
+    app = _AuthASGI(inner, world["gw"])
+    await app({"type": "websocket", "headers": [], "path": "/mcp"}, receive, send)
+    assert reached == []

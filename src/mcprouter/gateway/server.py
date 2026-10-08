@@ -157,7 +157,9 @@ class _AuthASGI:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
-            await self._inner(scope, receive, send)
+            # Fail closed by construction: only authenticated HTTP reaches the SDK.
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
             return
         authorization = Headers(scope=scope).get("authorization")
         try:
@@ -322,6 +324,11 @@ class GatewayServer:
             for tool, server in candidates:
                 if len(out) >= cap:
                     break
+                if (
+                    self._route_fn is not None
+                    and stable_tool_id(server.name, tool.name) == META_TOOL
+                ):
+                    continue  # never shadow / duplicate the meta tool's name
                 # Defense in depth: route results are NEVER shown unfiltered.
                 decision = evaluate(principal, server, tool, rules)
                 if decision.allow:
