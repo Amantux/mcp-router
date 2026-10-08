@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from mcprouter.eval.dataset import DatasetError, load_named
+from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
+from mcprouter.eval.store import ensure_eval_table, save_eval_result
 from mcprouter.interfaces import RouteRequest, ScopeFilter
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.scope import AllowAllScope
@@ -146,4 +149,59 @@ def route(
         fallback_used=result.fallback_used,
         latency_ms=round(result.latency_ms, 3),
         no_match=result.no_match,
+    )
+
+
+# ------------------------------------------------------------ evaluation
+class EvaluateBody(BaseModel):
+    dataset: str = Field(min_length=1, max_length=120)
+    max_tools: int = Field(default=DEFAULT_EVAL_MAX_TOOLS, ge=1, le=50)
+
+
+class EvaluateResponse(BaseModel):
+    id: str
+    dataset: str
+    model_version: str
+    case_count: int
+    metrics: dict[str, Any]
+
+
+@router.post("/route/evaluate", response_model=EvaluateResponse)
+def evaluate(
+    body: EvaluateBody,
+    request: Request,
+    pipeline: Annotated[RoutePipeline, Depends(get_pipeline)],
+    scope_resolver: Annotated[ScopeResolver, Depends(get_scope_resolver)],
+) -> EvaluateResponse:
+    """Run a named, server-shipped dataset against the LIVE pipeline + scope
+    resolver and store the result. Dataset names are whitelisted (no paths)."""
+    try:
+        cases = load_named(body.dataset)
+    except DatasetError:
+        raise HTTPException(status_code=404, detail="Unknown dataset.") from None
+    factory = request.app.state.session_factory
+    outcomes = run_cases(
+        pipeline,
+        cases,
+        session_factory=factory,
+        scope_resolver=scope_resolver,
+        max_tools=body.max_tools,
+    )
+    metrics = compute_metrics(outcomes)
+    ensure_eval_table(request.app.state.engine)
+    with factory() as s:
+        rid = save_eval_result(
+            s,
+            dataset=body.dataset,
+            model_version=pipeline.model_name,
+            metrics=metrics,
+            cases=case_rows(outcomes),
+        )
+        s.commit()
+    return EvaluateResponse(
+        id=rid,
+        dataset=body.dataset,
+        model_version=pipeline.model_name,
+        case_count=len(outcomes),
+        metrics=metrics,
     )
