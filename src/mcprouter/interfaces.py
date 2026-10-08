@@ -95,6 +95,9 @@ class RouteRequest:
     agent_id: str
     max_tools: int
     allowed_servers: list[str] | None = None
+    # Appended (wave 2, budgets): cap on DISTINCT servers among the routed
+    # tools, applied after ranking in rank order. None = unlimited.
+    max_servers: int | None = None
 
 
 @dataclass(frozen=True)

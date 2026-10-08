@@ -46,6 +46,7 @@ class PrincipalOut(_Wire):
     agent_id: str
     enabled: bool
     max_tools: int
+    max_servers: int | None  # distinct-server exposure cap; None = unlimited
     created_at: datetime | None  # None only for the synthetic dev principal
 
 
@@ -62,11 +63,14 @@ class KeyRotated(_Wire):
 class PrincipalIn(_Wire):
     agent_id: AgentId
     max_tools: int = Field(default=8, ge=1, le=64)
+    max_servers: int | None = Field(default=None, ge=1, le=1000)
     enabled: bool = True
 
 
 class PrincipalPatch(_Wire):
     max_tools: int | None = Field(default=None, ge=1, le=64)
+    # Explicit null clears the cap (unlimited); omitted leaves it unchanged.
+    max_servers: int | None = Field(default=None, ge=1, le=1000)
     enabled: bool | None = None
 
 
@@ -134,6 +138,7 @@ def _p_out(p: AgentPrincipal) -> PrincipalOut:
         agent_id=p.agent_id,
         enabled=p.enabled,
         max_tools=p.max_tools,
+        max_servers=p.max_servers,
         created_at=p.created_at,
     )
 
@@ -201,6 +206,7 @@ def create_principal(body: PrincipalIn, request: Request) -> PrincipalCreated:
             key_hash=hash_key(key),
             enabled=body.enabled,
             max_tools=body.max_tools,
+            max_servers=body.max_servers,
         )
         s.add(p)
         try:
@@ -231,6 +237,8 @@ def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -
             p.enabled = body.enabled
         if body.max_tools is not None:
             p.max_tools = body.max_tools
+        if "max_servers" in body.model_fields_set:
+            p.max_servers = body.max_servers
         s.commit()
         return _p_out(p)
 

@@ -33,6 +33,8 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolved_at"
     " TIMESTAMP WITH TIME ZONE",
     "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolution_note TEXT",
+    # wave 2 (budgets): per-principal distinct-server cap, NULL = unlimited.
+    "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_servers INTEGER",
 )
 
 

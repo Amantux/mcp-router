@@ -52,6 +52,7 @@ from mcprouter.eval.store import ensure_eval_table, save_eval_result
 from mcprouter.execution.redaction import redact
 from mcprouter.interfaces import RouteRequest, ScopeFilter
 from mcprouter.models import AgentPrincipal
+from mcprouter.routing.budgets import effective_budgets
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope
@@ -82,6 +83,8 @@ class RouteBody(_Body):
     # Optional: identity comes from the credential. If present it must match.
     agent_id: str | None = Field(default=None, min_length=1, max_length=120)
     max_tools: int | None = Field(default=None, ge=1, le=1000)
+    # Distinct-server budget; may only LOWER the principal/global caps.
+    max_servers: int | None = Field(default=None, ge=1, le=1000)
     allowed_servers: list[ServerName] | None = Field(default=None, max_length=500)
 
     @field_validator("query")
@@ -135,6 +138,10 @@ class RouteResponse(BaseModel):
     fallback_used: bool
     latency_ms: float
     no_match: bool
+    # Effective budgets after the clamp chain (routing.budgets); null
+    # max_servers_applied = no distinct-server cap anywhere.
+    max_tools_applied: int
+    max_servers_applied: int | None
 
 
 def install_routing(
@@ -214,12 +221,20 @@ def route(
         )
     scope = scope_resolver(agent_id)
     allowed_ids = resolve_allowed(request, body.allowed_servers, scope)
+    # Request may lower a budget, never raise it past the principal or global cap.
+    budgets = effective_budgets(
+        principal,
+        settings,
+        requested_tools=body.max_tools,
+        requested_servers=body.max_servers,
+    )
     result = pipeline.route(
         RouteRequest(
             query=redact(body.query),  # model input AND the persisted decision row
             agent_id=agent_id,
-            max_tools=body.max_tools or settings.max_exposed_tools,
+            max_tools=budgets.max_tools,
             allowed_servers=allowed_ids,
+            max_servers=budgets.max_servers,
         ),
         scope,
     )
@@ -244,6 +259,8 @@ def route(
         fallback_used=result.fallback_used,
         latency_ms=round(result.latency_ms, 3),
         no_match=result.no_match,
+        max_tools_applied=budgets.max_tools,
+        max_servers_applied=budgets.max_servers,
     )
 
 

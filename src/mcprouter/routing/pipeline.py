@@ -29,7 +29,10 @@ QUESTION — one tool per Score question, one tool per line of the Noul
 question. That is what `score_batch(state, questions, levels)` and the
 deterministic-v1 model assume (it compares `state` against the question /
 each question line), and how the inference bench drives Laya.
-  f. Truncate to clamp(max_tools, 1, max_exposed_tools).
+  f. Budgets: cap the DISTINCT servers represented (`max_servers`, in rank
+     order; slots freed by a skipped server are back-filled from deeper
+     ranks), then truncate to clamp(max_tools, 1, max_exposed_tools). The
+     API computes both with routing.budgets (request may lower, never raise).
 
 Deterministic failure path (FR-06): ANY exception or contract-violating answer
 from the decision model => retrieval-score-only ranking, `fallback_used=True`.
@@ -60,6 +63,7 @@ from mcprouter.interfaces import (
     ToolCandidate,
 )
 from mcprouter.models import RoutingDecisionRecord
+from mcprouter.routing.budgets import cap_servers
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -117,6 +121,9 @@ class RoutePipeline:
         t0 = time.perf_counter()
         request_id = str(uuid.uuid4())
         max_tools = min(max(request.max_tools, 1), max(self._settings.max_exposed_tools, 1))
+        # Same clamp chain as the API (routing.budgets): the global cap still
+        # applies to a RouteRequest built by any other caller.
+        max_servers = _min_set(request.max_servers, self._settings.max_exposed_servers)
 
         candidates = self._scoped_candidates(request, scope)
         fallback = False
@@ -127,7 +134,7 @@ class RoutePipeline:
             no_match = True
         else:
             try:
-                ranked, no_match = self._decide(request.query, candidates, max_tools)
+                ranked, no_match = self._decide(request.query, candidates, max_tools, max_servers)
             except Exception as exc:  # noqa: BLE001 — FR-06: ANY model failure => fallback
                 log.warning(
                     "decision model failed (%s); deterministic retrieval fallback request_id=%s",
@@ -139,7 +146,9 @@ class RoutePipeline:
                 ranked = [_Scored(c, c.retrieval_score) for c in candidates]
                 ranked.sort(key=_rank_key)
 
-        selected = [] if no_match else ranked[:max_tools]
+        # Budgets: cap DISTINCT servers in rank order first (slots freed by a
+        # skipped server are back-filled from deeper ranks), then the count.
+        selected = [] if no_match else _cap(ranked, max_tools, max_servers)
         # Defence in depth: re-assert scope on what is actually exposed.
         selected = [r for r in selected if scope.permits(r.cand)]
         tools = [
@@ -188,7 +197,11 @@ class RoutePipeline:
 
     # -------------------------------------------------------- stages b-e
     def _decide(
-        self, query: str, cands: list[ToolCandidate], max_tools: int
+        self,
+        query: str,
+        cands: list[ToolCandidate],
+        max_tools: int,
+        max_servers: int | None = None,
     ) -> tuple[list[_Scored], bool]:
         m = self._model
         # b. domain (hard prune, with a calibrated multi-label margin)
@@ -238,7 +251,7 @@ class RoutePipeline:
         # e. no-match detection over what would actually be exposed
         shown = "\n".join(
             f"- {r.cand.server_name}/{r.cand.tool_name}: {r.cand.description[:_NOUL_DESC_MAX]}"
-            for r in scored[:max_tools]
+            for r in _cap(scored, max_tools, max_servers)
         )
         p_yes = m.noul(query, f"{NOUL_QUESTION}\n{shown}")
         if not _is_prob(p_yes):
@@ -273,6 +286,15 @@ class RoutePipeline:
                 )
             )
             s.commit()
+
+
+def _cap(ranked: list[_Scored], max_tools: int, max_servers: int | None) -> list[_Scored]:
+    return cap_servers(ranked, lambda r: r.cand.server_id, max_servers)[:max_tools]
+
+
+def _min_set(*values: int | None) -> int | None:
+    present = [v for v in values if v is not None]
+    return min(present) if present else None
 
 
 def _rank_key(r: _Scored) -> tuple[float, str, str]:

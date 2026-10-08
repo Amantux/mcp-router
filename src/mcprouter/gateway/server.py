@@ -14,8 +14,10 @@ Request flow:
           (/mcp, DNS-rebinding protection) -> handlers below.
 
 * tools/list  = the agent's last route() result (or a deterministic default:
-  top-N most-used tools), RE-FILTERED through policy, capped at
-  min(principal.max_tools, settings.max_exposed_tools). Stable names
+  top-N most-used tools), RE-FILTERED through policy, capped by the
+  routing.budgets clamp chain: min(principal.max_tools, max_exposed_tools)
+  tools over at most min(principal.max_servers, max_exposed_servers)
+  DISTINCT servers (in exposure order; None = unlimited). Stable names
   `server_name.tool_name`. cacheScope=private, ttlMs=0.
 * tools/call  = always via ExecutionManager.execute (policy, rate limit,
   validation, approval, audit). Never calls an upstream directly. A tool
@@ -69,6 +71,7 @@ from mcprouter.gateway.exposure import ExposureStore
 from mcprouter.interfaces import RouteFn, RouteRequest, RouteResult
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from mcprouter.policy.engine import evaluate
+from mcprouter.routing.budgets import effective_budgets
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -284,13 +287,17 @@ class GatewayServer:
 
     # ------------------------------------------------------------ exposure
     def _cap(self, principal: AgentPrincipal) -> int:
-        return max(0, min(principal.max_tools, self._settings.max_exposed_tools))
+        return max(0, effective_budgets(principal, self._settings).max_tools)
+
+    def _server_cap(self, principal: AgentPrincipal) -> int | None:
+        return effective_budgets(principal, self._settings).max_servers
 
     def visible_tools(
         self, principal: AgentPrincipal
     ) -> list[tuple[MCPToolRecord, MCPServerRecord, bool]]:
         """(tool, server, requires_approval) the agent may see now. Sync (DB)."""
         cap = self._cap(principal)
+        server_cap = self._server_cap(principal)
         exposure = self.exposure.get(principal.agent_id)
         with self._factory() as s:
             q = (
@@ -321,9 +328,16 @@ class GatewayServer:
                 s.scalars(select(PolicyRule).where(PolicyRule.agent_id == principal.agent_id)).all()
             )
             out: list[tuple[MCPToolRecord, MCPServerRecord, bool]] = []
+            servers_shown: set[str] = set()
             for tool, server in candidates:
                 if len(out) >= cap:
                     break
+                if (
+                    server_cap is not None
+                    and server.id not in servers_shown
+                    and len(servers_shown) >= server_cap
+                ):
+                    continue  # distinct-server budget (routing.budgets)
                 if (
                     self._route_fn is not None
                     and stable_tool_id(server.name, tool.name) == META_TOOL
@@ -333,6 +347,7 @@ class GatewayServer:
                 decision = evaluate(principal, server, tool, rules)
                 if decision.allow:
                     out.append((tool, server, decision.requires_approval))
+                    servers_shown.add(server.id)
             s.expunge_all()  # detach (tools share server objects)
             return out
 
@@ -415,6 +430,7 @@ class GatewayServer:
             query=redact(query),  # model input: secrets never reach the router
             agent_id=principal.agent_id,
             max_tools=self._cap(principal),
+            max_servers=self._server_cap(principal),
         )
         try:
             result = await anyio.to_thread.run_sync(route_fn, request)

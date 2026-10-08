@@ -27,6 +27,8 @@ class Settings:
     laya_noul_mode: str = "choice"  # choice | native
     # Routing
     max_exposed_tools: int = 8
+    # Optional global cap on DISTINCT servers in one exposure (None = unlimited).
+    max_exposed_servers: int | None = None
     retrieval_candidates: int = 20
     route_confidence_floor: float = 0.35
     # Per-call deadline for decision-model questions; a hung model becomes an
@@ -57,6 +59,7 @@ class Settings:
             embed_batch_size=int(get("MCPR_EMBED_BATCH_SIZE", str(d.embed_batch_size))),
             laya_noul_mode=get("MCPR_LAYA_NOUL_MODE", d.laya_noul_mode),
             max_exposed_tools=int(get("MCPR_MAX_EXPOSED_TOOLS", str(d.max_exposed_tools))),
+            max_exposed_servers=_opt_int(get("MCPR_MAX_EXPOSED_SERVERS", "")),
             retrieval_candidates=int(get("MCPR_RETRIEVAL_CANDIDATES", str(d.retrieval_candidates))),
             route_confidence_floor=float(
                 get("MCPR_ROUTE_CONFIDENCE_FLOOR", str(d.route_confidence_floor))
@@ -69,3 +72,13 @@ class Settings:
                 get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
             ),
         )
+
+
+def _opt_int(raw: str) -> int | None:
+    """Empty/unset -> None. A set value must be a positive integer (fail loudly)."""
+    if not raw.strip():
+        return None
+    value = int(raw)
+    if value < 1:
+        raise ValueError("must be a positive integer when set")
+    return value
