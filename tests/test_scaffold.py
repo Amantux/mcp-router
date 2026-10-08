@@ -16,7 +16,7 @@ def test_contracts_import() -> None:
 
 @requires_db
 def test_app_boots_and_healthz() -> None:
-    app = create_app(Settings(database_url=TEST_DB_URL))
+    app = create_app(Settings(database_url=TEST_DB_URL), env={})
     client = TestClient(app)
     assert client.get("/healthz").json() == {"status": "ok"}
     assert client.get("/metrics").status_code == 200

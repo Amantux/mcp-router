@@ -121,7 +121,7 @@ def test_metric_definitions() -> None:
 @requires_db
 def test_evaluate_endpoint_runs_and_persists(db: sessionmaker[Session]) -> None:
     settings = Settings(database_url=TEST_DB_URL)
-    app = create_app(settings)
+    app = create_app(settings, env={})
     factory = app.state.session_factory
     emb = FakeHashEmbedder()
     with factory() as s:

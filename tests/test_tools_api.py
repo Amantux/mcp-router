@@ -10,10 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.app import create_app
-from mcprouter.api.routes_dedup import router as dedup_router
-from mcprouter.api.routes_tools import router as tools_router
 from mcprouter.models import MCPToolRecord, ToolVersionRecord
-from mcprouter.registry.schema import init_registry
 from mcprouter.settings import Settings
 
 from .conftest import requires_db
@@ -23,12 +20,8 @@ pytestmark = requires_db
 
 
 def _client(settings: Settings) -> TestClient:
-    # Integration adds these two include lines (+ init_registry) to app.py.
-    app = create_app(settings)
-    init_registry(app.state.engine)
-    app.include_router(tools_router)
-    app.include_router(dedup_router)
-    return TestClient(app)
+    # create_app wires init_registry + the tools/dedup routers (integration).
+    return TestClient(create_app(settings, env={}))
 
 
 @pytest.fixture()
