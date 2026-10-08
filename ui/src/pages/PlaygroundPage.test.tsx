@@ -88,7 +88,9 @@ describe("PlaygroundPage", () => {
     await user.type(await screen.findByRole("textbox", { name: /repo/ }), "a/b");
     // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
     expect((screen.getByRole("button", { name: "Run tool" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.selectOptions(await screen.findByTestId("run-as-picker"), "billing-bot");
+    // The principals list loads asynchronously: wait for the option itself, not just the picker.
+    await screen.findByRole("option", { name: "billing-bot" });
+    await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
     await user.click(screen.getByRole("button", { name: "Run tool" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
