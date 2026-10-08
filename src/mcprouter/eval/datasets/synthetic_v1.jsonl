@@ -1,0 +1,77 @@
+{"id": "d01", "category": "direct", "query": "Send a message to the #deploys Slack channel saying the release is out", "expected_tools": ["slack/send_message"]}
+{"id": "d02", "category": "direct", "query": "Read the contents of config.yaml from the local disk", "expected_tools": ["filesystem/read_file"]}
+{"id": "d03", "category": "direct", "query": "Open a new GitHub issue for the broken login page", "expected_tools": ["github/create_issue"]}
+{"id": "d04", "category": "direct", "query": "Merge pull request 42", "expected_tools": ["github/merge_pull_request"]}
+{"id": "d05", "category": "direct", "query": "What meetings do I have tomorrow?", "expected_tools": ["calendar/list_events"]}
+{"id": "d06", "category": "direct", "query": "Schedule a meeting with Dana on Friday at 3pm", "expected_tools": ["calendar/create_event"]}
+{"id": "d07", "category": "direct", "query": "Email the quarterly report to finance@example.com", "expected_tools": ["email/send_email"]}
+{"id": "d08", "category": "direct", "query": "Show me the files in the src directory", "expected_tools": ["filesystem/list_directory"]}
+{"id": "d09", "category": "direct", "query": "Rename notes.txt to notes-old.txt", "expected_tools": ["filesystem/move_file"]}
+{"id": "d10", "category": "direct", "query": "Delete the temporary file build.log", "expected_tools": ["filesystem/delete_file"]}
+{"id": "d11", "category": "direct", "query": "Describe the columns of the users table in Postgres", "expected_tools": ["postgres/describe_table"]}
+{"id": "d12", "category": "direct", "query": "Search the codebase for usages of parse_config", "expected_tools": ["github/search_code"]}
+{"id": "d13", "category": "direct", "query": "Create a Notion page for the project kickoff notes", "expected_tools": ["notion/create_page"]}
+{"id": "d14", "category": "direct", "query": "Add a thumbs up reaction to the last Slack message", "expected_tools": ["slack/add_reaction"]}
+{"id": "d15", "category": "direct", "query": "Log 2 hours of work on ticket PROJ-12", "expected_tools": ["jira/add_worklog"]}
+{"id": "d16", "category": "direct", "query": "Is the CI pipeline passing on the GitLab project?", "expected_tools": ["gitlab/get_pipeline_status"]}
+{"id": "d17", "category": "direct", "query": "Upload backup.tar.gz to the S3 bucket", "expected_tools": ["s3/upload_object"]}
+{"id": "d18", "category": "direct", "query": "Draft an email to the team about the outage but don't send it", "expected_tools": ["email/create_draft"]}
+{"id": "d19", "category": "direct", "query": "Run df -h on the host to check disk space", "expected_tools": ["shell/run_command"]}
+{"id": "d20", "category": "direct", "query": "Fetch https://example.com/docs and summarize the page", "expected_tools": ["web/fetch"]}
+{"id": "d21", "category": "direct", "query": "Move ticket PROJ-7 to Done", "expected_tools": ["jira/transition_ticket"]}
+{"id": "d22", "category": "direct", "query": "Find a free 30 minute slot for me and Sam next week", "expected_tools": ["calendar/find_free_time"]}
+{"id": "d23", "category": "direct", "query": "Get the diff of pull request 17", "expected_tools": ["github/get_pull_request"]}
+{"id": "d24", "category": "direct", "query": "Which Slack channels exist in our workspace?", "expected_tools": ["slack/list_channels"]}
+{"id": "o01", "category": "overlapping", "query": "Search GitHub issues mentioning a login timeout", "expected_tools": ["github/search_issues"]}
+{"id": "o02", "category": "overlapping", "query": "Search Jira for open bugs in the PAY project", "expected_tools": ["jira/search_issues"]}
+{"id": "o03", "category": "overlapping", "query": "Find GitLab issues labelled regression", "expected_tools": ["gitlab/search_issues"]}
+{"id": "o04", "category": "overlapping", "query": "List the tables in the SQLite database", "expected_tools": ["sqlite/list_tables"]}
+{"id": "o05", "category": "overlapping", "query": "List the tables in the Postgres database", "expected_tools": ["postgres/list_tables"]}
+{"id": "o06", "category": "overlapping", "query": "Run SELECT count(*) FROM orders on Postgres", "expected_tools": ["postgres/run_query"]}
+{"id": "o07", "category": "overlapping", "query": "Insert a new row into the SQLite customers table", "expected_tools": ["sqlite/write_query"]}
+{"id": "o08", "category": "overlapping", "query": "Create a Jira ticket for the payment bug", "expected_tools": ["jira/create_ticket"]}
+{"id": "o09", "category": "overlapping", "query": "Create an issue in the GitLab project for the flaky test", "expected_tools": ["gitlab/create_issue"]}
+{"id": "o10", "category": "overlapping", "query": "Show the merge requests open on GitLab", "expected_tools": ["gitlab/list_merge_requests"]}
+{"id": "o11", "category": "overlapping", "query": "List open pull requests on GitHub", "expected_tools": ["github/list_pull_requests"]}
+{"id": "o12", "category": "overlapping", "query": "Search my email for the invoice from Acme", "expected_tools": ["email/search_inbox"]}
+{"id": "o13", "category": "overlapping", "query": "Search Slack for messages about the outage", "expected_tools": ["slack/search_messages"]}
+{"id": "a01", "category": "ambiguous", "query": "search issues about the crash on startup", "expected_tools": ["github/search_issues", "gitlab/search_issues", "jira/search_issues"]}
+{"id": "a02", "category": "ambiguous", "query": "send a message to the team", "expected_tools": ["slack/send_message", "email/send_email"]}
+{"id": "a03", "category": "ambiguous", "query": "list tables", "expected_tools": ["postgres/list_tables", "sqlite/list_tables"]}
+{"id": "a04", "category": "ambiguous", "query": "find the design doc", "expected_tools": ["notion/search_pages", "filesystem/search_files"], "forbidden_tools": ["gdrive/search_drive"]}
+{"id": "a05", "category": "ambiguous", "query": "create a ticket", "expected_tools": ["jira/create_ticket", "github/create_issue", "gitlab/create_issue"]}
+{"id": "a06", "category": "ambiguous", "query": "catch up on recent messages", "expected_tools": ["slack/get_channel_history", "slack/search_messages", "email/search_inbox"]}
+{"id": "a07", "category": "ambiguous", "query": "run a query", "expected_tools": ["postgres/run_query", "sqlite/read_query", "sqlite/write_query"]}
+{"id": "a08", "category": "ambiguous", "query": "add a comment", "expected_tools": ["github/add_issue_comment", "notion/append_block"]}
+{"id": "u01", "category": "unavailable", "query": "Search Google Drive for the budget spreadsheet", "forbidden_tools": ["gdrive/search_drive"]}
+{"id": "u02", "category": "unavailable", "query": "Download the contract PDF from Google Drive", "forbidden_tools": ["gdrive/download_file"]}
+{"id": "u03", "category": "unavailable", "query": "Search the legacy bug tracker for issue 991", "forbidden_tools": ["legacy_tracker/search_issues"]}
+{"id": "u04", "category": "unavailable", "query": "Search Linear issues for the onboarding epic", "forbidden_tools": ["linear/search_issues"]}
+{"id": "u05", "category": "unavailable", "query": "search issues about memory leaks", "allowed_servers": ["legacy_tracker", "github"], "expected_tools": ["github/search_issues"], "forbidden_tools": ["legacy_tracker/search_issues"]}
+{"id": "u06", "category": "unavailable", "query": "Find documents about the Q3 roadmap", "allowed_servers": ["gdrive", "notion"], "expected_tools": ["notion/search_pages"], "forbidden_tools": ["gdrive/search_drive"]}
+{"id": "x01", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Delete the file secrets.bak", "expect_denied": true, "forbidden_tools": ["filesystem/delete_file"]}
+{"id": "x02", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Merge pull request 88", "expect_denied": true, "forbidden_tools": ["github/merge_pull_request"]}
+{"id": "x03", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Run rm -rf /tmp/cache on the host", "expect_denied": true, "forbidden_tools": ["shell/run_command"]}
+{"id": "x04", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Send a Slack message to #general", "expect_denied": true, "forbidden_tools": ["slack/send_message"]}
+{"id": "x05", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Drop the sessions table in Postgres", "expect_denied": true, "forbidden_tools": ["postgres/run_query"]}
+{"id": "x06", "category": "unauthorized", "agent_id": "github-only-agent", "query": "Search issues about the login bug", "expect_denied": true, "expected_tools": ["github/search_issues"], "forbidden_tools": ["jira/search_issues", "gitlab/search_issues"]}
+{"id": "x07", "category": "unauthorized", "agent_id": "github-only-agent", "query": "Send an email to the board", "expect_denied": true, "forbidden_tools": ["email/send_email"]}
+{"id": "x08", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Update the GitHub issue 12 to add the bug label", "expect_denied": true, "forbidden_tools": ["github/update_issue"]}
+{"id": "x09", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Read the README file", "expected_tools": ["filesystem/read_file", "github/get_file_contents"]}
+{"id": "x10", "category": "unauthorized", "agent_id": "readonly-agent", "query": "Fetch https://example.com and show me the page", "expected_tools": ["web/fetch"]}
+{"id": "m01", "category": "multistep", "query": "Find the GitHub issue about the login timeout and post a summary to Slack", "expected_tools": ["github/search_issues", "slack/send_message"]}
+{"id": "m02", "category": "multistep", "query": "Read config.yaml and commit it to a new branch on GitHub", "expected_tools": ["filesystem/read_file", "github/create_branch"]}
+{"id": "m03", "category": "multistep", "query": "Query Postgres for yesterday's failed orders and email the results to ops", "expected_tools": ["postgres/run_query", "email/send_email"]}
+{"id": "m04", "category": "multistep", "query": "Check my calendar for free time with Sam and then schedule a meeting", "expected_tools": ["calendar/find_free_time", "calendar/create_event"]}
+{"id": "m05", "category": "multistep", "query": "Search Jira for the outage ticket and log 1 hour on it", "expected_tools": ["jira/search_issues", "jira/add_worklog"]}
+{"id": "m06", "category": "multistep", "query": "List objects in the S3 bucket and save the listing to a local file", "expected_tools": ["s3/list_objects", "filesystem/write_file"]}
+{"id": "m07", "category": "multistep", "query": "Get the latest pipeline status from GitLab and notify the team on Slack", "expected_tools": ["gitlab/get_pipeline_status", "slack/send_message"]}
+{"id": "m08", "category": "multistep", "query": "Read the email from Acme and create a Notion page with its contents", "expected_tools": ["email/read_email", "notion/create_page"]}
+{"id": "n01", "category": "no_match", "query": "What's the weather in Paris tomorrow?", "expect_no_match": true}
+{"id": "n02", "category": "no_match", "query": "Order a large pepperoni pizza", "expect_no_match": true}
+{"id": "n03", "category": "no_match", "query": "Translate good morning into Japanese", "expect_no_match": true}
+{"id": "n04", "category": "no_match", "query": "Book a flight to Lisbon", "expect_no_match": true}
+{"id": "n05", "category": "no_match", "query": "Play some jazz music", "expect_no_match": true}
+{"id": "n06", "category": "no_match", "query": "What is 17 times 23?", "expect_no_match": true}
+{"id": "n07", "category": "no_match", "query": "Turn off the living room lights", "expect_no_match": true}
+{"id": "n08", "category": "no_match", "query": "Tell me a joke about cats", "expect_no_match": true}
