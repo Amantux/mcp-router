@@ -15,6 +15,7 @@ retriever), plus the per-call decision deadline.
 
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 from collections.abc import Callable
@@ -115,7 +116,9 @@ class DeadlineDecisionModel:
                     self._in_flight -= 1
                 done.set()
 
-        threading.Thread(target=run, name="decision-call", daemon=True).start()
+        # Carry the caller's context (request deadline, decision hop) into the worker.
+        ctx = contextvars.copy_context()
+        threading.Thread(target=ctx.run, args=(run,), name="decision-call", daemon=True).start()
         if not done.wait(wait_s):
             raise DecisionRuntimeError(f"decision model timed out after {wait_s:g}s")
         if "error" in box:

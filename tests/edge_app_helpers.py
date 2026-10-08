@@ -17,7 +17,7 @@ PATH = "/api/v1/decision/systemone"
 
 @contextmanager
 def edge_client(**kw: object) -> Iterator[tuple[FastAPI, TestClient]]:
-    s = _settings(decision_backend="deterministic", embedding_backend="hash", **kw)
+    s = _settings(**{"decision_backend": "deterministic", "embedding_backend": "hash", **kw})
     app = create_app(s, env={"MCPR_AGENT_KEYS": f"edgebot:{KEY}"})
     try:
         with TestClient(app) as client:

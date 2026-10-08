@@ -28,6 +28,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -58,6 +59,13 @@ _ANY_DIGITS_RE = re.compile(r"[0-9]+")
 class RemoteKeyFormatError(InferenceError):
     """The configured API key is not printable ASCII. Curated message: it
     never contains the key (a UnicodeEncodeError's ``.object`` would)."""
+
+
+# Hops this request has already travelled between routers (0 = it started here).
+# The decision edge sets it from the incoming X-MCPR-Decision-Hop header; every
+# outbound call sends n+1, and the edge refuses anything already forwarded.
+DECISION_HOP: ContextVar[int] = ContextVar("mcpr_decision_hop", default=0)
+HOP_HEADER = "X-MCPR-Decision-Hop"
 
 
 class RemoteDecisionError(DecisionRuntimeError):
@@ -321,6 +329,7 @@ class RemoteSystemOneModel:
                         "Authorization": "Bearer " + self.__api_key,
                         "Accept": "application/json",
                         "Content-Type": "application/json",
+                        HOP_HEADER: str(DECISION_HOP.get() + 1),
                     },
                     timeout=remaining,
                 ),

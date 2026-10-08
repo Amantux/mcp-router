@@ -106,7 +106,12 @@ flowchart LR
   B -. "any error / deadline" .-> D[deterministic fallback]
 ```
 
-**Loop guard**: a router configured as `remote` refuses to serve its own edge endpoint
-when the configured endpoint points back at itself (prevents A→A recursion). Residual:
-detection compares the endpoint against the request's host, so a **DNS alias** for the
-same machine is not caught — don't point a router at itself under another name.
+**Loop guard**: every outbound `remote` decision call carries
+`X-MCPR-Decision-Hop: n+1` (n = hops the current request has already travelled, 0 when
+it started here). An edge refuses (503) a request that arrives with hop >= 1 when serving
+it would forward again (its own backend is `remote`); a malformed hop header counts as
+forwarded. MCPR→MCPR chains are therefore at most one hop, so A→A and A→B→A loops are
+refused whatever hostnames or ports are involved. Belt-and-braces: a `remote` router also
+refuses when its configured endpoint is its own listener (host:port or a localhost alias).
+Residual: only a non-MCPR intermediary that **strips the header** can hide a loop; the
+per-request deadline still bounds it.
