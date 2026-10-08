@@ -101,3 +101,24 @@ def test_remote_decision_negative_retries_fails(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("MCPR_DECISION_MAX_RETRIES", "-1")
     with pytest.raises(ValueError, match="MCPR_DECISION_MAX_RETRIES"):
         Settings.from_env()
+
+
+def test_decision_key_file_stripped_and_capped(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from mcprouter.settings import Settings
+
+    f = tmp_path / "key"
+    f.write_text("  sk-abc \n")
+    monkeypatch.setenv("MCPR_DECISION_API_KEY_FILE", str(f))
+    assert Settings.from_env().decision_api_key == "sk-abc"
+    f.write_text("x" * (64 * 1024 + 1))
+    with pytest.raises(ValueError, match="MCPR_DECISION_API_KEY_FILE"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize("raw", ["-1", "11", "1000"])
+def test_decision_max_retries_bounded(raw, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from mcprouter.settings import Settings
+
+    monkeypatch.setenv("MCPR_DECISION_MAX_RETRIES", raw)
+    with pytest.raises(ValueError, match="MCPR_DECISION_MAX_RETRIES"):
+        Settings.from_env()

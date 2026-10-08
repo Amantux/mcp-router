@@ -105,7 +105,7 @@ class Settings:
             decision_endpoint=get("MCPR_DECISION_ENDPOINT", d.decision_endpoint),
             decision_model=get("MCPR_DECISION_MODEL", d.decision_model),
             decision_api_key=_secret("MCPR_DECISION_API_KEY", get),
-            decision_max_retries=_non_negative_int(
+            decision_max_retries=_bounded_retries(
                 get("MCPR_DECISION_MAX_RETRIES", str(d.decision_max_retries)),
                 "MCPR_DECISION_MAX_RETRIES",
             ),
@@ -139,20 +139,38 @@ def _opt_int(raw: str) -> int | None:
 
 # wave-3 remote decision backend
 def _secret(name: str, get: Callable[[str, str], str]) -> str:
-    """<NAME>_FILE wins over <NAME>; trailing newlines are stripped. A set but
-    unreadable file fails loudly (message names the variable, not the content)."""
+    """<NAME>_FILE wins over <NAME>; surrounding whitespace is stripped. A set
+    but unreadable, non-UTF-8 or oversized (> 64 KiB) file fails loudly; the
+    message names the variable, never the content."""
     path = get(f"{name}_FILE", "")
-    if path:
-        try:
-            with open(path, encoding="utf-8") as fh:
-                return fh.read().rstrip("\r\n")
-        except OSError:
-            raise ValueError(f"{name}_FILE: cannot read the key file") from None
-    return get(name, "")
+    if not path:
+        return get(name, "").strip()
+    failed = False
+    data = b""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(_MAX_KEY_FILE_BYTES + 1)
+    except OSError:
+        failed = True
+    if failed:
+        raise ValueError(f"{name}_FILE: cannot read the key file")
+    if len(data) > _MAX_KEY_FILE_BYTES:
+        raise ValueError(f"{name}_FILE: key file is larger than 64 KiB")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        failed = True
+    if failed:
+        raise ValueError(f"{name}_FILE: key file is not UTF-8 text")
+    return text.strip()
 
 
-def _non_negative_int(raw: str, name: str) -> int:
+_MAX_KEY_FILE_BYTES = 64 * 1024
+_MAX_DECISION_RETRIES = 10
+
+
+def _bounded_retries(raw: str, name: str) -> int:
     value = int(raw)
-    if value < 0:
-        raise ValueError(f"{name}: must be >= 0")
+    if not 0 <= value <= _MAX_DECISION_RETRIES:
+        raise ValueError(f"{name}: must be between 0 and {_MAX_DECISION_RETRIES}")
     return value
