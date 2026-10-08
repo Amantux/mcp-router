@@ -10,7 +10,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
-import { describeError } from "../api/client";
+import { describeError, isAdminAuthError } from "../api/client";
 
 interface Note {
   id: number;
@@ -41,6 +41,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const api = useMemo<NotifyApi>(
     () => ({
       error: (what, err) => {
+        // Credential refusals are explained once by the global "not connected" bar (AuthBanner).
+        if (isAdminAuthError(err)) return;
         const { status, advice } = describeError(err);
         const title = `${what} failed${status ? ` (${status})` : ""}`;
         const id = nextId.current++;

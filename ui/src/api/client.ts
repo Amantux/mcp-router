@@ -34,6 +34,7 @@ import type {
   ToolDetail,
   ToolQuery,
 } from "./types";
+import { bearerFor, effectiveIdentity, noteResponse, setAgentId, type Identity } from "./auth";
 
 export const API_BASE = "/api/v1";
 /** Raw Prometheus text; the app mounts it at /metrics (SPEC §9 says /api/v1/metrics). */
@@ -65,12 +66,23 @@ export class ApiError extends Error {
   /** HTTP status, or 0 for a network failure / unreachable backend. */
   readonly status: number;
   readonly path: string;
-  constructor(status: number, path: string) {
+  /** The credential the failed request was made as. */
+  readonly identity: Identity;
+  constructor(status: number, path: string, identity: Identity = "admin") {
     super(status === 0 ? `Network error calling ${path}` : `HTTP ${status} from ${path}`);
     this.name = "ApiError";
     this.status = status;
     this.path = path;
+    this.identity = identity;
   }
+}
+
+/**
+ * True for an admin-credential refusal (401/403). The global "not connected"
+ * bar explains these, so per-action error toasts are suppressed for them.
+ */
+export function isAdminAuthError(err: unknown): boolean {
+  return err instanceof ApiError && err.identity === "admin" && (err.status === 401 || err.status === 403);
 }
 
 /** Curated, user-facing explanation of a failure. Never includes a response body. */
@@ -83,7 +95,7 @@ export function describeError(err: unknown): { status: string; advice: string } 
     return { status: "network error", advice: "Couldn't reach the MCP Router backend. Check it is running on port 8400, then retry." };
   const status = `HTTP ${s}`;
   if (s === 401 || s === 403)
-    return { status, advice: "The backend refused this request. Check the gateway auth configuration, then retry." };
+    return { status, advice: "The backend refused these credentials. Open Connect (gear icon) and paste the admin token, then retry." };
   if (s === 404)
     return { status, advice: "The item no longer exists, or this backend doesn't provide the endpoint yet. Refresh and retry." };
   if (s === 409) return { status, advice: "It conflicts with existing data (for example a duplicate name). Change the input and retry." };
@@ -100,6 +112,19 @@ interface RequestOptions {
   query?: Record<string, QueryValue>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Which credential to present. Default admin; "agent" uses the agent key when set. */
+  as?: Identity;
+  /** Unauthenticated endpoint (e.g. /healthz): no bearer, and its 2xx proves nothing about credentials. */
+  public?: boolean;
+}
+
+/** Every request's headers. The bearer comes from the session credential store. */
+function buildHeaders(hasBody: boolean, identity: Identity, withAuth = true): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (hasBody) headers["Content-Type"] = "application/json";
+  const bearer = withAuth ? bearerFor(identity) : null;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  return headers;
 }
 
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -115,19 +140,24 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
 
 async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
   const url = buildUrl(path, opts.query);
+  const identity = opts.as ?? "admin";
+  // The credential actually presented: an agent request without an agent key goes as admin.
+  const presented: Identity = effectiveIdentity(identity) === "agent" ? "agent" : "admin";
   let res: Response;
   try {
     res = await fetch(url, {
       method,
-      headers: opts.body !== undefined ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
+      headers: opts.public ? buildHeaders(opts.body !== undefined, "admin", false) : buildHeaders(opts.body !== undefined, identity),
+      credentials: "omit", // bearer only; never send or accept cookies
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ApiError(0, path);
+    throw new ApiError(0, path, presented);
   }
-  if (!res.ok) throw new ApiError(res.status, path);
+  if (!opts.public) noteResponse(identity, res.status);
+  if (!res.ok) throw new ApiError(res.status, path, presented);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   if (!text) return undefined as T;
@@ -135,7 +165,7 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new ApiError(res.status, path);
+    throw new ApiError(res.status, path, presented);
   }
   return camelizeKeys(parsed) as T;
 }
@@ -337,7 +367,7 @@ export async function getModelsHealth(signal?: AbortSignal): Promise<ModelsHealt
 }
 
 export function getHealthz(signal?: AbortSignal): Promise<Healthz> {
-  return request("GET", "/healthz", { signal });
+  return request("GET", "/healthz", { signal, public: true });
 }
 
 // -------------------------------------------------------------- executions
@@ -365,4 +395,17 @@ export async function listRules(signal?: AbortSignal): Promise<PolicyRule[]> {
 
 export function createRule(body: CreateRuleRequest): Promise<PolicyRule> {
   return request("POST", `${API_BASE}/policy-rules`, { body });
+}
+
+// -------------------------------------------------------------- identity
+/** Cheap admin-only call used by the Connect panel to verify the admin token. */
+export async function probeAdmin(signal?: AbortSignal): Promise<void> {
+  await request("GET", `${API_BASE}/principals`, { signal });
+}
+
+/** GET /me as the agent key: which agent the key authenticates. Records the (non-secret) id. */
+export async function getMe(signal?: AbortSignal): Promise<Principal> {
+  const me = await request<Principal>("GET", `${API_BASE}/me`, { signal, as: "agent" });
+  setAgentId(me.agentId);
+  return me;
 }

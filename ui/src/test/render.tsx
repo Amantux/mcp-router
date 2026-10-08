@@ -19,6 +19,7 @@ export interface FetchCall {
   url: string;
   method: string;
   body: unknown;
+  headers: Record<string, string>;
 }
 
 /** Installs a fetch mock answering by "METHOD path" (query string ignored); records calls. */
@@ -28,7 +29,9 @@ export function mockFetch(routes: Record<string, (body: unknown) => { status?: n
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ url, method, body });
+    const headers: Record<string, string> = {};
+    new Headers(init?.headers).forEach((v, k) => (headers[k] = v));
+    calls.push({ url, method, body, headers });
     const key = `${method} ${url.split("?")[0]}`;
     const handler = routes[key];
     if (!handler) return new Response("not mocked", { status: 404 });
