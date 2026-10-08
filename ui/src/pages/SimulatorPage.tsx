@@ -159,6 +159,7 @@ export function SimulatorPage() {
       <PageHeader title="Routing simulator" />
       <div className={s.layout}>
         <form
+          noValidate
           className={s.form}
           onSubmit={(e) => {
             e.preventDefault();

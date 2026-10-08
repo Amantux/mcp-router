@@ -55,6 +55,7 @@ export function ClassificationEditor({ tool, onSaved }: { tool: MCPTool; onSaved
 
   return (
     <form
+      noValidate
       aria-label="Classification"
       onSubmit={(e) => {
         e.preventDefault();

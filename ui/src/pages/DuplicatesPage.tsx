@@ -109,6 +109,7 @@ export function DismissDialog({
     <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && onCancel()}>
       <DialogSurface>
         <form
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
             void submit();

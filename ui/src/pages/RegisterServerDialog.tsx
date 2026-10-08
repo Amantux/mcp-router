@@ -100,6 +100,7 @@ export function RegisterServerDialog({ open, onClose, onRegistered }: { open: bo
     <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && onClose()}>
       <DialogSurface>
         <form
+          noValidate
           onSubmit={(ev) => {
             ev.preventDefault();
             void submit();

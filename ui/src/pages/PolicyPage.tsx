@@ -69,6 +69,7 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
     <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && onClose()}>
       <DialogSurface>
         <form
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
@@ -256,6 +257,7 @@ export function PolicyPage() {
         {rules.data && <Caption1 className={c.muted}>{fmtInt(rlist.length)}</Caption1>}
       </div>
       <form
+        noValidate
         className={s.ruleForm}
         aria-label="Add rule"
         onSubmit={(e) => {
