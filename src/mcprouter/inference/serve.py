@@ -8,6 +8,7 @@ questions sharing a scale go through one ``score_batch`` call.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -17,25 +18,26 @@ MAX_STATE_CHARS = 32_768
 MAX_QUESTIONS = 32
 MAX_OPTIONS = 255
 MAX_INSTRUCTION_CHARS = 4_096
+_KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 class SystemOneRequestError(ValueError):
-    """Curated 422 message; never echoes request content."""
+    """Curated 422 message; names questions by INDEX, never echoes request content."""
 
 
-def _options(key: str, qtype: str, criteria: Any) -> list[str]:
+def _options(idx: int, qtype: str, criteria: Any) -> list[str]:
     if isinstance(criteria, dict):
         opts = list(criteria.keys())
     elif isinstance(criteria, list):
         opts = criteria
     else:
-        raise SystemOneRequestError(f"question {key!r}: {qtype} criteria must be a list or object")
+        raise SystemOneRequestError(f"question {idx}: {qtype} criteria must be a list or object")
     if not 2 <= len(opts) <= MAX_OPTIONS:
-        raise SystemOneRequestError(f"question {key!r}: needs 2..{MAX_OPTIONS} criteria")
+        raise SystemOneRequestError(f"question {idx}: needs 2..{MAX_OPTIONS} criteria")
     if not all(isinstance(o, str) and 0 < len(o) <= MAX_INSTRUCTION_CHARS for o in opts):
-        raise SystemOneRequestError(f"question {key!r}: criteria must be non-empty strings")
+        raise SystemOneRequestError(f"question {idx}: criteria must be non-empty strings")
     if len(set(opts)) != len(opts):
-        raise SystemOneRequestError(f"question {key!r}: criteria must be unique")
+        raise SystemOneRequestError(f"question {idx}: criteria must be unique")
     return [str(o) for o in opts]
 
 
@@ -43,18 +45,20 @@ def parse_questions(questions: dict[str, Any]) -> dict[str, tuple[str, str, list
     if not 1 <= len(questions) <= MAX_QUESTIONS:
         raise SystemOneRequestError(f"questions: send 1..{MAX_QUESTIONS} questions")
     out: dict[str, tuple[str, str, list[str]]] = {}
-    for key, q in questions.items():
+    for idx, (key, q) in enumerate(questions.items()):
+        if not isinstance(key, str) or not _KEY_RE.fullmatch(key):
+            raise SystemOneRequestError(f"question {idx}: key must match {_KEY_RE.pattern}")
         if not isinstance(q, dict):
-            raise SystemOneRequestError(f"question {key!r}: must be an object")
+            raise SystemOneRequestError(f"question {idx}: must be an object")
         qtype, text = q.get("type"), q.get("instructions")
         if not isinstance(text, str) or not 0 < len(text) <= MAX_INSTRUCTION_CHARS:
-            raise SystemOneRequestError(f"question {key!r}: instructions must be 1..4096 chars")
+            raise SystemOneRequestError(f"question {idx}: instructions must be 1..4096 chars")
         if qtype == "noul":
             out[key] = ("noul", text, [])
         elif qtype in ("choice", "score"):
-            out[key] = (qtype, text, _options(key, qtype, q.get("criteria")))
+            out[key] = (qtype, text, _options(idx, qtype, q.get("criteria")))
         else:
-            raise SystemOneRequestError(f"question {key!r}: type must be choice, score or noul")
+            raise SystemOneRequestError(f"question {idx}: type must be choice, score or noul")
     return out
 
 
