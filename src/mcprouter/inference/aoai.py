@@ -32,6 +32,7 @@ import logging
 import math
 import random
 import re
+import threading
 import time
 from collections.abc import Callable
 from typing import Any
@@ -165,6 +166,7 @@ class _AoaiHttp:
         self._sleep = sleep
         self._clock = clock
         self._timeout_s = timeout_s
+        self._injected = transport is not None
         self._client = httpx.Client(
             timeout=timeout_s,
             transport=transport,
@@ -193,8 +195,23 @@ class _AoaiHttp:
             remaining = deadline - self._clock()
             if remaining <= 0:
                 raise _HttpError("Azure OpenAI request timed out")
+            # Hard stop (as remote_systemone._attempt): httpx's timeout is per
+            # read, so a server trickling HEADERS defeats it. A Timer closes this
+            # attempt's own client at the deadline. Injected transports (tests)
+            # share the main client and rely on the httpx timeout.
+            fired = threading.Event()
+            client = self._client if self._injected else self._attempt_client()
+
+            def hard_stop(c: httpx.Client = client, ev: threading.Event = fired) -> None:
+                ev.set()
+                if not self._injected:
+                    c.close()
+
+            timer = threading.Timer(remaining, hard_stop)
+            timer.daemon = True
+            timer.start()
             try:
-                with self._client.stream("POST", url, json=payload, timeout=remaining) as resp:
+                with client.stream("POST", url, json=payload, timeout=remaining) as resp:
                     status = resp.status_code
                     if status in _RETRY_STATUSES and attempt < self._retries:
                         delay = self._backoff(attempt, resp.headers.get("retry-after"))
@@ -216,9 +233,28 @@ class _AoaiHttp:
                     return _parse_capped(bytes(buf))
             except httpx.TimeoutException:
                 raise _HttpError("Azure OpenAI request timed out") from None
-            except (httpx.HTTPError, httpx.InvalidURL):
+            except (httpx.HTTPError, httpx.InvalidURL, OSError):
+                if fired.is_set():
+                    raise _HttpError("Azure OpenAI request timed out") from None
                 raise _HttpError("Azure OpenAI request failed (transport error)") from None
+            except RuntimeError:
+                if not fired.is_set():
+                    raise
+                # the hard stop closed the client before send()
+                raise _HttpError("Azure OpenAI request timed out") from None
+            finally:
+                timer.cancel()
+                if not self._injected:
+                    client.close()
         raise _HttpError("Azure OpenAI request failed (retries exhausted)")  # pragma: no cover
+
+    def _attempt_client(self) -> httpx.Client:
+        return httpx.Client(
+            timeout=self._timeout_s,
+            follow_redirects=False,
+            trust_env=False,
+            headers=self._client.headers,
+        )
 
     def close(self) -> None:
         self._client.close()

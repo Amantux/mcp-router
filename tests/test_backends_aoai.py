@@ -369,3 +369,23 @@ def test_slow_attempt_consumes_budget_and_remaining_is_the_timeout() -> None:
     # attempt 1 got the full 2.0s; the retry gets only what is left (0.5s);
     # after it the budget is spent and no third attempt is made.
     assert seen == [pytest.approx(2.0), pytest.approx(0.5)]
+
+
+@pytest.mark.parametrize("path", ["decision", "embedding"])
+def test_trickled_headers_hit_the_hard_stop(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time as _time
+
+    from mcprouter.inference import aoai
+    from tests.test_backends_remote import _trickle_server
+
+    url, shutdown = _trickle_server(0.3)
+    monkeypatch.setattr(aoai, "_validate_aoai_endpoint", lambda _e: url.rstrip("/"))
+    http = aoai._AoaiHttp(CFG, 0.5)
+    t0 = _time.monotonic()
+    try:
+        with pytest.raises(aoai._HttpError, match="timed out"):
+            http.post("/openai/deployments/x/" + path, {"input": "q"})
+    finally:
+        shutdown()
+        http.close()
+    assert _time.monotonic() - t0 < 0.8
