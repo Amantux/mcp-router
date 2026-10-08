@@ -9,6 +9,7 @@ import {
   listRules,
   listServers,
   listTools,
+  refreshServer,
   simulateRoute,
   snakeToCamel,
 } from "./client";
@@ -179,5 +180,15 @@ describe("integration reconciliation (backend shapes)", () => {
     });
     const [s] = await listDedupSuggestions();
     expect([s.toolAId, s.toolBId, s.toolA, s.toolB]).toEqual(["a", "b", undefined, undefined]);
+  });
+});
+
+describe("refreshServer", () => {
+  it("unwraps the backend's {server, added, ...} refresh report", async () => {
+    mockFetch({
+      "POST /api/v1/servers/s1/refresh": () => ({ json: { server: { id: "s1", name: "gh", tool_count: 12 }, added: ["x"] } }),
+    });
+    const s = await refreshServer("s1");
+    expect([s.id, s.toolCount]).toEqual(["s1", 12]);
   });
 });

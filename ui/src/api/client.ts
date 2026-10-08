@@ -165,8 +165,10 @@ export function registerServer(body: RegisterServerRequest): Promise<MCPServer> 
   return request("POST", `${API_BASE}/servers`, { body });
 }
 
-export function refreshServer(id: string): Promise<MCPServer> {
-  return request("POST", `${API_BASE}/servers/${encodeURIComponent(id)}/refresh`);
+// Reconciled at integration: the backend returns {server, added[], ...}; the page wants the server.
+export async function refreshServer(id: string): Promise<MCPServer> {
+  const raw = await request<MCPServer | { server: MCPServer }>("POST", `${API_BASE}/servers/${encodeURIComponent(id)}/refresh`);
+  return "server" in raw ? raw.server : raw;
 }
 
 // CONTRACT: enable/disable via PATCH /api/v1/servers/{id} {enabled}.
