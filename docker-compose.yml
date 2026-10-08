@@ -20,6 +20,9 @@ services:
     environment:
       MCPR_DATABASE_URL: postgresql+psycopg://mcprouter:mcprouter@db:5432/mcprouter
       MCPR_AGENT_KEYS: ${MCPR_AGENT_KEYS:-}
+      # Admin API credential. Unset + agent keys set => management API is
+      # locked (403, fail closed); unset + no keys => dev mode (open).
+      MCPR_ADMIN_TOKEN: ${MCPR_ADMIN_TOKEN:-}
       MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-hash}
       MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-deterministic}
       MCPR_DEVICE: ${MCPR_DEVICE:-auto}
