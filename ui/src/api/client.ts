@@ -358,6 +358,27 @@ interface BackendModelsHealth {
   embedding: BackendHealth;
   decision: BackendHealth;
   memory?: Record<string, number | null>;
+  decisionBackend?: Record<string, unknown> | null;
+  embeddingBackend?: Record<string, unknown> | null;
+}
+
+// Copy only the named descriptor fields: anything else the server adds
+// (never expected, but e.g. a key) is dropped before it can reach the UI.
+function str(v: unknown): string | null {
+  return typeof v === "string" && v !== "" ? v : null;
+}
+
+function pickBackend<K extends string>(
+  raw: Record<string, unknown> | null | undefined,
+  nameKey: K,
+): ({ kind: string | null; endpointHost: string | null; deployment: string | null } & Record<K, string | null>) | null {
+  if (!raw) return null;
+  return {
+    kind: str(raw.kind),
+    endpointHost: str(raw.endpointHost),
+    deployment: str(raw.deployment),
+    [nameKey]: str(raw[nameKey]),
+  } as { kind: string | null; endpointHost: string | null; deployment: string | null } & Record<K, string | null>;
 }
 
 const MB = 1024 * 1024;
@@ -386,6 +407,8 @@ export function mapModelsHealth(raw: BackendModelsHealth): ModelsHealth {
         : null,
     memory: { rssMb: toMb(mem.rssBytes) },
     models: [model("embedding", raw.embedding), model("decision", raw.decision)],
+    decisionBackend: pickBackend(raw.decisionBackend, "model"),
+    embeddingBackend: pickBackend(raw.embeddingBackend, "name"),
   };
 }
 
