@@ -118,3 +118,53 @@ def _opt_int(raw: str) -> int | None:
     if value < 1:
         raise ValueError("must be a positive integer when set")
     return value
+
+
+# wave-3 Azure OpenAI backends
+# Self-contained so it never conflicts with other appended blocks. Selected by
+# MCPR_DECISION_BACKEND=aoai and/or MCPR_EMBEDDING_BACKEND=aoai (Settings above
+# carries those strings unchanged; the wiring run maps "aoai" to
+# mcprouter.inference.aoai). The endpoint is NOT validated here: it is
+# validated at point of use (inference/aoai.py) because env is not the only
+# way config arrives.
+@dataclass(frozen=True)
+class AoaiSettings:
+    endpoint: str = ""  # https://<resource>.openai.azure.com | *.services.ai.azure.com
+    api_key: str = ""
+    chat_deployment: str = ""
+    embedding_deployment: str = ""
+    max_retries: int = 2
+
+    def __repr__(self) -> str:  # never print the key
+        return (
+            f"AoaiSettings(endpoint={self.endpoint!r}, api_key_set={bool(self.api_key)}, "
+            f"chat_deployment={self.chat_deployment!r}, "
+            f"embedding_deployment={self.embedding_deployment!r}, max_retries={self.max_retries})"
+        )
+
+    @classmethod
+    def from_env(cls) -> AoaiSettings:
+        def get(name: str) -> str:
+            v = os.environ.get(name, "")
+            return v.strip() if v.strip() else ""  # empty string means unset
+
+        key = ""
+        key_file = get("MCPR_AOAI_API_KEY_FILE")
+        if key_file:  # _FILE wins over the plain variable
+            with open(key_file, encoding="utf-8") as fh:
+                key = fh.read().strip()
+            if not key:
+                raise ValueError("MCPR_AOAI_API_KEY_FILE: file is empty")
+        else:
+            key = get("MCPR_AOAI_API_KEY")
+        retries_raw = get("MCPR_AOAI_MAX_RETRIES") or "2"
+        retries = int(retries_raw)
+        if not 0 <= retries <= 10:
+            raise ValueError("MCPR_AOAI_MAX_RETRIES: expected an integer in 0..10")
+        return cls(
+            endpoint=get("MCPR_AOAI_ENDPOINT"),
+            api_key=key,
+            chat_deployment=get("MCPR_AOAI_CHAT_DEPLOYMENT"),
+            embedding_deployment=get("MCPR_AOAI_EMBEDDING_DEPLOYMENT"),
+            max_retries=retries,
+        )
