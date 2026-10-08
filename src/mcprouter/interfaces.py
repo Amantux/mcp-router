@@ -113,3 +113,48 @@ class RouteResult:
     latency_ms: float
     model_version: str
     no_match: bool = False
+
+
+# ------------------------------------------------- execution (gateway seams)
+# Appended by the gateway/security workstream. The execution manager is the
+# ONLY caller of a ToolInvoker; nothing else may invoke an upstream tool.
+@dataclass(frozen=True)
+class ToolCallResult:
+    """SDK-agnostic tool result. `content` holds MCP content blocks in wire
+    form (e.g. {"type": "text", "text": "..."})."""
+
+    content: list[dict[str, object]]
+    is_error: bool = False
+    structured_content: dict[str, object] | None = None
+
+
+class ToolInvocationError(Exception):
+    """Raised by a ToolInvoker for an upstream failure. `curated` is the only
+    text that leaves the process — never the upstream body or str(exc)."""
+
+    def __init__(self, curated: str) -> None:
+        super().__init__(curated)
+        self.curated = curated
+
+
+@runtime_checkable
+class ToolInvoker(Protocol):
+    """Calls one tool on one upstream MCP server. Implementations must honour
+    `timeout_s` themselves; the execution manager also enforces it."""
+
+    async def call_tool(
+        self,
+        server: object,  # mcprouter.models.MCPServerRecord (kept loose: no ORM import here)
+        tool_name: str,
+        arguments: dict[str, object],
+        timeout_s: float,
+    ) -> ToolCallResult: ...
+
+
+@runtime_checkable
+class RouteFn(Protocol):
+    """The routing pipeline as the gateway sees it (sync; called in a worker
+    thread). Must already scope results to `request.agent_id`; the gateway
+    re-applies policy regardless (defense in depth)."""
+
+    def __call__(self, request: RouteRequest) -> RouteResult: ...
