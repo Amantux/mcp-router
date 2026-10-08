@@ -5,7 +5,8 @@ pure function so tests can build differently-configured apps in one process)."""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -17,7 +18,7 @@ class Settings:
     # Inference
     embedding_backend: str = "hash"  # hash | bge  (bge needs the [inference] extra)
     embedding_model_id: str = "BAAI/bge-small-en-v1.5"
-    decision_backend: str = "deterministic"  # deterministic | laya
+    decision_backend: str = "deterministic"  # deterministic | laya | remote
     laya_model_id: str = "convaiinnovations/laya"
     device: str = "auto"  # auto | cuda | cpu
     operating_mode: str = "balanced"  # performance | balanced | battery
@@ -49,6 +50,14 @@ class Settings:
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
+    # wave-3 remote decision backend (MCPR_DECISION_BACKEND=remote).
+    # Endpoint is a full URL; with no path, /v1/decisions is appended. The key
+    # comes from MCPR_DECISION_API_KEY_FILE (wins when both are set) or
+    # MCPR_DECISION_API_KEY; excluded from repr so it never reaches a log.
+    decision_endpoint: str = "https://api.aimlapi.com/v1/decisions"
+    decision_model: str = "typesafe/jev"
+    decision_api_key: str = field(default="", repr=False)
+    decision_max_retries: int = 2
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -92,6 +101,14 @@ class Settings:
             rate_limit_per_agent_per_min=int(
                 get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
             ),
+            # wave-3 remote decision backend
+            decision_endpoint=get("MCPR_DECISION_ENDPOINT", d.decision_endpoint),
+            decision_model=get("MCPR_DECISION_MODEL", d.decision_model),
+            decision_api_key=_secret("MCPR_DECISION_API_KEY", get),
+            decision_max_retries=_non_negative_int(
+                get("MCPR_DECISION_MAX_RETRIES", str(d.decision_max_retries)),
+                "MCPR_DECISION_MAX_RETRIES",
+            ),
         )
 
 
@@ -117,4 +134,25 @@ def _opt_int(raw: str) -> int | None:
     value = int(raw)
     if value < 1:
         raise ValueError("must be a positive integer when set")
+    return value
+
+
+# wave-3 remote decision backend
+def _secret(name: str, get: Callable[[str, str], str]) -> str:
+    """<NAME>_FILE wins over <NAME>; trailing newlines are stripped. A set but
+    unreadable file fails loudly (message names the variable, not the content)."""
+    path = get(f"{name}_FILE", "")
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return fh.read().rstrip("\r\n")
+        except OSError:
+            raise ValueError(f"{name}_FILE: cannot read the key file") from None
+    return get(name, "")
+
+
+def _non_negative_int(raw: str, name: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{name}: must be >= 0")
     return value
