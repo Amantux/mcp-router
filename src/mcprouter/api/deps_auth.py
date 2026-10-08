@@ -32,6 +32,7 @@ import secrets
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select
@@ -227,6 +228,23 @@ def check_admin(session: Session, config: SecurityConfig, authorization: str | N
     token = parse_bearer(authorization)
     if token is None or not hmac.compare_digest(hash_key(token), config.admin_token_hash):
         raise AuthenticationError("invalid or missing admin token")
+
+
+def configure_security(app: Any, env: Mapping[str, str]) -> SecurityConfig:
+    """Integrator entrypoint, called once in create_app AFTER app.state.settings,
+    .engine and .session_factory exist: creates the gateway-owned tables,
+    bootstraps env principals (hash only) and installs app.state.security.
+    Raises AgentKeysConfigError on bad config (fail loudly at startup)."""
+    from mcprouter.execution.models import init_security_db  # local: keep api->execution lazy
+
+    settings: Settings = app.state.settings
+    config = SecurityConfig.build(settings, env)
+    init_security_db(app.state.engine)
+    with app.state.session_factory() as session:
+        bootstrap_principals(session, settings, config)
+        session.commit()
+    app.state.security = config
+    return config
 
 
 # ------------------------------------------------------------ FastAPI deps
