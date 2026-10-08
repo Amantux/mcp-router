@@ -41,7 +41,7 @@ pytestmark = requires_db
 ADMIN = "admin_" + "e" * 40
 H_ADMIN = {"Authorization": f"Bearer {ADMIN}"}
 OK_ARGS: dict[str, Any] = {"repo": "acme/widgets", "limit": 5}
-IMPERSONATION = "[admin-initiated via REST, impersonating '{}'] "
+IMPERSONATION = "[admin-initiated, impersonating '{}'] "
 
 Env = tuple[TestClient, FakeInvoker, Catalog, ExecutionManager]
 
@@ -310,3 +310,129 @@ def test_executions_listing_exposes_route_request_id(sec_db: sessionmaker[Sessio
     c.post(_url(cat, "github.list_issues"), json={"arguments": OK_ARGS}, headers=_agent("alice"))
     items = c.get("/api/v1/executions", headers=H_ADMIN).json()["items"]
     assert sorted(i["routeRequestId"] or "" for i in items) == sorted([rrid, ""])
+
+
+# ------------------------------------------- review fixes (wave-2 integration)
+def _build_limited(factory: sessionmaker[Session], limit: int) -> tuple[TestClient, FakeInvoker]:
+    app, inv = _build(factory, {"MCPR_ADMIN_TOKEN": ADMIN})
+    app.state.execution_manager = ExecutionManager(
+        factory, inv, timeout_s=2.0, limiter=SlidingWindowLimiter(limit)
+    )
+    return TestClient(app), inv
+
+
+def test_impersonation_is_a_structured_column_on_every_row(
+    env: Env, sec_db: sessionmaker[Session]
+) -> None:
+    c, _, cat, _ = env
+    add_rule(sec_db, "alice")
+    c.post(_url(cat, "github.list_issues"), json={"arguments": OK_ARGS}, headers=_agent("alice"))
+    c.post(
+        _url(cat, "github.list_issues") + "?agentId=alice",
+        json={"arguments": OK_ARGS},
+        headers=H_ADMIN,
+    )
+    assert [x.initiated_by for x in _records(sec_db)] == [None, "admin"]
+
+
+def test_impersonated_approval_keeps_provenance_through_the_replay(
+    env: Env, sec_db: sessionmaker[Session]
+) -> None:
+    """Mutation target: approve() restoring provenance from the approval."""
+    import anyio
+
+    c, inv, cat, mgr = env
+    add_rule(sec_db, "alice", requires_approval=True)
+    r = c.post(
+        _url(cat, "github.list_issues") + "?agentId=alice",
+        json={"arguments": OK_ARGS},
+        headers=H_ADMIN,
+    )
+    assert r.json()["status"] == "pending_approval"
+    approval_id = r.json()["approvalId"]
+    done = anyio.run(mgr.approve, approval_id)
+    assert done.status == "ok" and len(inv.calls) == 1
+    recs = _records(sec_db)
+    assert [(x.outcome, x.initiated_by) for x in recs] == [
+        ("pending_approval", "admin"),
+        ("ok", "admin"),
+    ]
+    assert all(x.detail.startswith(IMPERSONATION.format("alice")) for x in recs)
+    view = anyio.run(mgr.get_approval, approval_id)
+    assert view is not None and view.summary.get("initiatedBy") == "admin"
+
+
+def test_admin_trials_use_their_own_rate_limit_window(sec_db: sessionmaker[Session]) -> None:
+    cat = seed(sec_db, [("github", "list_issues", "read")])
+    add_rule(sec_db, "alice")
+    c, _ = _build_limited(sec_db, 1)
+    url = _url(cat, "github.list_issues")
+    admin = c.post(url + "?agentId=alice", json={"arguments": OK_ARGS}, headers=H_ADMIN)
+    assert admin.json()["status"] == "ok"
+    # The admin trial did not spend alice's budget ...
+    assert (
+        c.post(url, json={"arguments": OK_ARGS}, headers=_agent("alice")).json()["status"] == "ok"
+    )
+    # ... and each window is still enforced.
+    assert (
+        c.post(url, json={"arguments": OK_ARGS}, headers=_agent("alice")).json()["status"]
+        == "rate_limited"
+    )
+    again = c.post(url + "?agentId=alice", json={"arguments": OK_ARGS}, headers=H_ADMIN)
+    assert again.json()["status"] == "rate_limited"
+
+
+def test_impersonating_a_disabled_principal_is_denied(
+    env: Env, sec_db: sessionmaker[Session]
+) -> None:
+    from sqlalchemy import update
+
+    from mcprouter.models import AgentPrincipal
+
+    c, inv, cat, _ = env
+    add_rule(sec_db, "alice")
+    with sec_db() as s:
+        s.execute(
+            update(AgentPrincipal).where(AgentPrincipal.agent_id == "alice").values(enabled=False)
+        )
+        s.commit()
+    r = c.post(
+        _url(cat, "github.list_issues") + "?agentId=alice",
+        json={"arguments": OK_ARGS},
+        headers=H_ADMIN,
+    )
+    assert r.status_code == 200 and r.json()["status"] == "denied" and inv.calls == []
+
+
+def test_overlong_route_request_id_is_dropped_not_refused(
+    env: Env, sec_db: sessionmaker[Session]
+) -> None:
+    c, _, cat, _ = env
+    add_rule(sec_db, "alice")
+    r = c.post(
+        _url(cat, "github.list_issues"),
+        json={"arguments": OK_ARGS, "routeRequestId": "x" * 37},
+        headers=_agent("alice"),
+    )
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+    assert [x.route_request_id for x in _records(sec_db)] == [None]
+
+
+def test_malformed_upstream_content_is_withheld(env: Env, sec_db: sessionmaker[Session]) -> None:
+    from mcprouter.interfaces import ToolCallResult
+
+    c, _, cat, mgr = env
+    add_rule(sec_db, "alice")
+
+    class Bad(FakeInvoker):
+        async def call_tool(self, *a: Any, **k: Any) -> ToolCallResult:
+            return ToolCallResult(content=[{"type": "nonsense-block"}])
+
+    mgr._invoker = Bad()
+    r = c.post(
+        _url(cat, "github.list_issues"), json={"arguments": OK_ARGS}, headers=_agent("alice")
+    )
+    assert r.status_code == 200
+    assert (
+        r.json()["result"] is None and r.json()["detail"] == "upstream returned malformed content"
+    )

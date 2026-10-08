@@ -291,7 +291,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         assert by_id[rest["recordId"]]["routeRequestId"] == rid  # attributed
         assert by_id[imp["recordId"]]["routeRequestId"] is None  # never attributed
         assert by_id[imp["recordId"]]["detail"].startswith(
-            "[admin-initiated via REST, impersonating 'agent1']"
+            "[admin-initiated, impersonating 'agent1']"
         )
 
         # -- a simulation is recorded but INVISIBLE to analytics ---------------

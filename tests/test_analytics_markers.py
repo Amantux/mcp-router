@@ -170,3 +170,29 @@ def test_cached_decisions_count_as_real_traffic(db: sessionmaker[Session], world
     alice = {a["agentId"]: a for a in after["agents"]["items"]}["alice"]
     alice0 = {a["agentId"]: a for a in before["agents"]["items"]}["alice"]
     assert alice["decisions"] == alice0["decisions"] + 1
+
+
+def test_admin_impersonated_attempts_are_not_agent_behaviour(
+    db: sessionmaker[Session], world: World
+) -> None:
+    """Mutation target: `x.initiated_by IS NULL` in profiles._EXEC_SQL."""
+    from mcprouter.models import ExecutionRecord
+
+    before = _snapshot(db, world)
+    with db() as s:
+        for outcome in ("denied", "denied", "ok"):
+            s.add(
+                ExecutionRecord(
+                    agent_id="alice",
+                    tool_id=world.C,
+                    outcome=outcome,
+                    detail="[admin-initiated, impersonating 'alice'] x",
+                    latency_ms=1.0,
+                    created_at=NOW - 5 * M,
+                    initiated_by="admin",
+                )
+            )
+        s.commit()
+    after = _snapshot(db, world)
+    assert after["overview"]["executions"] == before["overview"]["executions"]
+    assert after["agents"] == before["agents"]

@@ -120,6 +120,38 @@ class ApprovalError(Exception):
         self.message = message
 
 
+# ExecutionRecord.initiated_by values (NULL = the principal itself).
+INITIATED_BY_ADMIN = "admin"
+_INITIATORS = frozenset({INITIATED_BY_ADMIN})
+
+
+@dataclass(frozen=True)
+class _Prov:
+    """Who started an attempt when it was not the principal itself."""
+
+    initiated_by: str | None = None
+    note: str = ""  # audit-detail prefix
+
+    def limiter_key(self, agent_id: str) -> str:
+        # Admin trials get their own window per agent: they neither spend the
+        # agent's budget nor can be starved by it (the limit is a resource
+        # guard, not authorization).
+        return agent_id if self.initiated_by is None else f"{self.initiated_by}:{agent_id}"
+
+
+_NO_PROV = _Prov()
+
+
+def _provenance(initiated_by: str | None, agent_id: str) -> _Prov:
+    if initiated_by is None:
+        return _NO_PROV
+    if initiated_by not in _INITIATORS:
+        raise ValueError("unknown initiator")  # programming error, never user input
+    return _Prov(
+        initiated_by, f"[{initiated_by}-initiated, impersonating '{scrub_log(agent_id)}'] "
+    )
+
+
 @dataclass
 class _Loaded:
     principal: AgentPrincipal
@@ -193,7 +225,7 @@ class ExecutionManager:
         detail: str,
         latency_ms: float | None = None,
         route_request_id: str | None = None,
-        note: str = "",
+        prov: _Prov = _NO_PROV,
     ) -> str:
         with self._factory() as s:
             rec = ExecutionRecord(
@@ -201,10 +233,11 @@ class ExecutionManager:
                 tool_id=tool_id,
                 server_id=server_id,
                 outcome=outcome,
-                detail=_curate(note + detail),
+                detail=_curate(prov.note + detail),
                 latency_ms=latency_ms,
                 created_at=self._clock(),
                 route_request_id=route_request_id,
+                initiated_by=prov.initiated_by,
             )
             s.add(rec)
             s.commit()
@@ -217,13 +250,13 @@ class ExecutionManager:
         outcome: str,
         detail: str,
         latency_ms: float,
-        note: str = "",
+        prov: _Prov = _NO_PROV,
     ) -> None:
         with self._factory() as s:
             s.execute(
                 update(ExecutionRecord)
                 .where(ExecutionRecord.id == record_id)
-                .values(outcome=outcome, detail=_curate(note + detail), latency_ms=latency_ms)
+                .values(outcome=outcome, detail=_curate(prov.note + detail), latency_ms=latency_ms)
             )
             if outcome in (OK, ERROR, TIMEOUT):
                 # The ONE usage-stat writer (atomic UPDATE, EMA latency).
@@ -237,7 +270,7 @@ class ExecutionManager:
         outcome: str,
         detail: str,
         route_request_id: str | None = None,
-        note: str = "",
+        prov: _Prov = _NO_PROV,
     ) -> str:
         return self._audit(
             agent_id,
@@ -247,7 +280,7 @@ class ExecutionManager:
             detail,
             None,
             route_request_id,
-            note,
+            prov,
         )
 
     # ----------------------------------------------------------- execute
@@ -258,20 +291,24 @@ class ExecutionManager:
         arguments: Any,
         *,
         route_request_id: str | None = None,
-        audit_note: str | None = None,
+        initiated_by: str | None = None,
     ) -> ExecutionResult:
         """`route_request_id`: the routing decision (RoutingDecisionRecord.id)
         this call followed, if known. Telemetry only — it is recorded on every
         audit row of this attempt and NEVER affects authorization. A malformed
         value is dropped (unattributed), never a reason to fail the call.
 
-        `audit_note`: caller-supplied provenance (e.g. an admin impersonating
-        this principal via REST), prefixed to the detail of EVERY audit row
-        of this attempt. Audit only: never affects authorization, and it is
-        not part of the returned detail."""
+        `initiated_by`: provenance when someone other than the principal
+        started this attempt — only "admin" (an admin impersonating the
+        principal via REST). Recorded on EVERY audit row of the attempt
+        (`ExecutionRecord.initiated_by` + a detail prefix), carried on an
+        approval so its eventual replay keeps it, and keys the rate limiter
+        separately (admin trials never spend the agent's budget). It never
+        affects authorization: policy, availability, validation and approval
+        run exactly as for the principal."""
         tool_id = tool if isinstance(tool, str) else tool.id
         rrid = _attribution(route_request_id)
-        note = f"[{scrub_log(audit_note)[:200]}] " if audit_note else ""
+        prov = _provenance(initiated_by, principal.agent_id)
         # Private deep copy FIRST: what is validated is exactly what is invoked.
         args = copy.deepcopy(arguments)
         agent_id = principal.agent_id
@@ -287,7 +324,7 @@ class ExecutionManager:
                 "unknown tool or principal",
                 None,
                 rrid,
-                note,
+                prov,
             )
             return ExecutionResult(DENIED, "unknown tool or principal", rid)
 
@@ -295,15 +332,15 @@ class ExecutionManager:
         decision = evaluate(loaded.principal, loaded.server, loaded.tool, loaded.rules)
         if not decision.allow:
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, DENIED, decision.reason, rrid, note
+                self._refuse, agent_id, loaded, DENIED, decision.reason, rrid, prov
             )
             return ExecutionResult(DENIED, decision.reason, rid)
 
         # (b) rate limit
-        if not self._limiter.try_acquire(agent_id):
+        if not self._limiter.try_acquire(prov.limiter_key(agent_id)):
             detail = "rate limit exceeded"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, RATE_LIMITED, detail, rrid, note
+                self._refuse, agent_id, loaded, RATE_LIMITED, detail, rrid, prov
             )
             return ExecutionResult(RATE_LIMITED, detail, rid)
 
@@ -311,7 +348,7 @@ class ExecutionManager:
         if not _available(loaded):
             detail = "tool unavailable"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid, note
+                self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid, prov
             )
             return ExecutionResult(UNAVAILABLE, detail, rid)
 
@@ -321,21 +358,21 @@ class ExecutionManager:
         except ArgumentValidationError as exc:
             detail = "argument validation failed: " + "; ".join(exc.errors)
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, INVALID_ARGS, detail, rrid, note
+                self._refuse, agent_id, loaded, INVALID_ARGS, detail, rrid, prov
             )
             return ExecutionResult(INVALID_ARGS, detail, rid, errors=exc.errors)
 
         # (e) approval gate
         if decision.requires_approval:
             approval_id, rid = await anyio.to_thread.run_sync(
-                self._create_approval, loaded, args, rrid, note
+                self._create_approval, loaded, args, rrid, prov
             )
             return ExecutionResult(
                 PENDING_APPROVAL, "approval required", rid, approval_id=approval_id
             )
 
         # (f) invoke
-        return await self._invoke(agent_id, loaded, args, rrid, note)
+        return await self._invoke(agent_id, loaded, args, rrid, prov)
 
     async def _invoke(
         self,
@@ -343,7 +380,7 @@ class ExecutionManager:
         loaded: _Loaded,
         args: dict[str, Any],
         route_request_id: str | None = None,
-        note: str = "",
+        prov: _Prov = _NO_PROV,
     ) -> ExecutionResult:
         tool, server = loaded.tool, loaded.server
         # Audit BEFORE the side effect; a failed write aborts the call.
@@ -356,7 +393,7 @@ class ExecutionManager:
             "invoking",
             None,
             route_request_id,
-            note,
+            prov,
         )
         t0 = time.perf_counter()
         outcome, detail, result = ERROR, "upstream invocation failed", None
@@ -372,7 +409,7 @@ class ExecutionManager:
         except anyio.get_cancelled_exc_class():
             with anyio.CancelScope(shield=True):
                 await anyio.to_thread.run_sync(
-                    self._finalize, rid, tool.id, CANCELLED, "caller cancelled", _ms(t0), note
+                    self._finalize, rid, tool.id, CANCELLED, "caller cancelled", _ms(t0), prov
                 )
             raise
         except Exception as exc:  # noqa: BLE001 — curated boundary: type name only, never str(exc)
@@ -383,7 +420,7 @@ class ExecutionManager:
                 type(exc).__name__,
             )
         latency = _ms(t0)
-        await anyio.to_thread.run_sync(self._finalize, rid, tool.id, outcome, detail, latency, note)
+        await anyio.to_thread.run_sync(self._finalize, rid, tool.id, outcome, detail, latency, prov)
         return ExecutionResult(
             outcome,
             detail,
@@ -398,7 +435,7 @@ class ExecutionManager:
         loaded: _Loaded,
         args: dict[str, Any],
         route_request_id: str | None = None,
-        note: str = "",
+        prov: _Prov = _NO_PROV,
     ) -> tuple[str, str]:
         now = self._clock()
         tool, server = loaded.tool, loaded.server
@@ -413,6 +450,7 @@ class ExecutionManager:
                     "tool": stable_tool_id(server.name, tool.name),
                     "operation": effective_operation(tool.operation),
                     "arguments": redact_value(args),
+                    **({"initiatedBy": prov.initiated_by} if prov.initiated_by else {}),
                 },
                 status=APPROVAL_PENDING,
                 created_at=now,
@@ -429,7 +467,7 @@ class ExecutionManager:
             f"approval {approval_id} pending",
             None,
             route_request_id,
-            note,
+            prov,
         )
         return approval_id, rid
 
@@ -480,11 +518,17 @@ class ExecutionManager:
     async def approve(self, approval_id: str) -> ExecutionResult:
         """Execute a pending approval exactly once. Raises ApprovalError."""
         req = await anyio.to_thread.run_sync(self._claim, approval_id)
+        # Provenance survives the approval (an admin-impersonated request stays
+        # marked on the row that records the real side effect).
+        initiator = (req.summary or {}).get("initiatedBy")
+        prov = _provenance(initiator, req.agent_id) if initiator in _INITIATORS else _NO_PROV
         principal = AgentPrincipal(id="", agent_id=req.agent_id, key_hash="", enabled=True)
         loaded = await anyio.to_thread.run_sync(self._load, principal, req.tool_id)
 
         async def refuse(detail: str) -> ExecutionResult:
-            rid = await anyio.to_thread.run_sync(self._refuse, req.agent_id, loaded, DENIED, detail)
+            rid = await anyio.to_thread.run_sync(
+                self._refuse, req.agent_id, loaded, DENIED, detail, None, prov
+            )
             await anyio.to_thread.run_sync(self._close_approval, req.id, APPROVAL_FAILED, rid, None)
             return ExecutionResult(DENIED, detail, rid, approval_id=req.id)
 
@@ -503,7 +547,7 @@ class ExecutionManager:
             return await refuse(f"approval {req.id}: arguments no longer valid: {exc.errors}")
 
         try:
-            res = await self._invoke(req.agent_id, loaded, args)
+            res = await self._invoke(req.agent_id, loaded, args, None, prov)
         except BaseException:
             # Never leave raw arguments at rest in a wedged 'executing' row.
             with anyio.CancelScope(shield=True):

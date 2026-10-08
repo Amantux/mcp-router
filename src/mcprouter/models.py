@@ -202,6 +202,9 @@ class ExecutionRecord(Base):
     # call followed, when the caller knows it. NULL = unattributed (legacy rows,
     # approvals, direct calls) — analytics treats NULL as "not in the funnel".
     route_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # Wave-2 integration: who started the attempt when it was not the agent
+    # itself ("admin" = admin impersonation via REST). NULL = the agent.
+    initiated_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class ToolStatsDaily(Base):

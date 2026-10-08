@@ -11,8 +11,11 @@ Identity (who the call runs as):
   principal. An `agentId` naming a DIFFERENT agent is 403.
 * **Admin token** -> MUST name `agentId` (query or body); runs as THAT
   principal under its own policy, rate limit and approval rules — the admin
-  token never widens what the call may do. Every audit row of the attempt is
-  annotated `[admin-initiated via REST, impersonating '<agent>']`. Missing
+  token never widens what the call may do. Every audit row of the attempt
+  carries `initiated_by='admin'` and a `[admin-initiated, impersonating
+  '<agent>']` detail prefix (also on the replay of an approval it created);
+  admin trials use their own rate-limit window and are excluded from the
+  agent's analytics attempts/denials. Missing
   agentId -> 400; unknown agent -> 404. The attempt is NOT attributed to a
   routing decision (`routeRequestId` is ignored): an admin trying a tool is
   not the agent selecting it, so it must not move the funnel.
@@ -28,13 +31,14 @@ import logging
 from typing import Annotated, Any
 
 import anyio.to_thread
+import mcp_types as types
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 
 from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of
-from mcprouter.execution.manager import ExecutionManager, ExecutionResult
+from mcprouter.execution.manager import INITIATED_BY_ADMIN, ExecutionManager, ExecutionResult
 from mcprouter.execution.redaction import scrub_log
 from mcprouter.models import AgentPrincipal
 
@@ -57,7 +61,9 @@ class ExecuteIn(_Wire):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
     arguments: dict[str, Any] = Field(default_factory=dict)
-    route_request_id: str | None = Field(default=None, max_length=36)
+    # Telemetry only: a malformed/over-long id is dropped by the manager
+    # (unattributed), never a reason to refuse the call — same as MCP.
+    route_request_id: str | None = Field(default=None, max_length=512)
     agent_id: str | None = Field(default=None, pattern=AGENT_ID_PATTERN)
 
 
@@ -84,17 +90,33 @@ def _manager(request: Request) -> ExecutionManager:
     return mgr
 
 
-def _out(res: ExecutionResult) -> ExecuteOut:
-    result = None
-    if res.result is not None:
-        result = ToolResultOut(
+MALFORMED = "upstream returned malformed content"
+
+
+def _result(res: ExecutionResult) -> ToolResultOut | None:
+    """Upstream content passes the SAME MCP shape check as the gateway's
+    tools/call (types.CallToolResult); malformed content is withheld."""
+    if res.result is None:
+        return None
+    try:
+        types.CallToolResult.model_validate(
+            {"content": res.result.content, "isError": res.result.is_error}
+        )
+        return ToolResultOut(
             content=res.result.content,
             is_error=res.result.is_error,
             structured_content=res.result.structured_content,
         )
+    except ValueError:  # pydantic ValidationError subclasses ValueError
+        return None
+
+
+def _out(res: ExecutionResult) -> ExecuteOut:
+    result = _result(res)
+    detail = MALFORMED if res.result is not None and result is None else res.detail
     return ExecuteOut(
         status=res.status,
-        detail=res.detail,
+        detail=detail,
         record_id=res.record_id,
         approval_id=res.approval_id,
         errors=list(res.errors),
@@ -148,7 +170,7 @@ async def execute_tool(
             principal,
             tool_id,
             body.arguments,
-            audit_note=f"admin-initiated via REST, impersonating '{principal.agent_id}'",
+            initiated_by=INITIATED_BY_ADMIN,
         )
         return _out(res)
 

@@ -57,6 +57,8 @@ LEFT JOIN routing_decisions d ON d.id = x.route_request_id AND d.agent_id = x.ag
     + LIVE_DECISION_SQL
     + """
 WHERE x.created_at >= :start AND x.created_at < :end AND x.outcome <> 'started'
+  -- Admin-impersonated trials (REST playground) are not the agent's behaviour.
+  AND x.initiated_by IS NULL
 GROUP BY GROUPING SETS ((x.agent_id), ())
 """
 )

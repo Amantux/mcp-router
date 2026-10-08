@@ -39,6 +39,8 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS route_request_id VARCHAR(36)",
     "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
     " ON execution_records (route_request_id)",
+    # Wave-2 integration: structured provenance of admin-impersonated attempts.
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS initiated_by VARCHAR(16)",
 )
 
 

@@ -79,9 +79,13 @@ class Settings:
             decision_timeout_s=float(get("MCPR_DECISION_TIMEOUT_S", str(d.decision_timeout_s))),
             route_cache_ttl_s=float(get("MCPR_ROUTE_CACHE_TTL_S", str(d.route_cache_ttl_s))),
             route_cache_size=int(get("MCPR_ROUTE_CACHE_SIZE", str(d.route_cache_size))),
-            sync_enabled=_bool(get("MCPR_SYNC_ENABLED", "false")),
-            usage_prior_enabled=_bool(get("MCPR_USAGE_PRIOR_ENABLED", "false")),
-            analytics_rollup_enabled=_bool(get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false")),
+            sync_enabled=_bool(get("MCPR_SYNC_ENABLED", "false"), "MCPR_SYNC_ENABLED"),
+            usage_prior_enabled=_bool(
+                get("MCPR_USAGE_PRIOR_ENABLED", "false"), "MCPR_USAGE_PRIOR_ENABLED"
+            ),
+            analytics_rollup_enabled=_bool(
+                get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false"), "MCPR_ANALYTICS_ROLLUP_ENABLED"
+            ),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),
@@ -95,7 +99,7 @@ _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"0", "false", "no", "off"})
 
 
-def _bool(raw: str) -> bool:
+def _bool(raw: str, name: str = "value") -> bool:
     """Strict boolean: an unrecognised value fails loudly at startup rather
     than silently meaning false."""
     v = raw.strip().lower()
@@ -103,7 +107,7 @@ def _bool(raw: str) -> bool:
         return True
     if v in _FALSE:
         return False
-    raise ValueError("expected one of 1/0, true/false, yes/no, on/off")
+    raise ValueError(f"{name}: expected one of 1/0, true/false, yes/no, on/off")
 
 
 def _opt_int(raw: str) -> int | None:
