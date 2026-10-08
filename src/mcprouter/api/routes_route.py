@@ -25,6 +25,12 @@ Integration (identity + redaction):
 * Request bodies accept snake_case (SPEC §9) and camelCase (UI). The
   response stays SPEC §9 snake_case.
 * `/route/evaluate` is admin-only (gateway's `require_admin`).
+* `/route/simulate` (admin-only, wave 2) routes AS a named agent under its
+  live scope and budgets and returns admin diagnostics (candidates, per-stage
+  prunes, policy-filtered items with reasons, budget clamps). It never
+  publishes exposure, never executes, and bypasses the route cache.
+* Budgets: request maxTools/maxServers may lower, never raise, the principal
+  and global caps (routing.budgets); /route reports the applied values.
 
 Decision: unknown `allowed_servers` names are a 400 listing them, never
 silently ignored — dropping an unknown name could turn ["githb"] into "no
@@ -44,19 +50,27 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from pydantic.alias_generators import to_camel
+from sqlalchemy import select
 
-from mcprouter.api.deps_auth import get_principal, require_admin
+from mcprouter.api.deps_auth import (
+    DEV_AGENT_ID,
+    _dev_mode_active,
+    dev_principal,
+    get_principal,
+    require_admin,
+)
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
 from mcprouter.execution.redaction import redact
-from mcprouter.interfaces import RouteRequest, ScopeFilter
+from mcprouter.interfaces import RouteRequest, ScopeFilter, ToolCandidate
 from mcprouter.models import AgentPrincipal
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope, UncachedScope
 from mcprouter.routing.servers import resolve_server_names
+from mcprouter.routing.trace import RouteTrace
 
 log = logging.getLogger(__name__)
 
@@ -264,6 +278,197 @@ def route(
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
         cached=result.cached,
+    )
+
+
+# ------------------------------------------------------------- simulation
+# Admin-only. camelCase on the wire (management/UI convention), unlike the
+# SPEC §9 /route response. Shape is a contract with the UI simulator:
+# docs/INTEGRATION_NOTES-wave2-budgets.md §4 — add fields, never rename.
+class _Wire(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class SimulateBody(RouteBody):
+    # Required here: the admin names the agent whose scope + budgets to use.
+    agent_id: str = Field(min_length=1, max_length=120)
+
+
+class ToolRefOut(_Wire):
+    tool_id: str
+    server: str
+    tool: str
+
+
+class SimulatedToolOut(ToolRefOut):
+    score: float
+
+
+class CandidateOut(ToolRefOut):
+    domain: str | None
+    operation: str
+    retrieval_score: float
+    matched_on: list[str]
+
+
+class StageOut(_Wire):
+    stage: str
+    before: int
+    after: int
+    pruned: list[ToolRefOut]
+    detail: dict[str, Any]
+
+
+class PolicyFilteredOut(ToolRefOut):
+    operation: str
+    reason: str
+
+
+class BudgetClampOut(_Wire):
+    budget: str
+    requested: int | None
+    principal: int | None
+    global_cap: int | None
+    applied: int | None
+    clamped_by: str | None
+
+
+class DiagnosticsOut(_Wire):
+    candidates_considered: list[CandidateOut]
+    stages: list[StageOut]
+    policy_filtered: list[PolicyFilteredOut]
+    budget_clamps: list[BudgetClampOut]
+
+
+class SimulateResponse(_Wire):
+    request_id: str
+    agent_id: str
+    simulated: bool
+    tools: list[SimulatedToolOut]
+    no_match: bool
+    fallback_used: bool
+    latency_ms: float
+    model_version: str
+    max_tools_applied: int
+    max_servers_applied: int | None
+    diagnostics: DiagnosticsOut
+
+
+def _ref(c: ToolCandidate) -> ToolRefOut:
+    return ToolRefOut(tool_id=c.tool_id, server=c.server_name, tool=c.tool_name)
+
+
+def _simulation_principal(request: Request, agent_id: str) -> AgentPrincipal:
+    security = request.app.state.security
+    principal: AgentPrincipal | None
+    with request.app.state.session_factory() as s:
+        principal = s.scalars(
+            select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
+        ).one_or_none()
+        if principal is None and agent_id == DEV_AGENT_ID and _dev_mode_active(s, security):
+            principal = dev_principal(security)
+    if principal is None:
+        raise HTTPException(status_code=404, detail="agentId does not name a principal")
+    return principal
+
+
+@router.post(
+    "/route/simulate",
+    response_model=SimulateResponse,
+    dependencies=[Depends(require_admin)],
+)
+def simulate(
+    body: SimulateBody,
+    request: Request,
+    pipeline: Annotated[RoutePipeline, Depends(get_pipeline)],
+    scope_resolver: Annotated[ScopeResolver, Depends(get_scope_resolver)],
+) -> SimulateResponse:
+    """Route AS `agentId` (its live scope and budgets) and explain the result.
+    Never publishes exposure to any session, never executes, never touches
+    the route cache; the decision row is marked `simulated/`."""
+    settings = request.app.state.settings
+    principal = _simulation_principal(request, body.agent_id)
+    scope = scope_resolver(principal.agent_id)
+    allowed_ids = resolve_allowed(request, body.allowed_servers, scope)
+    budgets = effective_budgets(
+        principal,
+        settings,
+        requested_tools=body.max_tools,
+        requested_servers=body.max_servers,
+    )
+    trace = RouteTrace()
+    result = pipeline.route(
+        RouteRequest(
+            query=redact(body.query),
+            agent_id=principal.agent_id,
+            max_tools=budgets.max_tools,
+            allowed_servers=allowed_ids,
+            max_servers=budgets.max_servers,
+        ),
+        scope,
+        trace=trace,
+    )
+    return SimulateResponse(
+        request_id=result.request_id,
+        agent_id=principal.agent_id,
+        simulated=True,
+        tools=[
+            SimulatedToolOut(
+                tool_id=t.tool_id, server=t.server_name, tool=t.tool_name, score=t.score
+            )
+            for t in result.tools
+        ],
+        no_match=result.no_match,
+        fallback_used=result.fallback_used,
+        latency_ms=round(result.latency_ms, 3),
+        model_version=result.model_version,
+        max_tools_applied=budgets.max_tools,
+        max_servers_applied=budgets.max_servers,
+        diagnostics=DiagnosticsOut(
+            candidates_considered=[
+                CandidateOut(
+                    tool_id=c.tool_id,
+                    server=c.server_name,
+                    tool=c.tool_name,
+                    domain=c.domain,
+                    operation=c.operation,
+                    retrieval_score=round(c.retrieval_score, 6),
+                    matched_on=list(c.matched_on),
+                )
+                for c in trace.candidates
+            ],
+            stages=[
+                StageOut(
+                    stage=st.stage,
+                    before=st.before,
+                    after=st.after,
+                    pruned=[_ref(c) for c in st.pruned],
+                    detail=st.detail,
+                )
+                for st in trace.stages
+            ],
+            policy_filtered=[
+                PolicyFilteredOut(
+                    tool_id=pf.candidate.tool_id,
+                    server=pf.candidate.server_name,
+                    tool=pf.candidate.tool_name,
+                    operation=pf.candidate.operation,
+                    reason=pf.reason,
+                )
+                for pf in trace.policy_filtered
+            ],
+            budget_clamps=[
+                BudgetClampOut(
+                    budget=c.budget,
+                    requested=c.requested,
+                    principal=c.principal,
+                    global_cap=c.global_cap,
+                    applied=c.applied,
+                    clamped_by=c.clamped_by,
+                )
+                for c in budgets.clamps
+            ],
+        ),
     )
 
 
