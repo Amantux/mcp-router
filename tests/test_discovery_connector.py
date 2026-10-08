@@ -12,7 +12,7 @@ import pytest
 from mcp import MCPError
 from mcp.server.mcpserver import MCPServer
 from testbed.fleet import generate_fleet
-from testbed.harness import http_fleet, stdio_command_for_index, stdio_env
+from testbed.harness import http_fleet, sse_server, stdio_command_for_index, stdio_env
 from testbed.servers import build_server
 
 from mcprouter.mcpclient import (
@@ -31,6 +31,7 @@ from mcprouter.mcpclient import connector as connector_mod
 
 HTTP_PORT = 8602  # inside this workstream's 8600-8619 allocation
 DEAD_PORT = 8609  # nothing listens here
+SSE_PORT = 8605
 
 
 # ------------------------------------------------------------ URL validation
@@ -113,6 +114,15 @@ async def test_streamable_http_round_trip() -> None:
             assert "trigger_build" in {t.name for t in await c.list_tools()}
             res = await c.call_tool("list_runners", {})
             assert not res.is_error
+
+
+async def test_legacy_sse_round_trip() -> None:
+    with sse_server(generate_fleet(2)[1], port=SSE_PORT) as url:
+        async with Connector(
+            ServerTarget(transport="sse", endpoint=url), connect_timeout_s=10
+        ) as c:
+            assert (await c.initialize()).name == "jenkins"
+            assert len(await c.list_tools()) == 10
 
 
 # ------------------------------------------------------------ curated errors

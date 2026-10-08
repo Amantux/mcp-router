@@ -130,3 +130,29 @@ class InprocFleet:
             dead = ServerTarget(transport="streamable-http", endpoint=self.DEAD_URL)
             return Connector(dead, connect_timeout_s=3)
         return Connector(build_server(self.specs[server.name]))
+
+
+@contextmanager
+def sse_server(spec: ServerSpec, *, port: int, host: str = "127.0.0.1") -> Iterator[str]:
+    """Serve one spec over LEGACY SSE in a background thread; yield its URL."""
+    import uvicorn
+
+    from testbed.servers import build_server
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            build_server(spec).sse_app(host=host), host=host, port=port, log_level="warning"
+        )
+    )
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    try:
+        deadline = time.monotonic() + 15
+        while not server.started:
+            if not th.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError("sse server did not start")
+            time.sleep(0.02)
+        yield f"http://{host}:{port}/sse"
+    finally:
+        server.should_exit = True
+        th.join(timeout=10)
