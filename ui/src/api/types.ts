@@ -238,3 +238,305 @@ export interface PolicyRule {
 }
 
 export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt">;
+
+// -------------------------------------------------------------- execution
+/** execution/manager.py statuses (ExecutionResult.status). */
+export type ExecutionStatus =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "denied"
+  | "rate_limited"
+  | "unavailable"
+  | "invalid_args"
+  | "pending_approval"
+  | "cancelled";
+
+/** MCP tool output (interfaces.ToolCallResult), camelised; content blocks are tool data. */
+export interface ToolCallOutput {
+  content: JsonObject[];
+  isError?: boolean;
+  structuredContent?: JsonValue | null;
+}
+
+// CONTRACT: POST /api/v1/tools/{toolId}/execute {arguments} → ExecutionManager's
+// ExecutionResult {status, detail, recordId, approvalId?, errors[], result?}
+// plus an optional server-side latencyMs. No REST execute endpoint exists in
+// v0.1 (execution is /mcp tools/call + the approval endpoint); the integrator
+// adds it or repoints executeTool() in client.ts. The request is made as the
+// agent key when one is set, else the admin token — the backend decides which
+// principal an admin-token call runs under.
+export interface ExecuteResult {
+  status: ExecutionStatus;
+  /** Curated, redacted audit detail written by the manager. */
+  detail: string;
+  recordId: string | null;
+  approvalId?: string | null;
+  /** invalid_args only: "path: keyword" (never values). */
+  errors?: string[];
+  result?: ToolCallOutput | null;
+  latencyMs?: number | null;
+}
+
+export type ApprovalStatus = "pending" | "executing" | "executed" | "failed" | "denied" | "expired";
+
+/** routes_policy.ApprovalOut. `summary` holds the tool id, operation and REDACTED arguments. */
+export interface Approval {
+  id: string;
+  agentId: string;
+  toolId: string;
+  status: ApprovalStatus;
+  summary: { tool?: string; operation?: string; arguments?: JsonValue } & JsonObject;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt: string | null;
+  resultPreview: string | null;
+}
+
+/** routes_policy.ApprovalDecision */
+export interface ApprovalDecision {
+  approvalId: string;
+  status: string;
+  detail: string;
+  recordId: string | null;
+  resultPreview?: string | null;
+}
+
+// --------------------------------------------------------------- agent lens
+/**
+ * One budget's clamp chain (routing/budgets.py BudgetClamp, A's wave-2 branch):
+ * applied = min(requested ?? principal, principal, globalCap); null = no cap.
+ */
+export interface BudgetClamp {
+  budget: "maxTools" | "maxServers" | string;
+  requested: number | null;
+  principal: number | null;
+  globalCap: number | null;
+  applied: number | null;
+  /** Which ceiling bound the result; null when the request value stood. */
+  clampedBy: "principal" | "global" | null | string;
+}
+
+/** A tool removed before exposure, with the deterministic reason. Admin-only diagnostics. */
+// CONTRACT: diagnostics.policyFiltered[] = {server, tool, reason} (toolId optional).
+export interface FilteredTool {
+  toolId?: string;
+  serverName: string;
+  toolName: string;
+  reason: string;
+  /** Pipeline stage that removed it ("policy", "budget", "maxServers", ...), if given. */
+  stage?: string;
+}
+
+/** Candidate counts through the pipeline. */
+// CONTRACT: diagnostics.stages[] = {stage, before, after}.
+export interface PipelineStage {
+  stage: string;
+  before: number;
+  after: number;
+}
+
+export interface SimulateRequest {
+  agentId: string;
+  query: string;
+  maxTools?: number;
+  maxServers?: number;
+}
+
+// CONTRACT: POST /api/v1/route/simulate (admin) → RouteResponse fields plus
+// {agentId, maxToolsApplied, maxServersApplied (verified on A's branch),
+// clamps[] (BudgetClamp, verified), diagnostics:{candidates, stages[],
+// policyFiltered[]} (guessed)}. client.simulateAgent normalises.
+export interface SimulateResponse {
+  requestId?: string;
+  agentId: string;
+  tools: RoutedTool[];
+  fallbackUsed: boolean;
+  noMatch: boolean;
+  latencyMs: number;
+  maxToolsApplied: number | null;
+  maxServersApplied: number | null;
+  clamps: BudgetClamp[];
+  candidates: number | null;
+  stages: PipelineStage[];
+  filtered: FilteredTool[];
+}
+
+// --------------------------------------------------------------- analytics
+// Aligned to B's wave-2 analytics/wire.py (read from the in-progress
+// /root/mcpr2-wt-analytics worktree). All rates are fractions 0..1 or null
+// (null = no denominator yet). Every endpoint takes ?window=<n>h|<n>d.
+export type AnalyticsWindow = "7d" | "30d" | "90d";
+
+export interface AnalyticsWindowInfo {
+  label: string;
+  start: string;
+  end: string;
+}
+
+/** "Tokens not sent": exposed vs the agent's authorized catalog (chars/4 estimate). */
+export interface ContextEconomy {
+  servedDecisions: number;
+  unscoredDecisions: number;
+  noMatchDecisions: number;
+  exposedTokens: number;
+  catalogTokens: number;
+  tokensNotSent: number;
+  savings: number | null;
+  catalogTokensPerDecision?: number | null;
+  estimator: string;
+  catalogBasis: string;
+}
+
+export interface FunnelTotals {
+  surfaced: number;
+  selected: number;
+  succeeded: number;
+  failed: number;
+  selectionRate: number | null;
+  successRate: number | null;
+}
+
+export interface RoutingStats {
+  decisions: number;
+  noMatch: number;
+  noMatchRate: number | null;
+  fallback: number;
+  fallbackRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+}
+
+export interface ExecutionStats {
+  attempts: number;
+  denied: number;
+  denialRate: number | null;
+  attributed: number;
+  attributionCoverage: number | null;
+  offFunnelSelections: number;
+}
+
+/** Position bias: how often a tool shown at `rank` was selected. */
+export interface RankPoint {
+  rank: number;
+  shown: number;
+  selected: number;
+  rate: number | null;
+}
+
+export interface AnalyticsOverview {
+  window: AnalyticsWindowInfo;
+  contextEconomy: ContextEconomy;
+  funnel: FunnelTotals;
+  routing: RoutingStats;
+  executions: ExecutionStats;
+  positionCurve: RankPoint[];
+  catalogDrift: Record<string, number>;
+}
+
+export interface ToolFunnel {
+  toolId: string;
+  /** null: the tool is no longer in the catalog. */
+  toolName: string | null;
+  serverName: string | null;
+  enabled: boolean | null;
+  tokens: number | null;
+  surfaced: number;
+  selected: number;
+  succeeded: number;
+  failed: number;
+  selectionRate: number | null;
+  successRate: number | null;
+  avgRank: number | null;
+  exposedTokens: number;
+}
+
+export type ToolFunnelSort =
+  | "surfaced"
+  | "selected"
+  | "succeeded"
+  | "failed"
+  | "selectionRate"
+  | "successRate"
+  | "avgRank"
+  | "exposedTokens"
+  | "toolName";
+
+export interface ToolFunnelPage extends Page<ToolFunnel> {
+  window: AnalyticsWindowInfo;
+}
+
+export interface CoSurfaced {
+  toolId: string;
+  toolName: string | null;
+  serverName: string | null;
+  coSurfaced: number;
+  thisSelected: number;
+  otherSelected: number;
+}
+
+export interface ToolAnalytics {
+  window: AnalyticsWindowInfo;
+  tool: ToolFunnel;
+  positionCurve: RankPoint[];
+  coSurfaced: CoSurfaced[];
+}
+
+export interface AgentProfile {
+  agentId: string;
+  decisions: number;
+  noMatch: number;
+  noMatchRate: number | null;
+  fallback: number;
+  fallbackRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+  attempts: number;
+  denied: number;
+  denialRate: number | null;
+  attributed: number;
+  attributionCoverage: number | null;
+  surfaced: number;
+  selected: number;
+  selectionRate: number | null;
+  avgSurfacedPerDecision: number | null;
+  budgetTools?: number | null;
+  budgetUtilization?: number | null;
+  contextEconomy: ContextEconomy;
+}
+
+export interface WastedTool {
+  toolId: string;
+  toolName: string | null;
+  serverName: string | null;
+  surfaced: number;
+  selected: number;
+  selectionRate: number | null;
+  exposedTokens: number;
+}
+
+export interface StaleTool {
+  toolId: string;
+  toolName: string;
+  serverName: string;
+  createdAt: string;
+  lastSurfacedAt: string | null;
+}
+
+export interface NeverRoutedServer {
+  serverId: string;
+  serverName: string;
+  toolCount: number;
+  createdAt: string;
+}
+
+/** Suggestions only: nothing is disabled automatically. */
+export interface AnalyticsSuggestions {
+  window: AnalyticsWindowInfo;
+  minSurfaced: number;
+  maxSelectionRate: number;
+  staleDays: number;
+  wastedExposure: WastedTool[];
+  staleTools: StaleTool[];
+  neverRoutedServers: NeverRoutedServer[];
+}

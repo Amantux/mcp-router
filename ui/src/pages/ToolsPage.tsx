@@ -1,4 +1,4 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
   Badge,
   Button,
@@ -17,8 +17,9 @@ import {
 } from "@fluentui/react-components";
 import { WrenchRegular, FilterDismissRegular } from "@fluentui/react-icons";
 import { useNavigate } from "react-router";
-import { listServers, listTools } from "../api/client";
-import { DOMAINS, OPERATIONS, type MCPTool, type Operation } from "../api/types";
+import { listServers, listToolFunnels, listTools } from "../api/client";
+import { DOMAINS, OPERATIONS, type MCPTool, type Operation, type ToolFunnel } from "../api/types";
+import { FunnelBars } from "../components/analytics";
 import { EmptyState, fmtInt, fmtMs, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
@@ -47,6 +48,16 @@ export function ToolsPage() {
   const [offset, setOffset] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   const q = useDebounced(filters.q, 200);
+
+  // Funnel column: best-effort (an instance without analytics just shows "—"), so no error toast.
+  const [funnels, setFunnels] = useState<Map<string, ToolFunnel>>(new Map());
+  useEffect(() => {
+    const ctrl = new AbortController();
+    listToolFunnels({ window: "7d", limit: 500, offset: 0 }, ctrl.signal)
+      .then((p) => setFunnels(new Map(p.items.map((f) => [f.toolId, f]))))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, []);
 
   const servers = useLoader("Load servers", (sig) => listServers(sig), []);
   const serverNames = useMemo(() => new Map((servers.data ?? []).map((s) => [s.id, s.name])), [servers.data]);
@@ -136,8 +147,16 @@ export function ToolsPage() {
       createTableColumn<MCPTool>({ columnId: "calls", renderHeaderCell: () => "Calls", renderCell: (t) => fmtInt(t.callCount) }),
       createTableColumn<MCPTool>({ columnId: "errors", renderHeaderCell: () => "Errors", renderCell: (t) => fmtInt(t.errorCount) }),
       createTableColumn<MCPTool>({ columnId: "latency", renderHeaderCell: () => "Avg latency", renderCell: (t) => fmtMs(t.avgLatencyMs) }),
+      createTableColumn<MCPTool>({
+        columnId: "funnel",
+        renderHeaderCell: () => "Funnel (7d)",
+        renderCell: (t) => {
+          const f = funnels.get(t.id);
+          return f && f.surfaced > 0 ? <FunnelBars label={`${t.name} funnel`} surfaced={f.surfaced} selected={f.selected} succeeded={f.succeeded} /> : <span className={c.muted}>—</span>;
+        },
+      }),
     ],
-    [c, serverNames],
+    [c, serverNames, funnels],
   );
 
   const page = tools.data;

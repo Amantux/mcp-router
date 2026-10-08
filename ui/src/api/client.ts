@@ -12,7 +12,23 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
+  Approval,
+  ApprovalDecision,
+  ApprovalStatus,
   ClassificationUpdate,
+  ExecuteResult,
+  AgentProfile,
+  AnalyticsOverview,
+  AnalyticsSuggestions,
+  AnalyticsWindow,
+  ToolAnalytics,
+  ToolFunnelPage,
+  ToolFunnelSort,
+  BudgetClamp,
+  FilteredTool,
+  PipelineStage,
+  SimulateRequest,
+  SimulateResponse,
   CreatePrincipalRequest,
   CreateRuleRequest,
   CreatedPrincipal,
@@ -33,14 +49,18 @@ import type {
   RoutedTool,
   ToolDetail,
   ToolQuery,
+  JsonObject,
 } from "./types";
+import { bearerFor, effectiveIdentity, noteResponse, setAgentId, type Identity } from "./auth";
 
 export const API_BASE = "/api/v1";
 /** Raw Prometheus text; the app mounts it at /metrics (SPEC §9 says /api/v1/metrics). */
 export const METRICS_URL = "/metrics";
 
 // ------------------------------------------------------------ case mapping
-const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores"]);
+// Opaque = user/tool data: tool schemas, version snapshots, score maps, tool
+// call arguments and outputs, approval summaries (redacted arguments).
+const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores", "arguments", "content", "structuredContent", "summary", "catalogDrift"]);
 
 export function snakeToCamel(key: string): string {
   return key.replace(/_+([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
@@ -65,12 +85,23 @@ export class ApiError extends Error {
   /** HTTP status, or 0 for a network failure / unreachable backend. */
   readonly status: number;
   readonly path: string;
-  constructor(status: number, path: string) {
+  /** The credential the failed request was made as. */
+  readonly identity: Identity;
+  constructor(status: number, path: string, identity: Identity = "admin") {
     super(status === 0 ? `Network error calling ${path}` : `HTTP ${status} from ${path}`);
     this.name = "ApiError";
     this.status = status;
     this.path = path;
+    this.identity = identity;
   }
+}
+
+/**
+ * True for an admin-credential refusal (401/403). The global "not connected"
+ * bar explains these, so per-action error toasts are suppressed for them.
+ */
+export function isAdminAuthError(err: unknown): boolean {
+  return err instanceof ApiError && err.identity === "admin" && (err.status === 401 || err.status === 403);
 }
 
 /** Curated, user-facing explanation of a failure. Never includes a response body. */
@@ -82,8 +113,16 @@ export function describeError(err: unknown): { status: string; advice: string } 
   if (s === 0)
     return { status: "network error", advice: "Couldn't reach the MCP Router backend. Check it is running on port 8400, then retry." };
   const status = `HTTP ${s}`;
+  if ((s === 401 || s === 403) && err.identity === "agent")
+    return {
+      status,
+      advice:
+        s === 401
+          ? "The backend refused the agent key. Open Connect (gear icon) and paste a current agent key, or forget it to act as admin."
+          : "The agent this key belongs to isn't allowed to do this.",
+    };
   if (s === 401 || s === 403)
-    return { status, advice: "The backend refused this request. Check the gateway auth configuration, then retry." };
+    return { status, advice: "The backend refused these credentials. Open Connect (gear icon) and paste the admin token, then retry." };
   if (s === 404)
     return { status, advice: "The item no longer exists, or this backend doesn't provide the endpoint yet. Refresh and retry." };
   if (s === 409) return { status, advice: "It conflicts with existing data (for example a duplicate name). Change the input and retry." };
@@ -100,6 +139,19 @@ interface RequestOptions {
   query?: Record<string, QueryValue>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Which credential to present. Default admin; "agent" uses the agent key when set. */
+  as?: Identity;
+  /** Unauthenticated endpoint (e.g. /healthz): no bearer, and its 2xx proves nothing about credentials. */
+  public?: boolean;
+}
+
+/** Every request's headers. The bearer comes from the session credential store. */
+function buildHeaders(hasBody: boolean, identity: Identity, withAuth = true): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (hasBody) headers["Content-Type"] = "application/json";
+  const bearer = withAuth ? bearerFor(identity) : null;
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  return headers;
 }
 
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -115,19 +167,24 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
 
 async function request<T>(method: string, path: string, opts: RequestOptions = {}): Promise<T> {
   const url = buildUrl(path, opts.query);
+  const identity = opts.as ?? "admin";
+  // The credential actually presented: an agent request without an agent key goes as admin.
+  const presented: Identity = effectiveIdentity(identity) === "agent" ? "agent" : "admin";
   let res: Response;
   try {
     res = await fetch(url, {
       method,
-      headers: opts.body !== undefined ? { "Content-Type": "application/json", Accept: "application/json" } : { Accept: "application/json" },
+      headers: opts.public ? buildHeaders(opts.body !== undefined, "admin", false) : buildHeaders(opts.body !== undefined, identity),
+      credentials: "omit", // bearer only; never send or accept cookies
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new ApiError(0, path);
+    throw new ApiError(0, path, presented);
   }
-  if (!res.ok) throw new ApiError(res.status, path);
+  if (!opts.public) noteResponse(presented, res.status);
+  if (!res.ok) throw new ApiError(res.status, path, presented);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   if (!text) return undefined as T;
@@ -135,7 +192,7 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new ApiError(res.status, path);
+    throw new ApiError(res.status, path, presented);
   }
   return camelizeKeys(parsed) as T;
 }
@@ -337,7 +394,7 @@ export async function getModelsHealth(signal?: AbortSignal): Promise<ModelsHealt
 }
 
 export function getHealthz(signal?: AbortSignal): Promise<Healthz> {
-  return request("GET", "/healthz", { signal });
+  return request("GET", "/healthz", { signal, public: true });
 }
 
 // -------------------------------------------------------------- executions
@@ -365,4 +422,156 @@ export async function listRules(signal?: AbortSignal): Promise<PolicyRule[]> {
 
 export function createRule(body: CreateRuleRequest): Promise<PolicyRule> {
   return request("POST", `${API_BASE}/policy-rules`, { body });
+}
+
+// -------------------------------------------------------------- identity
+/** Cheap admin-only call used by the Connect panel to verify the admin token. */
+export async function probeAdmin(signal?: AbortSignal): Promise<void> {
+  await request("GET", `${API_BASE}/principals`, { signal });
+}
+
+/** GET /me as the agent key: which agent the key authenticates. Records the (non-secret) id. */
+export async function getMe(signal?: AbortSignal): Promise<Principal> {
+  const me = await request<Principal>("GET", `${API_BASE}/me`, { signal, as: "agent" });
+  setAgentId(me.agentId);
+  return me;
+}
+
+// --------------------------------------------------------------- execution
+/**
+ * Run a tool through the execution manager (the only path to an upstream
+ * tool). Made as the agent key when set, else the admin token. Returns the
+ * manager's outcome for every status — a policy denial is a 200 with
+ * status "denied", not an exception. `roundTripMs` is measured here.
+ */
+// CONTRACT: POST /api/v1/tools/{id}/execute {arguments}; see ExecuteResult in types.ts.
+export async function executeTool(toolId: string, args: JsonObject, signal?: AbortSignal): Promise<ExecuteResult & { roundTripMs: number }> {
+  const t0 = performance.now();
+  const raw = await request<ExecuteResult>("POST", `${API_BASE}/tools/${encodeURIComponent(toolId)}/execute`, {
+    body: { arguments: args },
+    signal,
+    as: "agent",
+  });
+  return { ...raw, errors: raw.errors ?? [], roundTripMs: performance.now() - t0 };
+}
+
+export async function listApprovals(status?: ApprovalStatus, signal?: AbortSignal): Promise<Approval[]> {
+  return toList<Approval>(await request("GET", `${API_BASE}/approvals`, { signal, query: { status } }));
+}
+
+/**
+ * One approval's current state. With an agent key: GET /me/approvals/{id}
+ * (agents see only their own). Without: the admin list, filtered by id (there
+ * is no admin get-by-id endpoint). Undefined if it no longer exists.
+ */
+export async function getApproval(id: string, asAgent: boolean, signal?: AbortSignal): Promise<Approval | undefined> {
+  if (asAgent) {
+    try {
+      return await request<Approval>("GET", `${API_BASE}/me/approvals/${encodeURIComponent(id)}`, { signal, as: "agent" });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return undefined; // gone (or not ours): same as the admin path
+      throw e;
+    }
+  }
+  return (await listApprovals(undefined, signal)).find((a) => a.id === id);
+}
+
+export function approveApproval(id: string): Promise<ApprovalDecision> {
+  return request("POST", `${API_BASE}/approvals/${encodeURIComponent(id)}/approve`);
+}
+
+export function denyApproval(id: string): Promise<ApprovalDecision> {
+  return request("POST", `${API_BASE}/approvals/${encodeURIComponent(id)}/deny`);
+}
+
+// -------------------------------------------------------------- agent lens
+type Loose = Record<string, unknown>;
+const arr = (v: unknown): Loose[] => (Array.isArray(v) ? (v as Loose[]) : []);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+function normaliseFiltered(raw: Loose): FilteredTool {
+  return {
+    toolId: (raw.toolId as string | undefined) ?? undefined,
+    serverName: String(raw.serverName ?? raw.server ?? ""),
+    toolName: String(raw.toolName ?? raw.tool ?? raw.name ?? ""),
+    reason: String(raw.reason ?? raw.detail ?? "filtered"),
+    stage: (raw.stage as string | undefined) ?? undefined,
+  };
+}
+
+/** Tolerant mapping of the simulate payload (diagnostics may be top-level or nested). */
+export function normaliseSimulation(raw: Loose, agentId: string): SimulateResponse {
+  const diag = (raw.diagnostics ?? {}) as Loose;
+  const pick = (k: string) => (raw[k] !== undefined ? raw[k] : diag[k]);
+  const tools = arr(raw.tools).map(normaliseRoutedTool);
+  const filtered = arr(pick("policyFiltered") ?? pick("filtered")).map(normaliseFiltered);
+  const stages: PipelineStage[] = arr(pick("stages")).map((st) => ({
+    stage: String(st.stage ?? st.name ?? "stage"),
+    before: Number(st.before ?? 0),
+    after: Number(st.after ?? 0),
+  }));
+  const clamps = arr(pick("clamps") ?? pick("budgets")) as unknown as BudgetClamp[];
+  return {
+    requestId: (raw.requestId as string | undefined) ?? undefined,
+    agentId: String(raw.agentId ?? agentId),
+    tools,
+    fallbackUsed: raw.fallbackUsed === true,
+    noMatch: raw.noMatch === true || tools.length === 0,
+    latencyMs: Number(raw.latencyMs ?? 0),
+    maxToolsApplied: numOrNull(raw.maxToolsApplied),
+    maxServersApplied: numOrNull(raw.maxServersApplied),
+    clamps: clamps.map((c) => ({
+      budget: String(c.budget),
+      requested: numOrNull(c.requested),
+      principal: numOrNull(c.principal),
+      globalCap: numOrNull(c.globalCap),
+      applied: numOrNull(c.applied),
+      clampedBy: (c.clampedBy as string | null | undefined) ?? null,
+    })),
+    candidates: numOrNull(pick("candidates") ?? pick("candidateCount")),
+    stages,
+    filtered,
+  };
+}
+
+/**
+ * Admin-only: route `query` under a named agent's scope and budgets without
+ * publishing exposure (the agent's MCP tools/list is untouched).
+ */
+// CONTRACT: POST /api/v1/route/simulate {agentId, query, maxTools?, maxServers?}; see SimulateResponse.
+export async function simulateAgent(body: SimulateRequest, signal?: AbortSignal): Promise<SimulateResponse> {
+  const raw = await request<Loose>("POST", `${API_BASE}/route/simulate`, { body, signal });
+  return normaliseSimulation(raw ?? {}, body.agentId);
+}
+
+// --------------------------------------------------------------- analytics
+// Aligned to B's wave-2 routes_analytics.py: admin-only, ?window=7d|30d|90d.
+const ANALYTICS = `${API_BASE}/analytics`;
+
+export function getAnalyticsOverview(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsOverview> {
+  return request("GET", `${ANALYTICS}/overview`, { signal, query: { window } });
+}
+
+export async function listToolFunnels(
+  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number },
+  signal?: AbortSignal,
+): Promise<ToolFunnelPage> {
+  const raw = await request<ToolFunnelPage>("GET", `${ANALYTICS}/tools`, {
+    signal,
+    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset },
+  });
+  return { ...raw, ...toPage(raw, q.limit, q.offset) };
+}
+
+export function getToolAnalytics(toolId: string, window: AnalyticsWindow, signal?: AbortSignal): Promise<ToolAnalytics> {
+  return request("GET", `${ANALYTICS}/tools/${encodeURIComponent(toolId)}`, { signal, query: { window } });
+}
+
+export async function listAgentProfiles(window: AnalyticsWindow, signal?: AbortSignal): Promise<AgentProfile[]> {
+  return toList<AgentProfile>(await request("GET", `${ANALYTICS}/agents`, { signal, query: { window } }));
+}
+
+/** Wasted exposure + staleness; thresholds left at the backend defaults. */
+export function getAnalyticsSuggestions(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsSuggestions> {
+  return request("GET", `${ANALYTICS}/suggestions`, { signal, query: { window } });
 }

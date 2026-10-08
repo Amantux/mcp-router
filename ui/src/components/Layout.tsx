@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router";
-import { makeStyles, mergeClasses, Text, tokens } from "@fluentui/react-components";
+import { Button, makeStyles, mergeClasses, Text, tokens } from "@fluentui/react-components";
 import {
   ServerRegular,
   WrenchRegular,
@@ -8,15 +9,24 @@ import {
   HeartPulseRegular,
   HistoryRegular,
   ShieldKeyholeRegular,
+  SettingsRegular,
+  PlayCircleRegular,
+  PersonClockRegular,
+  DataBarVerticalRegular,
 } from "@fluentui/react-icons";
 import type { ReactNode } from "react";
 import { NotificationStack } from "./Notifications";
+import { AuthBanner, ConnectionIndicator, ConnectPanel } from "./ConnectPanel";
+import { useAuth } from "../api/auth";
 
 export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
   { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
-  { to: "/simulator", label: "Routing simulator", icon: <DirectionsRegular /> },
+  { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
+  { to: "/analytics", label: "Analytics", icon: <DataBarVerticalRegular /> },
+  { to: "/playground", label: "Tool playground", icon: <PlayCircleRegular /> },
+  { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
   { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },
   { to: "/executions", label: "Execution history", icon: <HistoryRegular /> },
   { to: "/policy", label: "Policy", icon: <ShieldKeyholeRegular /> },
@@ -49,11 +59,15 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
     fontWeight: tokens.fontWeightSemibold,
   },
+  spacer: { flex: 1 },
+  connect: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXS, padding: `0 ${tokens.spacingHorizontalS}` },
   main: { overflow: "auto", padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, minWidth: 0 },
 });
 
 export function Layout() {
   const s = useStyles();
+  const auth = useAuth();
+  const [connectOpen, setConnectOpen] = useState(false);
   return (
     <div className={s.shell}>
       <nav className={s.nav} aria-label="Primary">
@@ -66,11 +80,21 @@ export function Layout() {
             {n.label}
           </NavLink>
         ))}
+        <div className={s.spacer} />
+        <div className={s.connect}>
+          <ConnectionIndicator />
+          <Button appearance="subtle" size="small" icon={<SettingsRegular />} onClick={() => setConnectOpen(true)} style={{ justifyContent: "flex-start" }}>
+            Connect
+          </Button>
+        </div>
       </nav>
       <main className={s.main}>
+        <AuthBanner onOpen={() => setConnectOpen(true)} />
         <NotificationStack />
-        <Outlet />
+        {/* Remount pages when credentials change so every view refetches under the new identity. */}
+        <Outlet key={auth.epoch} />
       </main>
+      <ConnectPanel open={connectOpen} onClose={() => setConnectOpen(false)} />
     </div>
   );
 }

@@ -6,6 +6,9 @@ import "./index.css";
 import { router } from "./routes";
 import { useColorScheme } from "./hooks/useColorScheme";
 import { NotificationsProvider } from "./components/Notifications";
+import { hydrateAuth } from "./api/auth";
+
+hydrateAuth();
 
 function Root() {
   const scheme = useColorScheme();

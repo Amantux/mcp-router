@@ -2,23 +2,26 @@ import { vi } from "vitest";
 import type { ReactElement } from "react";
 import { render } from "@testing-library/react";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { MemoryRouter } from "react-router";
 import { NotificationsProvider, NotificationStack } from "../components/Notifications";
 
-export function renderWithProviders(ui: ReactElement) {
-  return render(
+export function renderWithProviders(ui: ReactElement, opts: { route?: string } = {}) {
+  const tree = (
     <FluentProvider theme={webLightTheme}>
       <NotificationsProvider>
         <NotificationStack />
         {ui}
       </NotificationsProvider>
-    </FluentProvider>,
+    </FluentProvider>
   );
+  return render(opts.route !== undefined ? <MemoryRouter initialEntries={[opts.route]}>{tree}</MemoryRouter> : tree);
 }
 
 export interface FetchCall {
   url: string;
   method: string;
   body: unknown;
+  headers: Record<string, string>;
 }
 
 /** Installs a fetch mock answering by "METHOD path" (query string ignored); records calls. */
@@ -28,7 +31,9 @@ export function mockFetch(routes: Record<string, (body: unknown) => { status?: n
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
-    calls.push({ url, method, body });
+    const headers: Record<string, string> = {};
+    new Headers(init?.headers).forEach((v, k) => (headers[k] = v));
+    calls.push({ url, method, body, headers });
     const key = `${method} ${url.split("?")[0]}`;
     const handler = routes[key];
     if (!handler) return new Response("not mocked", { status: 404 });
