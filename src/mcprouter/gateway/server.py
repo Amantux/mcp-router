@@ -307,6 +307,9 @@ class GatewayServer:
                     MCPToolRecord.enabled.is_(True),
                     MCPToolRecord.available.is_(True),
                     MCPServerRecord.enabled.is_(True),
+                    # Discovery's eligibility rule, same as routing's retriever
+                    # (integration gap 6): an offline server's tools are not shown.
+                    MCPServerRecord.status != "offline",
                 )
             )
             if exposure is not None:

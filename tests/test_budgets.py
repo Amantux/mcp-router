@@ -239,3 +239,24 @@ async def test_gateway_exposure_honours_principal_max_servers(world: dict[str, A
     await gw._find_tools(p, {"query": "issues"})
     req = world["route"].requests[-1]
     assert req.max_servers == 1
+
+
+# ------------------------------------------------- lifecycle gap 6 (offline)
+@requires_db
+async def test_gateway_exposure_excludes_offline_servers(world: dict[str, Any]) -> None:  # noqa: F811
+    """Integration gap 6: discovery's eligibility rule (server not offline)
+    also applies to the gateway's exposure, for routed and default lists."""
+    from mcprouter.models import MCPServerRecord
+
+    gw, cat, db, route = world["gw"], world["cat"], world["db"], world["route"]
+    add_rule(db, "alice", max_operation="read")
+    before = await _names(gw, cat, "alice")
+    assert "files.read_file" in before
+    with db() as s:
+        srv = s.scalars(select(MCPServerRecord).where(MCPServerRecord.name == "files")).one()
+        srv.status = "offline"
+        s.commit()
+    assert "files.read_file" not in await _names(gw, cat, "alice")  # default list
+    world["route"].picks = ["files.read_file", "github.list_issues"]
+    await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
+    assert await _names(gw, cat, "alice") == ["github.list_issues", META_TOOL]  # routed list
