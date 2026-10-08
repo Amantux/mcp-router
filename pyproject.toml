@@ -1,0 +1,61 @@
+[project]
+name = "mcprouter"
+version = "0.1.0"
+description = "MCP Intelligent Routing Platform — local-first MCP discovery, cataloging, and intelligent tool routing"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.142.4",
+  "uvicorn[standard]==0.52.3",
+  "sqlalchemy==2.0.52",
+  "psycopg[binary]==3.3.6",
+  "pgvector==0.5.0",
+  "alembic==1.17.1",
+  "pydantic==2.13.5",
+  "mcp==2.3.0",
+  "httpx==0.28.1",
+  "prometheus-client==0.24.1",
+  "structlog==25.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.15.22",
+  "mypy==2.3.0",
+  "types-requests",
+]
+# Inference extra: heavy, optional — the app must run (deterministic fallback)
+# without it. CPU-only torch on this dev box; CUDA wheels on the target laptop.
+inference = [
+  "torch>=2.4",
+  "transformers>=4.48",
+  "sentence-transformers>=3.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcprouter"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "testbed"]
+
+[tool.ruff.lint]
+# Pinned select (house rule): no version-default drift.
+select = ["E4", "E7", "E9", "F", "W", "I", "B", "UP", "BLE"]
+ignore = ["B008"]  # FastAPI Depends() in defaults — framework idiom
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["mcprouter"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
