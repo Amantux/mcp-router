@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
@@ -63,6 +63,8 @@ TOOL_NAME_MAX = 200  # MCPToolRecord.name String(200)
 MAX_TOOLS_PER_SERVER = 5000  # a hostile/buggy server must not flood the catalog
 
 ConnectorFactory = Callable[[MCPServerRecord, ServerTarget], Connector]
+# Called with the reports of a sync that changed the catalog (sync, worker thread).
+PostSyncHook = Callable[[Sequence["SyncReport"]], None]
 
 
 def default_connector_factory(server: MCPServerRecord, target: ServerTarget) -> Connector:
@@ -289,12 +291,17 @@ class DiscoveryService:
         connector_factory: ConnectorFactory = default_connector_factory,
         health: HealthTracker | None = None,
         concurrency: int = 16,
+        post_sync: PostSyncHook | None = None,
     ) -> None:
         self._sf = session_factory
         self._connector_factory = connector_factory
         self.health = health or HealthTracker()
         self._concurrency = concurrency
         self._locks: dict[str, anyio.Lock] = {}
+        # Lifecycle hook (mcprouter.lifecycle): classify + embed after any
+        # sync that changed the catalog. Runs in a worker thread, outside the
+        # per-server lock; once per sync_server call, once per sync_all pass.
+        self._post_sync = post_sync
 
     # ------------------------------------------------------------- helpers
     def _load_server(self, server_id: str) -> MCPServerRecord:
@@ -335,7 +342,23 @@ class DiscoveryService:
     async def sync_server(self, server_id: str) -> SyncReport:
         """Discover one server. Raises ``ConnectorError`` (curated) when the
         server can't be listed — after recording the health failure — and
-        ``ServerDisabledError`` for a disabled server (never spawned/dialled)."""
+        ``ServerDisabledError`` for a disabled server (never spawned/dialled).
+        Runs the post-sync hook when the catalog changed."""
+        report = await self._sync_one(server_id)
+        if report.changed:
+            await self._run_post_sync([report])
+        return report
+
+    async def _run_post_sync(self, reports: list[SyncReport]) -> None:
+        hook = self._post_sync
+        if hook is None or not reports:
+            return
+        try:
+            await anyio.to_thread.run_sync(hook, reports)
+        except Exception as exc:  # noqa: BLE001 — the sync itself succeeded and is committed
+            log.warning("post-sync hook failed: %s", type(exc).__name__)
+
+    async def _sync_one(self, server_id: str) -> SyncReport:
         lock = self._locks.setdefault(server_id, anyio.Lock())
         async with lock:
             server = await anyio.to_thread.run_sync(self._load_server, server_id)
@@ -416,7 +439,7 @@ class DiscoveryService:
         async def one(sid: str) -> None:
             async with limiter:
                 try:
-                    results[sid] = await self.sync_server(sid)
+                    results[sid] = await self._sync_one(sid)  # hook runs once below
                 except ConnectorError as exc:
                     results[sid] = exc
                 except (ServerNotFoundError, ServerDisabledError):
@@ -428,8 +451,10 @@ class DiscoveryService:
         async with anyio.create_task_group() as tg:
             for sid in ids:
                 tg.start_soon(one, sid)
-        if any(isinstance(r, SyncReport) and r.changed for r in results.values()):
+        changed = [r for r in results.values() if isinstance(r, SyncReport) and r.changed]
+        if changed:
             await anyio.to_thread.run_sync(self._analyze)
+            await self._run_post_sync(changed)
         return results
 
     def _analyze(self) -> None:

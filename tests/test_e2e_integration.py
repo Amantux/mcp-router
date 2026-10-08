@@ -4,7 +4,7 @@ One real process stack, no fakes on the request path:
 
   testbed fleet (3 real MCP servers over streamable HTTP, port 8700)
   <- discovery (admin REST: register + refresh)
-  -> rule classifier + embed_pending_tools (hash backend)
+  -> post-sync hook on refresh: rule classifier + embed_pending_tools (hash)
   -> admin policy rule: agent1 may READ on server 1 (github) only
   -> agent1 POST /api/v1/route  (authenticated, policy-scoped, hash/deterministic)
   -> agent1 MCP session on /mcp (uvicorn, port 8710): tools/list shows exactly
@@ -28,7 +28,7 @@ import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 from testbed.harness import http_fleet
 
@@ -37,8 +37,6 @@ from mcprouter.gateway.server import META_TOOL
 from mcprouter.inference.hash_backend import HashEmbeddingBackend
 from mcprouter.inference.pipeline import embed_pending_tools
 from mcprouter.models import ExecutionRecord, MCPToolRecord
-from mcprouter.registry.catalog import auto_classify
-from mcprouter.registry.classify import RuleBasedClassifier
 from mcprouter.settings import Settings
 
 from .conftest import TEST_DB_URL, requires_db
@@ -128,11 +126,18 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         assert {server1, server2} <= set(ids)
 
         # -- classify (rules-v1) + embed (hash backend) ------------------------
+        # Done by the refresh's post-sync hook (wave 2, integration gap 1):
+        # nothing is left for a manual pass.
         with db() as s:
-            assert auto_classify(s, RuleBasedClassifier()).classified > 0
             report = embed_pending_tools(s, HashEmbeddingBackend())
             s.commit()
-        assert report.embedded > 0
+            unclassified = s.scalar(
+                select(func.count())
+                .select_from(MCPToolRecord)
+                .where(MCPToolRecord.classification_source.is_(None))
+            )
+        assert report.embedded == 0 and report.skipped > 0
+        assert unclassified == 0
 
         # -- policy: agent1 may READ on server1 only ---------------------------
         r = await http.post(

@@ -7,6 +7,9 @@ Order matters:
   scope, decision deadline) -> execution manager (connector invoker) ->
   policy/approval routes -> MCP gateway at /mcp (wraps the lifespan).
 
+Wave 2 (budgets/cache/lifecycle): DiscoveryService carries the post-sync
+classify+embed hook (mcprouter.lifecycle).
+
 Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
 routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
 """
@@ -37,6 +40,7 @@ from mcprouter.gateway.server import build_gateway
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
 from mcprouter.inference.engine import InferenceEngine
 from mcprouter.interfaces import RouteRequest, RouteResult
+from mcprouter.lifecycle import make_post_sync_hook
 from mcprouter.policy.scope import policy_scope_resolver
 from mcprouter.registry.schema import init_registry
 from mcprouter.routing.pipeline import RoutePipeline
@@ -100,7 +104,15 @@ def create_app(
         )
 
     app.state.inference_engine = inference
-    app.state.discovery = DiscoveryService(factory)
+    embedder = EngineEmbedder(inference)
+    # Post-sync lifecycle (integration gap 1): classify + embed after any sync
+    # that changed the catalog — manual refresh and the SyncLoop alike.
+    app.state.discovery = DiscoveryService(
+        factory,
+        post_sync=make_post_sync_hook(
+            factory, embedder, embed_batch_size=settings.embed_batch_size
+        ),
+    )
 
     # Management API — all admin-gated by the gateway's require_admin
     # (servers/models/executions at the router; tools/dedup via the registry
@@ -115,7 +127,7 @@ def create_app(
     scope_resolver = policy_scope_resolver(factory, security)
     pipeline = RoutePipeline(
         factory,
-        HybridRetriever(factory, EngineEmbedder(inference)),
+        HybridRetriever(factory, embedder),
         DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s),
         settings,
     )
