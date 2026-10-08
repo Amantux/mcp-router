@@ -11,7 +11,8 @@ import {
   Subtitle2,
   tokens,
 } from "@fluentui/react-components";
-import { DismissRegular } from "@fluentui/react-icons";
+import { DismissRegular, PlayRegular } from "@fluentui/react-icons";
+import { Link } from "react-router";
 import { getTool } from "../api/client";
 import type { MCPTool, ToolVersion } from "../api/types";
 import { fmtInt, fmtMs, fmtTime, JsonBlock, LoadingRow, OperationBadge, useCommonStyles } from "../components/common";
@@ -97,6 +98,9 @@ export function ToolDetailDrawer({ toolId, onClose, onChanged }: { toolId: strin
             {!t.enabled && <Badge color="danger" appearance="tint" size="small">disabled</Badge>}
             {t.available === false && <Badge color="warning" appearance="tint" size="small">unavailable</Badge>}
             <Caption1 className={c.muted}>v{t.version}</Caption1>
+            <Link to={`/playground?tool=${encodeURIComponent(t.id)}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <PlayRegular /> Try in playground
+            </Link>
           </div>
         )}
       </DrawerHeader>

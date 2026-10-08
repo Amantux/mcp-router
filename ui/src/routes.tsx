@@ -8,6 +8,8 @@ import { SimulatorPage } from "./pages/SimulatorPage";
 import { HealthPage } from "./pages/HealthPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
 import { PolicyPage } from "./pages/PolicyPage";
+import { PlaygroundPage } from "./pages/PlaygroundPage";
+import { ApprovalsPage } from "./pages/ApprovalsPage";
 
 const PAGES: Record<string, ReactNode> = {
   "/servers": <ServersPage />,
@@ -17,6 +19,8 @@ const PAGES: Record<string, ReactNode> = {
   "/health": <HealthPage />,
   "/executions": <ExecutionsPage />,
   "/policy": <PolicyPage />,
+  "/playground": <PlaygroundPage />,
+  "/approvals": <ApprovalsPage />,
 };
 
 export const router = createBrowserRouter([

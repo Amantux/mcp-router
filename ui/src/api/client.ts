@@ -12,7 +12,11 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
+  Approval,
+  ApprovalDecision,
+  ApprovalStatus,
   ClassificationUpdate,
+  ExecuteResult,
   CreatePrincipalRequest,
   CreateRuleRequest,
   CreatedPrincipal,
@@ -33,6 +37,7 @@ import type {
   RoutedTool,
   ToolDetail,
   ToolQuery,
+  JsonObject,
 } from "./types";
 import { bearerFor, effectiveIdentity, noteResponse, setAgentId, type Identity } from "./auth";
 
@@ -41,7 +46,9 @@ export const API_BASE = "/api/v1";
 export const METRICS_URL = "/metrics";
 
 // ------------------------------------------------------------ case mapping
-const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores"]);
+// Opaque = user/tool data: tool schemas, version snapshots, score maps, tool
+// call arguments and outputs, approval summaries (redacted arguments).
+const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores", "arguments", "content", "structuredContent", "summary"]);
 
 export function snakeToCamel(key: string): string {
   return key.replace(/_+([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
@@ -408,4 +415,44 @@ export async function getMe(signal?: AbortSignal): Promise<Principal> {
   const me = await request<Principal>("GET", `${API_BASE}/me`, { signal, as: "agent" });
   setAgentId(me.agentId);
   return me;
+}
+
+// --------------------------------------------------------------- execution
+/**
+ * Run a tool through the execution manager (the only path to an upstream
+ * tool). Made as the agent key when set, else the admin token. Returns the
+ * manager's outcome for every status — a policy denial is a 200 with
+ * status "denied", not an exception. `roundTripMs` is measured here.
+ */
+// CONTRACT: POST /api/v1/tools/{id}/execute {arguments}; see ExecuteResult in types.ts.
+export async function executeTool(toolId: string, args: JsonObject, signal?: AbortSignal): Promise<ExecuteResult & { roundTripMs: number }> {
+  const t0 = performance.now();
+  const raw = await request<ExecuteResult>("POST", `${API_BASE}/tools/${encodeURIComponent(toolId)}/execute`, {
+    body: { arguments: args },
+    signal,
+    as: "agent",
+  });
+  return { ...raw, errors: raw.errors ?? [], roundTripMs: performance.now() - t0 };
+}
+
+export async function listApprovals(status?: ApprovalStatus, signal?: AbortSignal): Promise<Approval[]> {
+  return toList<Approval>(await request("GET", `${API_BASE}/approvals`, { signal, query: { status } }));
+}
+
+/**
+ * One approval's current state. With an agent key: GET /me/approvals/{id}
+ * (agents see only their own). Without: the admin list, filtered by id (there
+ * is no admin get-by-id endpoint). Undefined if it no longer exists.
+ */
+export async function getApproval(id: string, asAgent: boolean, signal?: AbortSignal): Promise<Approval | undefined> {
+  if (asAgent) return request<Approval>("GET", `${API_BASE}/me/approvals/${encodeURIComponent(id)}`, { signal, as: "agent" });
+  return (await listApprovals(undefined, signal)).find((a) => a.id === id);
+}
+
+export function approveApproval(id: string): Promise<ApprovalDecision> {
+  return request("POST", `${API_BASE}/approvals/${encodeURIComponent(id)}/approve`);
+}
+
+export function denyApproval(id: string): Promise<ApprovalDecision> {
+  return request("POST", `${API_BASE}/approvals/${encodeURIComponent(id)}/deny`);
 }

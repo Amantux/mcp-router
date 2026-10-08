@@ -238,3 +238,66 @@ export interface PolicyRule {
 }
 
 export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt">;
+
+// -------------------------------------------------------------- execution
+/** execution/manager.py statuses (ExecutionResult.status). */
+export type ExecutionStatus =
+  | "ok"
+  | "error"
+  | "timeout"
+  | "denied"
+  | "rate_limited"
+  | "unavailable"
+  | "invalid_args"
+  | "pending_approval"
+  | "cancelled";
+
+/** MCP tool output (interfaces.ToolCallResult), camelised; content blocks are tool data. */
+export interface ToolCallOutput {
+  content: JsonObject[];
+  isError?: boolean;
+  structuredContent?: JsonValue | null;
+}
+
+// CONTRACT: POST /api/v1/tools/{toolId}/execute {arguments} → ExecutionManager's
+// ExecutionResult {status, detail, recordId, approvalId?, errors[], result?}
+// plus an optional server-side latencyMs. No REST execute endpoint exists in
+// v0.1 (execution is /mcp tools/call + the approval endpoint); the integrator
+// adds it or repoints executeTool() in client.ts. The request is made as the
+// agent key when one is set, else the admin token — the backend decides which
+// principal an admin-token call runs under.
+export interface ExecuteResult {
+  status: ExecutionStatus;
+  /** Curated, redacted audit detail written by the manager. */
+  detail: string;
+  recordId: string | null;
+  approvalId?: string | null;
+  /** invalid_args only: "path: keyword" (never values). */
+  errors?: string[];
+  result?: ToolCallOutput | null;
+  latencyMs?: number | null;
+}
+
+export type ApprovalStatus = "pending" | "executing" | "executed" | "failed" | "denied" | "expired";
+
+/** routes_policy.ApprovalOut. `summary` holds the tool id, operation and REDACTED arguments. */
+export interface Approval {
+  id: string;
+  agentId: string;
+  toolId: string;
+  status: ApprovalStatus;
+  summary: { tool?: string; operation?: string; arguments?: JsonValue } & JsonObject;
+  createdAt: string;
+  expiresAt: string;
+  decidedAt: string | null;
+  resultPreview: string | null;
+}
+
+/** routes_policy.ApprovalDecision */
+export interface ApprovalDecision {
+  approvalId: string;
+  status: string;
+  detail: string;
+  recordId: string | null;
+  resultPreview?: string | null;
+}

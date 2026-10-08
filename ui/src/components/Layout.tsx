@@ -10,6 +10,8 @@ import {
   HistoryRegular,
   ShieldKeyholeRegular,
   SettingsRegular,
+  PlayCircleRegular,
+  PersonClockRegular,
 } from "@fluentui/react-icons";
 import type { ReactNode } from "react";
 import { NotificationStack } from "./Notifications";
@@ -21,6 +23,8 @@ export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
   { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
   { to: "/simulator", label: "Routing simulator", icon: <DirectionsRegular /> },
+  { to: "/playground", label: "Tool playground", icon: <PlayCircleRegular /> },
+  { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
   { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },
   { to: "/executions", label: "Execution history", icon: <HistoryRegular /> },
   { to: "/policy", label: "Policy", icon: <ShieldKeyholeRegular /> },

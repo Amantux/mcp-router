@@ -2,17 +2,19 @@ import { vi } from "vitest";
 import type { ReactElement } from "react";
 import { render } from "@testing-library/react";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
+import { MemoryRouter } from "react-router";
 import { NotificationsProvider, NotificationStack } from "../components/Notifications";
 
-export function renderWithProviders(ui: ReactElement) {
-  return render(
+export function renderWithProviders(ui: ReactElement, opts: { route?: string } = {}) {
+  const tree = (
     <FluentProvider theme={webLightTheme}>
       <NotificationsProvider>
         <NotificationStack />
         {ui}
       </NotificationsProvider>
-    </FluentProvider>,
+    </FluentProvider>
   );
+  return render(opts.route !== undefined ? <MemoryRouter initialEntries={[opts.route]}>{tree}</MemoryRouter> : tree);
 }
 
 export interface FetchCall {
