@@ -73,7 +73,10 @@ def _parse_entry(name: str, raw: Any) -> ServerRegistration:
         raise InvalidRegistrationError("entry must be an object")
     if raw.get("headers"):
         raise InvalidRegistrationError("HTTP headers are not supported yet; entry not imported")
-    enabled = not bool(raw.get("disabled", False))
+    disabled = raw.get("disabled", False)
+    if not isinstance(disabled, bool):
+        raise InvalidRegistrationError("disabled must be true or false")
+    enabled = not disabled
     kind = str(raw.get("type") or raw.get("transport") or "").strip().lower()
     if "url" in raw:
         transport = _HTTP_TYPES.get(kind or "http")

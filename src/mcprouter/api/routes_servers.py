@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 import anyio.to_thread
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -29,6 +30,7 @@ from mcprouter.discovery import (
     DiscoveryService,
     DuplicateServerError,
     InvalidRegistrationError,
+    ServerDisabledError,
     ServerInUseError,
     ServerNotFoundError,
     ServerRegistration,
@@ -120,7 +122,7 @@ def _views(session: Session, servers: list[MCPServerRecord]) -> list[ServerOut]:
             id=s.id,
             name=s.name,
             transport=s.transport,
-            endpoint=s.endpoint,
+            endpoint=redact_endpoint(s.endpoint),
             enabled=s.enabled,
             status=s.status,
             version=s.server_version,
@@ -131,6 +133,17 @@ def _views(session: Session, servers: list[MCPServerRecord]) -> list[ServerOut]:
         )
         for s in servers
     ]
+
+
+def redact_endpoint(url: str | None) -> str | None:
+    """Query strings commonly carry API keys (``?api_key=...``): never echo
+    them. (Secrets embedded in the PATH can't be detected generically.)"""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    if not parts.query and not parts.fragment:
+        return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "redacted", ""))
 
 
 def _not_found() -> HTTPException:
@@ -186,6 +199,8 @@ def import_servers(body: dict[str, Any], request: Request) -> ImportOut:
             created = _views(s, rep.created)
     except InvalidRegistrationError as exc:  # whole-document format errors
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.message) from None
+    except IntegrityError:  # lost a race with a concurrent create/import
+        raise HTTPException(status.HTTP_409_CONFLICT, _DUPLICATE) from None
     return ImportOut(
         created=created, skipped=[ImportSkip(name=n, reason=r) for n, r in rep.skipped]
     )
@@ -204,6 +219,8 @@ async def refresh_server(server_id: str, request: Request) -> RefreshOut:
         report: SyncReport = await svc.sync_server(server_id)
     except ServerNotFoundError:
         raise _not_found() from None
+    except ServerDisabledError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from None
     except ConnectorError as exc:
         code = _CONNECTOR_STATUS.get(exc.kind, status.HTTP_502_BAD_GATEWAY)
         raise HTTPException(code, f"discovery failed: {exc.message}") from None

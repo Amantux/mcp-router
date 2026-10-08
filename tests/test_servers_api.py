@@ -17,7 +17,7 @@ from testbed.harness import InprocFleet, stdio_command_for_index, stdio_env
 from mcprouter.api.app import create_app
 from mcprouter.api.routes_servers import router
 from mcprouter.discovery import DiscoveryService
-from mcprouter.models import PolicyRule
+from mcprouter.models import ExecutionRecord, PolicyRule
 from mcprouter.settings import Settings
 
 from .conftest import TEST_DB_URL, requires_db
@@ -219,3 +219,42 @@ def test_delete_guarded_by_policy_rules(db: SF, client: TestClient, fleet: Inpro
         s.execute(PolicyRule.__table__.delete().where(PolicyRule.server_id == sid))
     assert client.delete(f"/api/v1/servers/{sid}").status_code == 204
     assert client.delete(f"/api/v1/servers/{sid}").status_code == 404
+
+
+def test_refresh_of_disabled_server_conflicts(client: TestClient, fleet: InprocFleet) -> None:
+    r = client.post(
+        "/api/v1/servers",
+        json={
+            "name": "github",
+            "transport": "streamable-http",
+            "endpoint": fleet.endpoint("github"),
+            "enabled": False,
+        },
+    )
+    sid = r.json()["id"]
+    resp = client.post(f"/api/v1/servers/{sid}/refresh")
+    assert resp.status_code == 409 and resp.json() == {"detail": "server is disabled"}
+
+
+def test_endpoint_query_secrets_are_redacted(client: TestClient) -> None:
+    r = client.post(
+        "/api/v1/servers",
+        json={
+            "name": "zap",
+            "transport": "streamable-http",
+            "endpoint": f"https://mcp.example.com/mcp?api_key={SECRET}",
+        },
+    )
+    assert r.status_code == 201
+    assert r.json()["endpoint"] == "https://mcp.example.com/mcp?redacted"
+    assert SECRET not in client.get("/api/v1/servers").text
+
+
+def test_delete_refused_with_execution_history(
+    db: SF, client: TestClient, fleet: InprocFleet
+) -> None:
+    sid = str(_create_inproc(client, fleet, "github")["id"])
+    with db() as s, s.begin():
+        s.add(ExecutionRecord(agent_id="a", server_id=sid, outcome="ok"))
+    r = client.delete(f"/api/v1/servers/{sid}")
+    assert r.status_code == 409 and "execution history" in r.json()["detail"]

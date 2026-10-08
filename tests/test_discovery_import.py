@@ -159,3 +159,29 @@ async def test_delete_refused_while_policy_rule_references_server(db: SF) -> Non
         )
         n_versions = s.scalar(select(func.count()).select_from(ToolVersionRecord))
     assert n_tools == 0 and n_versions == 0
+
+
+def test_disabled_must_be_a_real_boolean() -> None:
+    items = parse_mcp_servers_config(_cfg(x={"url": "https://h/mcp", "disabled": "false"}))
+    assert items[0].error == "disabled must be true or false"
+
+
+@requires_db
+def test_seed_refuses_to_repoint_a_real_server(db: SF) -> None:
+    from testbed.fleet import generate_fleet
+    from testbed.seed import register_fleet
+
+    with db() as s, s.begin():
+        s.add(
+            MCPServerRecord(
+                id="11111111-1111-1111-1111-111111111111",
+                name="github",
+                transport="streamable-http",
+                endpoint="https://api.githubcopilot.example/mcp",
+            )
+        )
+    with pytest.raises(SystemExit):
+        register_fleet(db, generate_fleet(1), lambda n: f"http://127.0.0.1:8600/{n}/mcp")
+    with db() as s:
+        srv = s.get(MCPServerRecord, "11111111-1111-1111-1111-111111111111")
+        assert srv is not None and srv.endpoint == "https://api.githubcopilot.example/mcp"

@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 import anyio
 from sqlalchemy import func, select
@@ -37,6 +39,13 @@ from mcprouter.models import MCPServerRecord, MCPToolRecord
 from mcprouter.settings import Settings
 from testbed.fleet import ServerSpec, generate_fleet
 from testbed.harness import InprocFleet, http_fleet
+
+
+def is_testbed_endpoint(url: str | None, name: str) -> bool:
+    if not url:
+        return False
+    parts = urlsplit(url)
+    return parts.path == f"/{name}/mcp" and parts.hostname in ("127.0.0.1", "inproc.invalid")
 
 
 def register_fleet(
@@ -62,6 +71,12 @@ def register_fleet(
                     select(MCPServerRecord).where(MCPServerRecord.name == spec.name)
                 )
                 assert existing is not None
+                if not is_testbed_endpoint(existing.endpoint, spec.name):
+                    # A real server with a colliding name ("github"...): never
+                    # repoint it at the testbed and wipe its catalog.
+                    raise SystemExit(
+                        f"refusing to reuse non-testbed server {spec.name!r}; seed an empty database"
+                    ) from None
                 existing.endpoint = endpoint(spec.name)
                 ids.append(existing.id)
     return ids
@@ -103,9 +118,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--database-url", default=None, help="defaults to MCPR_DATABASE_URL")
     args = ap.parse_args(argv)
 
-    settings = Settings.from_env()
-    if args.database_url:
-        settings = Settings(database_url=args.database_url)
+    # No silent fallback to the app's default database: seeding is explicit.
+    url = args.database_url or os.environ.get("MCPR_DATABASE_URL", "").strip()
+    if not url:
+        ap.error("set --database-url or MCPR_DATABASE_URL (no default for seeding)")
+    settings = Settings(database_url=url)
     engine = make_engine(settings)
     init_db(engine)
     factory = make_session_factory(engine)

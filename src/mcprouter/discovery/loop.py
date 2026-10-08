@@ -94,9 +94,12 @@ class SyncLoop:
             >= self._health_interval_s
         ]
         if to_sync:
-            results = await self._service.sync_all(server_ids=to_sync)
+            # Mark BEFORE awaiting: a failed/cancelled pass must not cause every
+            # server to be re-synced on every tick.
             for sid in to_sync:
                 self._last_sync[sid] = now
+            results = await self._service.sync_all(server_ids=to_sync)
+            for sid in to_sync:
                 if not isinstance(results.get(sid), SyncReport):
                     log.info("scheduled sync failed for server id %s", scrub(sid))
         if to_check:

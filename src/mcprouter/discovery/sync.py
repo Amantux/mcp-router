@@ -28,7 +28,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
@@ -40,8 +40,20 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.discovery.hashing import metadata_fingerprint, schema_hash
 from mcprouter.discovery.health import HealthTracker
 from mcprouter.discovery.logsafe import scrub
-from mcprouter.discovery.registry import ServerNotFoundError, get_server, target_for
-from mcprouter.mcpclient import Connector, ConnectorError, ServerInfo, ServerTarget, ToolDescriptor
+from mcprouter.discovery.registry import (
+    ServerDisabledError,
+    ServerNotFoundError,
+    get_server,
+    target_for,
+)
+from mcprouter.mcpclient import (
+    Connector,
+    ConnectorError,
+    ProtocolFailureError,
+    ServerInfo,
+    ServerTarget,
+    ToolDescriptor,
+)
 from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolVersionRecord, utcnow
 
 log = logging.getLogger(__name__)
@@ -91,6 +103,10 @@ def snapshot(d: ToolDescriptor, shash: str) -> dict[str, Any]:
     }
 
 
+def _no_nul(text: str) -> str:
+    return text.replace("\x00", "")
+
+
 def _record_snapshot(rec: MCPToolRecord) -> dict[str, Any]:
     """Snapshot for a removal: the last known definition."""
     return {
@@ -134,7 +150,7 @@ def apply_listing(
     report = SyncReport(server_id=server_id)
     server = session.get(MCPServerRecord, server_id, with_for_update=True)
     if server is None:
-        raise LookupError("server vanished during sync")
+        raise ServerNotFoundError("server not found")
     existing = {
         t.name: t
         for t in session.scalars(select(MCPToolRecord).where(MCPToolRecord.server_id == server_id))
@@ -149,10 +165,22 @@ def apply_listing(
         if len(seen) >= MAX_TOOLS_PER_SERVER:
             report.skipped += 1
             continue
-        if not d.name or len(d.name) > TOOL_NAME_MAX or d.name in seen:
+        if (
+            not d.name
+            or len(d.name) > TOOL_NAME_MAX
+            or d.name in seen
+            or any(ord(c) < 32 or ord(c) == 127 for c in d.name)
+        ):
             report.skipped += 1
             continue
         seen.add(d.name)
+        # PostgreSQL text cannot hold NUL; a hostile server must not be able
+        # to fail the whole transaction with one.
+        d = replace(
+            d,
+            description=_no_nul(d.description),
+            title=_no_nul(d.title) if d.title is not None else None,
+        )
         shash = schema_hash(d.input_schema)
         snap = snapshot(d, shash)
         rec = existing.get(d.name)
@@ -208,14 +236,16 @@ def apply_listing(
         if name not in seen and rec.available:
             rec.available = False
             rec.version += 1
-            pending.append(_version(rec, "removed", _record_snapshot(rec), now))
+            pending.append(
+                _version(rec, "removed", prev_snaps.get(rec.id) or _record_snapshot(rec), now)
+            )
             report.removed.append(name)
 
     session.flush()
     session.add_all(pending)
 
     if info is not None and info.version:
-        server.server_version = info.version[:64]
+        server.server_version = _no_nul(info.version)[:64]
     server.last_discovered_at = now
     if report.skipped:
         log.warning(
@@ -262,6 +292,10 @@ class DiscoveryService:
         self._locks: dict[str, anyio.Lock] = {}
 
     # ------------------------------------------------------------- helpers
+    def _load_server(self, server_id: str) -> MCPServerRecord:
+        with self._sf() as s:
+            return get_server(s, server_id)
+
     def _load(self, server_id: str) -> tuple[MCPServerRecord, ServerTarget]:
         with self._sf() as s:
             server = get_server(s, server_id)
@@ -291,9 +325,13 @@ class DiscoveryService:
     # ----------------------------------------------------------------- API
     async def sync_server(self, server_id: str) -> SyncReport:
         """Discover one server. Raises ``ConnectorError`` (curated) when the
-        server can't be listed — after recording the health failure."""
+        server can't be listed — after recording the health failure — and
+        ``ServerDisabledError`` for a disabled server (never spawned/dialled)."""
         lock = self._locks.setdefault(server_id, anyio.Lock())
         async with lock:
+            server = await anyio.to_thread.run_sync(self._load_server, server_id)
+            if not server.enabled:
+                raise ServerDisabledError("server is disabled")
             try:
                 server, target = await anyio.to_thread.run_sync(self._load, server_id)
                 info, tools, latency = await self._fetch(server, target)
@@ -314,7 +352,19 @@ class DiscoveryService:
                 report.latency_ms = latency
                 return report
 
-            return await anyio.to_thread.run_sync(_apply)
+            try:
+                return await anyio.to_thread.run_sync(_apply)
+            except ServerNotFoundError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — curated; DB/driver text never escapes
+                log.warning(
+                    "catalog update failed for server id %s: %s",
+                    scrub(server_id),
+                    type(exc).__name__,
+                )
+                raise ProtocolFailureError(
+                    "server sent tool data that could not be stored"
+                ) from exc
 
     async def check_health(self, server_id: str) -> str:
         """Cheap liveness probe (initialize + tools/list; ``ping`` is deprecated
@@ -356,8 +406,11 @@ class DiscoveryService:
                     results[sid] = await self.sync_server(sid)
                 except ConnectorError as exc:
                     results[sid] = exc
-                except ServerNotFoundError:
-                    pass  # deleted while the refresh was running
+                except (ServerNotFoundError, ServerDisabledError):
+                    pass  # deleted/disabled while the refresh was running
+                except Exception as exc:  # noqa: BLE001 — one server never aborts the refresh
+                    log.warning("sync of server id %s failed: %s", scrub(sid), type(exc).__name__)
+                    results[sid] = ProtocolFailureError("discovery failed unexpectedly")
 
         async with anyio.create_task_group() as tg:
             for sid in ids:
@@ -375,6 +428,10 @@ class DiscoveryService:
                     results[sid] = await self.check_health(sid)
                 except ServerNotFoundError:
                     pass
+                except Exception as exc:  # noqa: BLE001 — one probe never aborts the pass
+                    log.warning(
+                        "health check of server id %s failed: %s", scrub(sid), type(exc).__name__
+                    )
 
         async with anyio.create_task_group() as tg:
             for sid in server_ids:

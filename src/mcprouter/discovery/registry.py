@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from mcprouter.discovery.credentials import get_env, set_env
 from mcprouter.mcpclient import InvalidTargetError, ServerTarget
 from mcprouter.mcpclient.targets import TRANSPORTS, Transport
-from mcprouter.models import MCPServerRecord, MCPToolRecord, PolicyRule
+from mcprouter.models import ExecutionRecord, MCPServerRecord, MCPToolRecord, PolicyRule
 
 NAME_MAX = 120  # MCPServerRecord.name String(120)
 
@@ -42,6 +42,10 @@ class ServerNotFoundError(RegistryError):
 
 
 class ServerInUseError(RegistryError):
+    pass
+
+
+class ServerDisabledError(RegistryError):
     pass
 
 
@@ -111,8 +115,8 @@ def register_server(session: Session, reg: ServerRegistration) -> MCPServerRecor
     return rec
 
 
-def get_server(session: Session, server_id: str) -> MCPServerRecord:
-    rec = session.get(MCPServerRecord, server_id)
+def get_server(session: Session, server_id: str, *, lock: bool = False) -> MCPServerRecord:
+    rec = session.get(MCPServerRecord, server_id, with_for_update=lock)
     if rec is None:
         raise ServerNotFoundError("server not found")
     return rec
@@ -146,12 +150,25 @@ def referencing_rule_count(session: Session, server_id: str) -> int:
     )
 
 
+def has_audit_history(session: Session, server_id: str) -> bool:
+    """Execution audit rows point at this server (no FK, so deleting would
+    orphan them and cascade away its tool version history)."""
+    return (
+        session.scalar(
+            select(ExecutionRecord.id).where(ExecutionRecord.server_id == server_id).limit(1)
+        )
+        is not None
+    )
+
+
 def delete_server(session: Session, server_id: str) -> None:
-    server = get_server(session, server_id)
+    server = get_server(session, server_id, lock=True)
     if referencing_rule_count(session, server_id):
         raise ServerInUseError(
             "server is referenced by policy rules; remove those rules before deleting it"
         )
+    if has_audit_history(session, server_id):
+        raise ServerInUseError("server has execution history; disable it instead of deleting it")
     session.delete(server)  # tools, versions (FK cascade) and credentials go with it
 
 

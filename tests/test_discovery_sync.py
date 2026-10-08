@@ -307,3 +307,103 @@ async def test_sync_loop_start_stop(db: SF) -> None:
     await loop.stop()
     assert not loop.running
     assert _server(db, sid).status == "healthy"
+
+
+# ------------------------------------------------- review fixes (B2 & minors)
+@requires_db
+async def test_nul_and_control_chars_from_upstream_do_not_break_sync(db: SF) -> None:
+    specs = generate_fleet(3)
+    evil = replace(
+        specs[1],
+        tools=(
+            replace(specs[1].tools[0], description="bad\x00desc"),
+            replace(specs[1].tools[1], name="evil\nname"),
+            *specs[1].tools[2:],
+        ),
+    )
+    fleet = InprocFleet([specs[0], evil, specs[2]])
+    ids = _register(db, fleet)
+    results = await DiscoveryService(db, connector_factory=fleet.factory).sync_all()
+    assert all(not isinstance(r, ConnectorError) for r in results.values())
+    r = results[ids["jenkins"]]
+    assert not isinstance(r, ConnectorError) and r.skipped == 1
+    assert _tool(db, ids["jenkins"], specs[1].tools[0].name).description == "baddesc"
+
+
+@requires_db
+async def test_unexpected_error_in_one_server_never_aborts_refresh(db: SF) -> None:
+    fleet = InprocFleet(generate_fleet(3))
+    ids = _register(db, fleet)
+
+    def factory(server: Any, target: Any) -> Any:
+        if server.name == "jenkins":
+            raise RuntimeError("boom with secret-ish text")
+        return fleet.factory(server, target)
+
+    results = await DiscoveryService(db, connector_factory=factory).sync_all()
+    bad = results[ids["jenkins"]]
+    assert isinstance(bad, ConnectorError) and "secret" not in bad.message
+    assert all(not isinstance(results[ids[n]], ConnectorError) for n in ("github", "jira"))
+
+
+@requires_db
+def test_apply_listing_for_deleted_server_is_not_found(db: SF) -> None:
+    from mcprouter.discovery import ServerNotFoundError
+
+    with db() as s, s.begin(), pytest.raises(ServerNotFoundError):
+        apply_listing(s, "00000000-0000-0000-0000-000000000000", [], None)
+
+
+@requires_db
+async def test_disabled_server_is_never_synced_directly(db: SF) -> None:
+    from mcprouter.discovery import ServerDisabledError
+
+    fleet = InprocFleet(generate_fleet(1))
+    sid = _register(db, fleet)["github"]
+    with db() as s, s.begin():
+        srv = s.get(MCPServerRecord, sid)
+        assert srv is not None
+        srv.enabled = False
+    with pytest.raises(ServerDisabledError):
+        await DiscoveryService(db, connector_factory=fleet.factory).sync_server(sid)
+
+
+@requires_db
+async def test_loop_marks_servers_before_awaiting_sync(db: SF) -> None:
+    fleet = InprocFleet(generate_fleet(1))
+    _register(db, fleet)
+    svc = DiscoveryService(db, connector_factory=fleet.factory)
+    loop = SyncLoop(svc, sync_interval_s=100.0, health_interval_s=1000.0)
+
+    async def broken(**_: Any) -> Any:
+        raise RuntimeError("pass failed")
+
+    real = svc.sync_all
+    svc.sync_all = broken  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError):
+        await loop.run_once(now=1000.0)
+    svc.sync_all = real  # type: ignore[method-assign]
+    synced, _ = await loop.run_once(now=1001.0)
+    assert synced == []  # no re-sync storm after a failed pass
+
+
+@requires_db
+async def test_removal_snapshot_keeps_last_known_annotations(db: SF) -> None:
+    spec = generate_fleet(1)[0]
+    fleet = InprocFleet([spec])
+    sid = _register(db, fleet)["github"]
+    svc = DiscoveryService(db, connector_factory=fleet.factory)
+    await svc.sync_server(sid)
+    fleet.specs["github"] = without_tool(spec, "get_issue")
+    await svc.sync_server(sid)
+    tid = _tool(db, sid, "get_issue").id
+    with db() as s:
+        snap = s.scalar(
+            select(ToolVersionRecord.snapshot).where(
+                ToolVersionRecord.tool_id == tid, ToolVersionRecord.change_kind == "removed"
+            )
+        )
+    assert snap is not None and snap["annotations"] == {
+        "readOnlyHint": True,
+        "destructiveHint": False,
+    }
