@@ -92,6 +92,8 @@ class ExecutionResult:
     result: ToolCallResult | None = None
     approval_id: str | None = None
     errors: list[str] = field(default_factory=list)
+    # Upstream call time (invoke path only; None for refusals/pending).
+    latency_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,7 @@ class ExecutionManager:
         detail: str,
         latency_ms: float | None = None,
         route_request_id: str | None = None,
+        note: str = "",
     ) -> str:
         with self._factory() as s:
             rec = ExecutionRecord(
@@ -198,7 +201,7 @@ class ExecutionManager:
                 tool_id=tool_id,
                 server_id=server_id,
                 outcome=outcome,
-                detail=_curate(detail),
+                detail=_curate(note + detail),
                 latency_ms=latency_ms,
                 created_at=self._clock(),
                 route_request_id=route_request_id,
@@ -208,13 +211,19 @@ class ExecutionManager:
             return rec.id
 
     def _finalize(
-        self, record_id: str, tool_id: str, outcome: str, detail: str, latency_ms: float
+        self,
+        record_id: str,
+        tool_id: str,
+        outcome: str,
+        detail: str,
+        latency_ms: float,
+        note: str = "",
     ) -> None:
         with self._factory() as s:
             s.execute(
                 update(ExecutionRecord)
                 .where(ExecutionRecord.id == record_id)
-                .values(outcome=outcome, detail=_curate(detail), latency_ms=latency_ms)
+                .values(outcome=outcome, detail=_curate(note + detail), latency_ms=latency_ms)
             )
             if outcome in (OK, ERROR, TIMEOUT):
                 # The ONE usage-stat writer (atomic UPDATE, EMA latency).
@@ -228,6 +237,7 @@ class ExecutionManager:
         outcome: str,
         detail: str,
         route_request_id: str | None = None,
+        note: str = "",
     ) -> str:
         return self._audit(
             agent_id,
@@ -237,6 +247,7 @@ class ExecutionManager:
             detail,
             None,
             route_request_id,
+            note,
         )
 
     # ----------------------------------------------------------- execute
@@ -247,13 +258,20 @@ class ExecutionManager:
         arguments: Any,
         *,
         route_request_id: str | None = None,
+        audit_note: str | None = None,
     ) -> ExecutionResult:
         """`route_request_id`: the routing decision (RoutingDecisionRecord.id)
         this call followed, if known. Telemetry only — it is recorded on every
         audit row of this attempt and NEVER affects authorization. A malformed
-        value is dropped (unattributed), never a reason to fail the call."""
+        value is dropped (unattributed), never a reason to fail the call.
+
+        `audit_note`: caller-supplied provenance (e.g. an admin impersonating
+        this principal via REST), prefixed to the detail of EVERY audit row
+        of this attempt. Audit only: never affects authorization, and it is
+        not part of the returned detail."""
         tool_id = tool if isinstance(tool, str) else tool.id
         rrid = _attribution(route_request_id)
+        note = f"[{scrub_log(audit_note)[:200]}] " if audit_note else ""
         # Private deep copy FIRST: what is validated is exactly what is invoked.
         args = copy.deepcopy(arguments)
         agent_id = principal.agent_id
@@ -261,7 +279,15 @@ class ExecutionManager:
         loaded = await anyio.to_thread.run_sync(self._load, principal, tool_id)
         if loaded is None:
             rid = await anyio.to_thread.run_sync(
-                self._audit, agent_id, None, None, DENIED, "unknown tool or principal", None, rrid
+                self._audit,
+                agent_id,
+                None,
+                None,
+                DENIED,
+                "unknown tool or principal",
+                None,
+                rrid,
+                note,
             )
             return ExecutionResult(DENIED, "unknown tool or principal", rid)
 
@@ -269,7 +295,7 @@ class ExecutionManager:
         decision = evaluate(loaded.principal, loaded.server, loaded.tool, loaded.rules)
         if not decision.allow:
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, DENIED, decision.reason, rrid
+                self._refuse, agent_id, loaded, DENIED, decision.reason, rrid, note
             )
             return ExecutionResult(DENIED, decision.reason, rid)
 
@@ -277,7 +303,7 @@ class ExecutionManager:
         if not self._limiter.try_acquire(agent_id):
             detail = "rate limit exceeded"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, RATE_LIMITED, detail, rrid
+                self._refuse, agent_id, loaded, RATE_LIMITED, detail, rrid, note
             )
             return ExecutionResult(RATE_LIMITED, detail, rid)
 
@@ -285,7 +311,7 @@ class ExecutionManager:
         if not _available(loaded):
             detail = "tool unavailable"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid
+                self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid, note
             )
             return ExecutionResult(UNAVAILABLE, detail, rid)
 
@@ -295,21 +321,21 @@ class ExecutionManager:
         except ArgumentValidationError as exc:
             detail = "argument validation failed: " + "; ".join(exc.errors)
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, INVALID_ARGS, detail, rrid
+                self._refuse, agent_id, loaded, INVALID_ARGS, detail, rrid, note
             )
             return ExecutionResult(INVALID_ARGS, detail, rid, errors=exc.errors)
 
         # (e) approval gate
         if decision.requires_approval:
             approval_id, rid = await anyio.to_thread.run_sync(
-                self._create_approval, loaded, args, rrid
+                self._create_approval, loaded, args, rrid, note
             )
             return ExecutionResult(
                 PENDING_APPROVAL, "approval required", rid, approval_id=approval_id
             )
 
         # (f) invoke
-        return await self._invoke(agent_id, loaded, args, rrid)
+        return await self._invoke(agent_id, loaded, args, rrid, note)
 
     async def _invoke(
         self,
@@ -317,11 +343,20 @@ class ExecutionManager:
         loaded: _Loaded,
         args: dict[str, Any],
         route_request_id: str | None = None,
+        note: str = "",
     ) -> ExecutionResult:
         tool, server = loaded.tool, loaded.server
         # Audit BEFORE the side effect; a failed write aborts the call.
         rid = await anyio.to_thread.run_sync(
-            self._audit, agent_id, tool.id, server.id, STARTED, "invoking", None, route_request_id
+            self._audit,
+            agent_id,
+            tool.id,
+            server.id,
+            STARTED,
+            "invoking",
+            None,
+            route_request_id,
+            note,
         )
         t0 = time.perf_counter()
         outcome, detail, result = ERROR, "upstream invocation failed", None
@@ -337,7 +372,7 @@ class ExecutionManager:
         except anyio.get_cancelled_exc_class():
             with anyio.CancelScope(shield=True):
                 await anyio.to_thread.run_sync(
-                    self._finalize, rid, tool.id, CANCELLED, "caller cancelled", _ms(t0)
+                    self._finalize, rid, tool.id, CANCELLED, "caller cancelled", _ms(t0), note
                 )
             raise
         except Exception as exc:  # noqa: BLE001 — curated boundary: type name only, never str(exc)
@@ -348,12 +383,22 @@ class ExecutionManager:
                 type(exc).__name__,
             )
         latency = _ms(t0)
-        await anyio.to_thread.run_sync(self._finalize, rid, tool.id, outcome, detail, latency)
-        return ExecutionResult(outcome, detail, rid, result=result if outcome != TIMEOUT else None)
+        await anyio.to_thread.run_sync(self._finalize, rid, tool.id, outcome, detail, latency, note)
+        return ExecutionResult(
+            outcome,
+            detail,
+            rid,
+            result=result if outcome != TIMEOUT else None,
+            latency_ms=latency,
+        )
 
     # ---------------------------------------------------------- approvals
     def _create_approval(
-        self, loaded: _Loaded, args: dict[str, Any], route_request_id: str | None = None
+        self,
+        loaded: _Loaded,
+        args: dict[str, Any],
+        route_request_id: str | None = None,
+        note: str = "",
     ) -> tuple[str, str]:
         now = self._clock()
         tool, server = loaded.tool, loaded.server
@@ -384,6 +429,7 @@ class ExecutionManager:
             f"approval {approval_id} pending",
             None,
             route_request_id,
+            note,
         )
         return approval_id, rid
 
@@ -471,7 +517,9 @@ class ExecutionManager:
             preview = redact("\n".join(texts))[:MAX_PREVIEW]
         final = APPROVAL_EXECUTED if res.status == OK else APPROVAL_FAILED
         await anyio.to_thread.run_sync(self._close_approval, req.id, final, res.record_id, preview)
-        return ExecutionResult(res.status, res.detail, res.record_id, res.result, req.id)
+        return ExecutionResult(
+            res.status, res.detail, res.record_id, res.result, req.id, latency_ms=res.latency_ms
+        )
 
     def _deny(self, approval_id: str) -> None:
         now = self._clock()

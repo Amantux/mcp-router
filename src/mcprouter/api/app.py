@@ -11,6 +11,10 @@ Wave 2 (budgets/cache/lifecycle): DiscoveryService carries the post-sync
 classify+embed hook (mcprouter.lifecycle); the lifespan starts the SyncLoop
 when MCPR_SYNC_ENABLED and stops it on shutdown, before the engine unloads.
 
+Wave 2 (integration): POST /api/v1/tools/{id}/execute (routes_execute) runs
+through the one ExecutionManager; analytics routes + metrics collector are
+installed by install_analytics.
+
 Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
 routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
 """
@@ -28,6 +32,8 @@ from prometheus_client import make_asgi_app
 
 from mcprouter.api import routes_dedup, routes_tools
 from mcprouter.api.deps_auth import configure_security
+from mcprouter.api.routes_analytics import install_analytics
+from mcprouter.api.routes_execute import router as execute_router
 from mcprouter.api.routes_executions import router as executions_router
 from mcprouter.api.routes_models import router as models_router
 from mcprouter.api.routes_policy import router as policy_router
@@ -149,6 +155,10 @@ def create_app(
     manager = ExecutionManager.from_settings(settings, factory, ConnectorToolInvoker(factory))
     app.state.execution_manager = manager
     app.include_router(policy_router)
+    # REST execution (playground): a thin route over the SAME manager.
+    app.include_router(execute_router)
+    # /api/v1/analytics/* (admin) + the Prometheus funnel collector.
+    install_analytics(app)
     build_gateway(app, manager=manager, route_fn=route_fn)  # /mcp; wraps the lifespan
 
     @app.get("/healthz")

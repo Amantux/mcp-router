@@ -234,6 +234,20 @@ def check_admin(session: Session, config: SecurityConfig, authorization: str | N
         raise AuthenticationError("invalid or missing admin token")
 
 
+def is_admin_bearer(config: SecurityConfig, authorization: str | None) -> bool:
+    """True iff `authorization` is a well-formed Bearer whose token IS the admin
+    token (constant-time compare). Never raises and never grants anything by
+    itself: callers that branch on it still authenticate the other branch
+    with resolve_principal. False when no admin token is configured."""
+    if config.admin_token_hash is None:
+        return False
+    try:
+        token = parse_bearer(authorization)
+    except AuthenticationError:
+        return False
+    return token is not None and hmac.compare_digest(hash_key(token), config.admin_token_hash)
+
+
 def configure_security(app: Any, env: Mapping[str, str]) -> SecurityConfig:
     """Integrator entrypoint, called once in create_app AFTER app.state.settings,
     .engine and .session_factory exist: creates the gateway-owned tables,
@@ -265,6 +279,12 @@ def _unauthorized(exc: AuthenticationError) -> HTTPException:
     return HTTPException(
         status_code=401, detail=exc.message, headers={"WWW-Authenticate": "Bearer"}
     )
+
+
+def security_of(request: Request) -> tuple[SecurityConfig, sessionmaker[Session]]:
+    """Public accessor for the installed SecurityConfig + session factory
+    (503 when the app never ran configure_security)."""
+    return _security(request)
 
 
 def get_principal(request: Request) -> AgentPrincipal:
