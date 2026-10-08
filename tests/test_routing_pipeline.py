@@ -69,7 +69,7 @@ def _prefer(tool: str, level: int = 4) -> object:
     """Score fn: `tool` gets `level`, everything else level 0."""
 
     def fn(state: str, question: str, levels: list[str]) -> ScoreResult:
-        lv = level if f"/{tool}\n" in state else 0
+        lv = level if f"/{tool}\n" in question else 0  # candidate is in the QUESTION
         probs = [0.0] * len(levels)
         probs[lv] = 1.0
         return ScoreResult(level=lv, probabilities=probs)
@@ -88,7 +88,7 @@ def test_domain_choice_only_over_present_domains_and_prunes(
     assert set(domain_calls[0][3]) <= {"development", "communication", "files"}
     assert len(domain_calls[0][3]) == len(set(domain_calls[0][3]))
     # Pruned: only development tools were scored.
-    scored = [c[1] for c in model.calls if c[0] == "score"]
+    scored = [c[2] for c in model.calls if c[0] == "score"]  # (kind, state, question, ...)
     assert scored and all("github/" in st for st in scored)
     assert {t.server_name for t in res.tools} == {"github"}
 
@@ -205,7 +205,7 @@ def test_scope_prefilter_hides_denied_tools_even_if_model_loves_them(
     res = _pipeline(db, model).route(_req("delete the file from disk"), scope)
     assert "delete_file" not in {t.tool_name for t in res.tools}
     # The model never even saw the denied tool.
-    assert not any("/delete_file\n" in c[1] for c in model.calls)
+    assert not any("/delete_file" in c[1] + c[2] for c in model.calls)
 
 
 def test_scope_server_ids_intersect_with_allowed_servers(
@@ -276,3 +276,54 @@ def test_long_model_name_is_truncated_for_persistence(
         _req("search issues"), AllowAllScope()
     )
     assert len(res.model_version) <= 80
+
+
+# ------------------------------------- integration: decision-model call shape
+def test_task_is_the_state_and_candidates_are_in_the_questions(
+    db: sessionmaker[Session], catalog: dict[str, str]
+) -> None:
+    """The inference contract (score_batch, deterministic-v1, the bench): state
+    is the TASK; each Score question carries one candidate; the Noul question
+    lists the exposed candidates one per line."""
+    model = ScriptedDecisionModel()
+    _pipeline(db, model).route(_req("search issues", allowed=[catalog["github"]]), AllowAllScope())
+    assert {c[1] for c in model.calls} == {"search issues"}
+    score_qs = [c[2] for c in model.calls if c[0] == "score"]
+    assert score_qs and all(q.count("Tool: github/") == 1 for q in score_qs)
+    (noul_q,) = [c[2] for c in model.calls if c[0] == "noul"]
+    assert "- github/search_issues: Search issues" in noul_q
+
+
+def test_batch_models_score_in_one_call(db: sessionmaker[Session], catalog: dict[str, str]) -> None:
+    class Batch(ScriptedDecisionModel):
+        def score_batch(
+            self, state: str, questions: list[str], levels: list[str]
+        ) -> list[ScoreResult]:
+            self.calls.append(("score_batch", state, "", tuple(questions)))
+            return [self.score_fn(state, q, levels) for q in questions]
+
+    model = Batch()
+    res = _pipeline(db, model).route(
+        _req("issue repository", allowed=[catalog["github"]]), AllowAllScope()
+    )
+    kinds = [c[0] for c in model.calls]
+    assert kinds.count("score_batch") == 1 and "score" not in kinds
+    assert res.tools and not res.fallback_used
+
+
+def test_deterministic_backend_routes_a_matching_task(
+    db: sessionmaker[Session], catalog: dict[str, str]
+) -> None:
+    """Regression: with the default zero-ML model the old call shape made
+    every route a no_match (noul compared the task to a constant question)."""
+    from mcprouter.inference.deterministic import DeterministicDecisionModel
+
+    res = _pipeline(db, DeterministicDecisionModel()).route(
+        _req("search issues in the repository"), AllowAllScope()
+    )
+    assert res.no_match is False and not res.fallback_used
+    assert res.tools[0].tool_name == "search_issues"
+    weather = _pipeline(db, DeterministicDecisionModel()).route(
+        _req("what is the weather in paris tomorrow"), AllowAllScope()
+    )
+    assert weather.no_match is True

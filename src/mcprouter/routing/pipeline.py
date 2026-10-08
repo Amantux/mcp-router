@@ -18,9 +18,17 @@ route(request, scope) — never one big classification over the catalog:
      read as `read`) must not hide the only right tool; down-weighting still
      lets a confident relevance score win.
   d. Score per surviving candidate on a 5-level ordered relevance scale;
-     expected level in [0,1] blended with the retrieval score.
+     expected level in [0,1] blended with the retrieval score. ONE
+     `score_batch` call when the model offers it (Laya: one forward pass).
   e. Noul "does any of these tools fit?" — p(yes) below
      `route_confidence_floor` => no_match with no tools (SPEC §10).
+
+Question shape (decision-model contract, fixed at integration): `state` is
+always the TASK (the query); the candidate being asked about goes in the
+QUESTION — one tool per Score question, one tool per line of the Noul
+question. That is what `score_batch(state, questions, levels)` and the
+deterministic-v1 model assume (it compares `state` against the question /
+each question line), and how the inference bench drives Laya.
   f. Truncate to clamp(max_tools, 1, max_exposed_tools).
 
 Deterministic failure path (FR-06): ANY exception or contract-violating answer
@@ -42,6 +50,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import (
+    BatchScoringDecisionModel,
     DecisionModel,
     Retriever,
     RoutedTool,
@@ -73,6 +82,7 @@ MODEL_WEIGHT = 0.7  # final = MODEL_WEIGHT*relevance + (1-MODEL_WEIGHT)*retrieva
 SCOPE_OVERFETCH = 3  # retrieve extra so per-tool scope drops don't starve stage b
 _KNOWN_OPS = ("read", "write", "execute")
 _DESC_MAX = 400  # bound model input per candidate
+_NOUL_DESC_MAX = 120  # per line of the no-match question
 
 
 class ModelContractError(RuntimeError):
@@ -204,12 +214,18 @@ class RoutePipeline:
                 if c.operation in _KNOWN_OPS and c.operation != res.option:
                     weights[c.tool_id] *= OPERATION_MISMATCH_WEIGHT
 
-        # d. per-candidate relevance (one batchable list of states)
-        states = [_tool_state(query, c) for c in cands]
+        # d. per-candidate relevance: state = task, one question per candidate
+        questions = [_tool_question(c) for c in cands]
+        levels = list(RELEVANCE_LEVELS)
+        if isinstance(m, BatchScoringDecisionModel):
+            results = m.score_batch(query, questions, levels)
+            if len(results) != len(questions):
+                raise ModelContractError("score_batch returned the wrong number of results")
+        else:
+            results = [m.score(query, q, levels) for q in questions]
         top_level = len(RELEVANCE_LEVELS) - 1
         scored: list[_Scored] = []
-        for c, state in zip(cands, states, strict=True):
-            sr = m.score(state, SCORE_QUESTION, list(RELEVANCE_LEVELS))
+        for c, sr in zip(cands, results, strict=True):
             probs = sr.probabilities
             if len(probs) != len(RELEVANCE_LEVELS) or not all(_is_prob(p) for p in probs):
                 raise ModelContractError("score probabilities malformed")
@@ -220,8 +236,11 @@ class RoutePipeline:
         scored.sort(key=_rank_key)
 
         # e. no-match detection over what would actually be exposed
-        shown = "\n".join(f"- {r.cand.server_name}/{r.cand.tool_name}" for r in scored[:max_tools])
-        p_yes = m.noul(f"Task: {query}\nTools:\n{shown}", NOUL_QUESTION)
+        shown = "\n".join(
+            f"- {r.cand.server_name}/{r.cand.tool_name}: {r.cand.description[:_NOUL_DESC_MAX]}"
+            for r in scored[:max_tools]
+        )
+        p_yes = m.noul(query, f"{NOUL_QUESTION}\n{shown}")
         if not _is_prob(p_yes):
             raise ModelContractError("noul probability malformed")
         return scored, p_yes < self._settings.route_confidence_floor
@@ -261,9 +280,9 @@ def _rank_key(r: _Scored) -> tuple[float, str, str]:
     return (-r.score, r.cand.server_name, r.cand.tool_name)
 
 
-def _tool_state(query: str, c: ToolCandidate) -> str:
+def _tool_question(c: ToolCandidate) -> str:
     desc = c.description[:_DESC_MAX]
-    return f"Task: {query}\nTool: {c.server_name}/{c.tool_name}\nDescription: {desc}"
+    return f"{SCORE_QUESTION}\nTool: {c.server_name}/{c.tool_name}\nDescription: {desc}"
 
 
 def _is_prob(p: float) -> bool:
