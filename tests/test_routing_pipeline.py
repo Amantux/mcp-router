@@ -242,3 +242,37 @@ def test_scoring_is_bounded_by_retrieval_candidates(
         _req("issue repository message file disk channel"), AllowAllScope()
     )
     assert len([c for c in model.calls if c[0] == "score"]) <= 3
+
+
+class _IgnoresServerIds:
+    """A sloppy Retriever that treats server_ids as advisory (e.g. `if server_ids:`)."""
+
+    def __init__(self, inner: HybridRetriever) -> None:
+        self._inner = inner
+
+    def retrieve(self, query: str, *, limit: int, server_ids=None, enabled_only=True):  # noqa: ANN001,ANN201
+        return self._inner.retrieve(query, limit=limit, server_ids=None)
+
+
+def test_server_scope_enforced_by_pipeline_not_only_retriever(
+    db: sessionmaker[Session], catalog: dict[str, str]
+) -> None:
+    pipe = RoutePipeline(
+        db,
+        _IgnoresServerIds(HybridRetriever(db, FakeHashEmbedder())),
+        ScriptedDecisionModel(),
+        Settings(),
+    )
+    res = pipe.route(_req("search messages issues"), _DenyWrites(servers=[catalog["github"]]))
+    assert res.tools and {t.server_name for t in res.tools} == {"github"}
+    deny_all = pipe.route(_req("search messages issues"), _DenyWrites(servers=[]))
+    assert deny_all.tools == [] and deny_all.no_match
+
+
+def test_long_model_name_is_truncated_for_persistence(
+    db: sessionmaker[Session], catalog: dict[str, str]
+) -> None:
+    res = _pipeline(db, ScriptedDecisionModel(name="m" * 200)).route(
+        _req("search issues"), AllowAllScope()
+    )
+    assert len(res.model_version) <= 80

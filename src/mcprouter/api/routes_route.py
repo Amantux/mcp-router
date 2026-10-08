@@ -23,11 +23,15 @@ restriction", widening the caller's own request.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
@@ -45,21 +49,57 @@ ScopeResolver = Callable[[str], ScopeFilter]
 router = APIRouter(prefix="/api/v1", tags=["routing"])
 
 MAX_QUERY_CHARS = 4000
+# C0 controls except tab/newline/CR, plus DEL. NUL in particular makes
+# psycopg reject the decision-row insert AFTER the model already ran.
+_CTRL_QUERY = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CTRL_ANY = re.compile(r"[\x00-\x1f\x7f]")
+
+ServerName = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 
 
 class RouteBody(BaseModel):
     query: str = Field(max_length=MAX_QUERY_CHARS)
     agent_id: str = Field(min_length=1, max_length=120)
     max_tools: int | None = Field(default=None, ge=1, le=1000)
-    allowed_servers: list[str] | None = Field(default=None, max_length=500)
+    allowed_servers: list[ServerName] | None = Field(default=None, max_length=500)
 
     @field_validator("query")
     @classmethod
-    def _non_blank(cls, v: str) -> str:
+    def _query_ok(cls, v: str) -> str:
         v = v.strip()
         if not v:
             raise ValueError("query must not be empty")
+        if _CTRL_QUERY.search(v):
+            raise ValueError("query must not contain control characters")
         return v
+
+    @field_validator("agent_id")
+    @classmethod
+    def _agent_ok(cls, v: str) -> str:
+        if _CTRL_ANY.search(v):
+            raise ValueError("agent_id must not contain control characters")
+        return v
+
+    @field_validator("allowed_servers")
+    @classmethod
+    def _servers_ok(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None and any(_CTRL_ANY.search(n) for n in v):
+            raise ValueError("allowed_servers names must not contain control characters")
+        return v
+
+
+async def _curated_validation_error(request: Request, exc: Exception) -> Response:
+    """Routing paths: 422 WITHOUT echoing input (the query may carry secrets).
+    Every other path keeps FastAPI's default behaviour unchanged."""
+    if not isinstance(exc, RequestValidationError):  # pragma: no cover - registration guard
+        raise exc
+    if not request.url.path.startswith(router.prefix + "/route"):
+        return await request_validation_exception_handler(request, exc)
+    detail = [
+        {"loc": list(e.get("loc", ())), "msg": str(e.get("msg", ""))[:200], "type": e.get("type")}
+        for e in exc.errors()[:20]
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 class RoutedToolOut(BaseModel):
@@ -87,6 +127,7 @@ def install_routing(
             "No routing scope resolver installed — /api/v1/route uses a PERMISSIVE "
             "allow-all scope. Dev only; the gateway must install a resolver."
         )
+    app.add_exception_handler(RequestValidationError, _curated_validation_error)
     app.include_router(router)
 
 
@@ -107,11 +148,22 @@ def get_scope_resolver(request: Request) -> ScopeResolver:
     return resolver or _allow_all
 
 
-def resolve_allowed(request: Request, names: list[str] | None) -> list[str] | None:
+def resolve_allowed(
+    request: Request, names: list[str] | None, scope: ScopeFilter
+) -> list[str] | None:
+    """Out-of-scope names are reported exactly like unknown ones, so the 400
+    is not an existence oracle for servers the caller may not see."""
     if names is None:
         return None
     with request.app.state.session_factory() as s:
         ids, unknown = resolve_server_names(s, names)
+    known = [n for n in dict.fromkeys(names) if n not in unknown]
+    visible = scope.server_ids()
+    if visible is not None:
+        in_scope = set(visible)
+        hidden = {n for n, sid in zip(known, ids, strict=True) if sid not in in_scope}
+        unknown = [n for n in dict.fromkeys(names) if n in hidden or n in unknown]
+        ids = [sid for n, sid in zip(known, ids, strict=True) if n not in hidden]
     if unknown:
         raise HTTPException(
             status_code=400,
@@ -132,7 +184,8 @@ def route(
     scope_resolver: Annotated[ScopeResolver, Depends(get_scope_resolver)],
 ) -> RouteResponse:
     settings = request.app.state.settings
-    allowed_ids = resolve_allowed(request, body.allowed_servers)
+    scope = scope_resolver(body.agent_id)
+    allowed_ids = resolve_allowed(request, body.allowed_servers, scope)
     result = pipeline.route(
         RouteRequest(
             query=body.query,
@@ -140,7 +193,7 @@ def route(
             max_tools=body.max_tools or settings.max_exposed_tools,
             allowed_servers=allowed_ids,
         ),
-        scope_resolver(body.agent_id),
+        scope,
     )
     return RouteResponse(
         request_id=result.request_id,

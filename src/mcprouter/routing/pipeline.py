@@ -111,7 +111,7 @@ class RoutePipeline:
         candidates = self._scoped_candidates(request, scope)
         fallback = False
         no_match = False
-        model_version = self._model.name
+        model_version = self._model.name[:80]  # RoutingDecisionRecord.model_version
         if not candidates:
             ranked: list[_Scored] = []
             no_match = True
@@ -167,7 +167,14 @@ class RoutePipeline:
         raw = self._retriever.retrieve(
             request.query, limit=limit * SCOPE_OVERFETCH, server_ids=server_ids
         )
-        return [c for c in raw if scope.permits(c)][:limit]
+        # Enforce server scope HERE too: never trust an injected Retriever to
+        # honour server_ids (e.g. `if server_ids:` would read [] as "all").
+        permitted_ids = None if server_ids is None else set(server_ids)
+        return [
+            c
+            for c in raw
+            if (permitted_ids is None or c.server_id in permitted_ids) and scope.permits(c)
+        ][:limit]
 
     # -------------------------------------------------------- stages b-e
     def _decide(

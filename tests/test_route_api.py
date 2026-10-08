@@ -136,7 +136,7 @@ def test_scope_resolver_seam_receives_agent_and_narrows(seeded: dict[str, str]) 
     c = TestClient(_app(scope_resolver=resolver))
     r = c.post("/api/v1/route", json={"query": "create issue message", "agent_id": "ro-agent"})
     assert seen == ["ro-agent"]
-    assert {t["tool"] for t in r.json()["tools"]} <= {"search_issues"}
+    assert [t["tool"] for t in r.json()["tools"]] == ["search_issues"]
 
 
 def test_fallback_flag_on_the_wire(seeded: dict[str, str]) -> None:
@@ -154,3 +154,35 @@ def test_unconfigured_pipeline_is_503(seeded: dict[str, str]) -> None:
     r = TestClient(app).post("/api/v1/route", json={"query": "x", "agent_id": "a1"})
     assert r.status_code == 503
     assert "not configured" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query": "find\u0000issues", "agent_id": "a1"},
+        {"query": "x", "agent_id": "a\u0000"},
+        {"query": "x", "agent_id": "a1", "allowed_servers": ["git\u0000hub"]},
+        {"query": "x", "agent_id": "a1", "allowed_servers": ["g" * 500]},
+    ],
+)
+def test_control_chars_and_oversized_names_are_422(
+    seeded: dict[str, str], payload: dict[str, object]
+) -> None:
+    assert TestClient(_app()).post("/api/v1/route", json=payload).status_code == 422
+
+
+def test_422_does_not_echo_the_query(seeded: dict[str, str]) -> None:
+    secret = "sk-SECRET-" + "x" * 5000
+    r = TestClient(_app()).post("/api/v1/route", json={"query": secret, "agent_id": "a1"})
+    assert r.status_code == 422
+    assert "sk-SECRET" not in r.text and len(r.text) < 2000
+    assert r.json()["detail"][0]["loc"] == ["body", "query"]
+
+
+def test_out_of_scope_server_name_indistinguishable_from_unknown(seeded: dict[str, str]) -> None:
+    c = TestClient(_app(scope_resolver=lambda a: StaticScope(servers=(seeded["github"],))))
+    r = c.post(
+        "/api/v1/route",
+        json={"query": "send message", "agent_id": "a1", "allowed_servers": ["slack"]},
+    )
+    assert r.status_code == 400 and r.json()["detail"]["unknown_servers"] == ["slack"]
