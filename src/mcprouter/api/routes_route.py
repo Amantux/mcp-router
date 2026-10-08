@@ -8,12 +8,23 @@ Seams (recorded in docs/INTEGRATION_NOTES-routing.md):
 * `install_routing(app, pipeline, scope_resolver=None)` — app.py is frozen for
   this track, so integration adds ONE line calling this.
 * `get_scope_resolver` — dependency returning `agent_id -> ScopeFilter`.
-  !!! DEFAULT IS PERMISSIVE (AllowAllScope) !!! Authenticating `agent_id` and
-  resolving its PolicyRule scope is the GATEWAY track's job; until it
-  installs a resolver (or overrides this dependency), any caller can route
-  as any agent over the whole catalog. Routing only *ranks* — it never
-  executes — and the gateway's post-ranking authorization still decides
-  execution, but do not expose this default beyond localhost.
+  The integrated app installs `policy.scope.policy_scope_resolver` (backed by
+  `policy.engine.evaluate`); the permissive AllowAllScope default remains only
+  for an app that never installs one (logged loudly).
+
+Integration (identity + redaction):
+
+* `/route` authenticates with the gateway's `get_principal` and routes for the
+  AUTHENTICATED agent. The body's `agent_id` (SPEC §9) may be absent or equal
+  to it; a different value is identity spoofing -> 403.
+* The query is passed through `execution.redaction.redact()` BEFORE the
+  pipeline, so neither decision-model inputs nor the persisted
+  RoutingDecisionRecord ever see secret-shaped substrings.
+* After routing, the result is published to the agent's MCP sessions via
+  `app.state.gateway.apply_route_threadsafe` (tools/list_changed).
+* Request bodies accept snake_case (SPEC §9) and camelCase (UI). The
+  response stays SPEC §9 snake_case.
+* `/route/evaluate` is admin-only (gateway's `require_admin`).
 
 Decision: unknown `allowed_servers` names are a 400 listing them, never
 silently ignored — dropping an unknown name could turn ["githb"] into "no
@@ -31,13 +42,16 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic.alias_generators import to_camel
 
-from mcprouter.api.deps_auth import require_admin
+from mcprouter.api.deps_auth import get_principal, require_admin
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
+from mcprouter.execution.redaction import redact
 from mcprouter.interfaces import RouteRequest, ScopeFilter
+from mcprouter.models import AgentPrincipal
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope
@@ -58,9 +72,15 @@ _CTRL_ANY = re.compile(r"[\x00-\x1f\x7f]")
 ServerName = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 
 
-class RouteBody(BaseModel):
+class _Body(BaseModel):
+    # Both casings: SPEC §9 snake_case and the UI's camelCase.
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
+class RouteBody(_Body):
     query: str = Field(max_length=MAX_QUERY_CHARS)
-    agent_id: str = Field(min_length=1, max_length=120)
+    # Optional: identity comes from the credential. If present it must match.
+    agent_id: str | None = Field(default=None, min_length=1, max_length=120)
     max_tools: int | None = Field(default=None, ge=1, le=1000)
     allowed_servers: list[ServerName] | None = Field(default=None, max_length=500)
 
@@ -76,8 +96,8 @@ class RouteBody(BaseModel):
 
     @field_validator("agent_id")
     @classmethod
-    def _agent_ok(cls, v: str) -> str:
-        if _CTRL_ANY.search(v):
+    def _agent_ok(cls, v: str | None) -> str | None:
+        if v is not None and _CTRL_ANY.search(v):
             raise ValueError("agent_id must not contain control characters")
         return v
 
@@ -181,21 +201,33 @@ def resolve_allowed(
 def route(
     body: RouteBody,
     request: Request,
+    principal: Annotated[AgentPrincipal, Depends(get_principal)],
     pipeline: Annotated[RoutePipeline, Depends(get_pipeline)],
     scope_resolver: Annotated[ScopeResolver, Depends(get_scope_resolver)],
 ) -> RouteResponse:
     settings = request.app.state.settings
-    scope = scope_resolver(body.agent_id)
+    agent_id = principal.agent_id
+    if body.agent_id is not None and body.agent_id != agent_id:
+        # Never route as a body-named agent: identity comes from the credential.
+        raise HTTPException(
+            status_code=403, detail="agent_id does not match the authenticated agent"
+        )
+    scope = scope_resolver(agent_id)
     allowed_ids = resolve_allowed(request, body.allowed_servers, scope)
     result = pipeline.route(
         RouteRequest(
-            query=body.query,
-            agent_id=body.agent_id,
+            query=redact(body.query),  # model input AND the persisted decision row
+            agent_id=agent_id,
             max_tools=body.max_tools or settings.max_exposed_tools,
             allowed_servers=allowed_ids,
         ),
         scope,
     )
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is not None:
+        # Publish to the agent's MCP sessions (tools/list_changed). Sync
+        # endpoint => we are on an anyio worker thread.
+        gateway.apply_route_threadsafe(agent_id, result)
     return RouteResponse(
         request_id=result.request_id,
         tools=[
@@ -209,7 +241,7 @@ def route(
 
 
 # ------------------------------------------------------------ evaluation
-class EvaluateBody(BaseModel):
+class EvaluateBody(_Body):
     dataset: str = Field(min_length=1, max_length=120)
     max_tools: int = Field(default=DEFAULT_EVAL_MAX_TOOLS, ge=1, le=50)
 

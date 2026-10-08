@@ -27,9 +27,14 @@ from .test_routing_fakes import (
 pytestmark = requires_db
 
 
+KEYS = {"a1": "key-a1-route-test", "ro-agent": "key-ro-route-test"}
+
+
 def _app(model: object = None, **install_kw: object) -> FastAPI:
-    settings = Settings(database_url=TEST_DB_URL)
-    app = create_app(settings)
+    settings = Settings(
+        database_url=TEST_DB_URL, agent_keys=",".join(f"{a}:{k}" for a, k in KEYS.items())
+    )
+    app = create_app(settings, env={})
     factory = app.state.session_factory
     pipeline = RoutePipeline(
         factory,
@@ -39,6 +44,10 @@ def _app(model: object = None, **install_kw: object) -> FastAPI:
     )
     install_routing(app, pipeline, **install_kw)  # type: ignore[arg-type]
     return app
+
+
+def _client(app: FastAPI, agent: str = "a1") -> TestClient:
+    return TestClient(app, headers={"Authorization": f"Bearer {KEYS[agent]}"})
 
 
 @pytest.fixture()
@@ -72,7 +81,7 @@ def seeded(db) -> Iterator[dict[str, str]]:  # noqa: ANN001 — conftest session
 
 
 def test_route_happy_path_wire_shape(seeded: dict[str, str]) -> None:
-    c = TestClient(_app())
+    c = _client(_app())
     r = c.post("/api/v1/route", json={"query": "search issues", "agent_id": "a1", "max_tools": 2})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -89,7 +98,7 @@ def test_route_happy_path_wire_shape(seeded: dict[str, str]) -> None:
 
 
 def test_max_tools_optional_defaults_to_setting(seeded: dict[str, str]) -> None:
-    r = TestClient(_app()).post("/api/v1/route", json={"query": "issue", "agent_id": "a1"})
+    r = _client(_app()).post("/api/v1/route", json={"query": "issue", "agent_id": "a1"})
     assert r.status_code == 200
 
 
@@ -105,13 +114,13 @@ def test_max_tools_optional_defaults_to_setting(seeded: dict[str, str]) -> None:
     ],
 )
 def test_invalid_input_is_422(seeded: dict[str, str], payload: dict[str, object]) -> None:
-    assert TestClient(_app()).post("/api/v1/route", json=payload).status_code == 422
+    assert _client(_app()).post("/api/v1/route", json=payload).status_code == 422
 
 
 def test_unknown_allowed_servers_are_a_400_not_ignored(seeded: dict[str, str]) -> None:
     """Ignoring an unknown name would turn ["githb"] into "no restriction" —
     silently WIDENING what the caller asked for. Report it instead."""
-    c = TestClient(_app())
+    c = _client(_app())
     r = c.post(
         "/api/v1/route",
         json={"query": "send message", "agent_id": "a1", "allowed_servers": ["githb"]},
@@ -133,14 +142,14 @@ def test_scope_resolver_seam_receives_agent_and_narrows(seeded: dict[str, str]) 
         seen.append(agent_id)
         return StaticScope(max_operation="read")
 
-    c = TestClient(_app(scope_resolver=resolver))
+    c = _client(_app(scope_resolver=resolver), "ro-agent")
     r = c.post("/api/v1/route", json={"query": "create issue message", "agent_id": "ro-agent"})
     assert seen == ["ro-agent"]
     assert [t["tool"] for t in r.json()["tools"]] == ["search_issues"]
 
 
 def test_fallback_flag_on_the_wire(seeded: dict[str, str]) -> None:
-    r = TestClient(_app(ExplodingDecisionModel())).post(
+    r = _client(_app(ExplodingDecisionModel())).post(
         "/api/v1/route", json={"query": "search issues", "agent_id": "a1"}
     )
     assert r.status_code == 200 and r.json()["fallback_used"] is True
@@ -148,8 +157,8 @@ def test_fallback_flag_on_the_wire(seeded: dict[str, str]) -> None:
 
 def test_unconfigured_pipeline_is_503(seeded: dict[str, str]) -> None:
     app = _app()
-    app.state.route_pipeline = None  # create_app installs one; simulate "not installed"
-    r = TestClient(app).post("/api/v1/route", json={"query": "x", "agent_id": "a1"})
+    app.state.route_pipeline = None
+    r = _client(app).post("/api/v1/route", json={"query": "x", "agent_id": "a1"})
     assert r.status_code == 503
     assert "not configured" in r.json()["detail"]
 
@@ -166,21 +175,86 @@ def test_unconfigured_pipeline_is_503(seeded: dict[str, str]) -> None:
 def test_control_chars_and_oversized_names_are_422(
     seeded: dict[str, str], payload: dict[str, object]
 ) -> None:
-    assert TestClient(_app()).post("/api/v1/route", json=payload).status_code == 422
+    assert _client(_app()).post("/api/v1/route", json=payload).status_code == 422
 
 
 def test_422_does_not_echo_the_query(seeded: dict[str, str]) -> None:
     secret = "sk-SECRET-" + "x" * 5000
-    r = TestClient(_app()).post("/api/v1/route", json={"query": secret, "agent_id": "a1"})
+    r = _client(_app()).post("/api/v1/route", json={"query": secret, "agent_id": "a1"})
     assert r.status_code == 422
     assert "sk-SECRET" not in r.text and len(r.text) < 2000
     assert r.json()["detail"][0]["loc"] == ["body", "query"]
 
 
 def test_out_of_scope_server_name_indistinguishable_from_unknown(seeded: dict[str, str]) -> None:
-    c = TestClient(_app(scope_resolver=lambda a: StaticScope(servers=(seeded["github"],))))
+    c = _client(_app(scope_resolver=lambda a: StaticScope(servers=(seeded["github"],))))
     r = c.post(
         "/api/v1/route",
         json={"query": "send message", "agent_id": "a1", "allowed_servers": ["slack"]},
     )
     assert r.status_code == 400 and r.json()["detail"]["unknown_servers"] == ["slack"]
+
+
+# ------------------------------------------------- integration: identity
+def test_unauthenticated_route_is_401(seeded: dict[str, str]) -> None:
+    r = TestClient(_app()).post("/api/v1/route", json={"query": "search issues"})
+    assert r.status_code == 401
+
+
+def test_body_agent_id_must_match_the_authenticated_agent(seeded: dict[str, str]) -> None:
+    """Gateway requirement: identity comes from the credential. A body naming
+    another agent is spoofing -> 403; absent or equal is fine."""
+    c = _client(_app(), "a1")
+    spoof = c.post("/api/v1/route", json={"query": "search issues", "agent_id": "ro-agent"})
+    assert spoof.status_code == 403
+    assert c.post("/api/v1/route", json={"query": "search issues"}).status_code == 200
+    same = c.post("/api/v1/route", json={"query": "search issues", "agent_id": "a1"})
+    assert same.status_code == 200
+
+
+def test_routes_for_the_authenticated_agent_not_the_body(seeded: dict[str, str]) -> None:
+    seen: list[str] = []
+
+    def resolver(agent_id: str) -> StaticScope:
+        seen.append(agent_id)
+        return StaticScope()
+
+    _client(_app(scope_resolver=resolver), "ro-agent").post(
+        "/api/v1/route", json={"query": "search issues"}
+    )
+    assert seen == ["ro-agent"]
+
+
+def test_camel_case_body_is_accepted(seeded: dict[str, str]) -> None:
+    r = _client(_app()).post(
+        "/api/v1/route",
+        json={
+            "query": "search issues",
+            "agentId": "a1",
+            "maxTools": 1,
+            "allowedServers": ["github"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["tools"]) == 1 and r.json()["tools"][0]["server"] == "github"
+
+
+def test_query_is_redacted_before_the_model_and_the_decision_row(
+    seeded: dict[str, str],
+    db,  # noqa: ANN001 — conftest sessionmaker
+) -> None:
+    from sqlalchemy import select
+
+    from mcprouter.models import RoutingDecisionRecord
+
+    model = ScriptedDecisionModel()
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    r = _client(_app(model)).post("/api/v1/route", json={"query": f"search issues token={secret}"})
+    assert r.status_code == 200
+    assert model.calls, "model was consulted"
+    assert all(secret not in state for _, state, _, _ in model.calls)
+    with db() as s:
+        rec = s.scalars(
+            select(RoutingDecisionRecord).where(RoutingDecisionRecord.id == r.json()["request_id"])
+        ).one()
+    assert secret not in rec.query and rec.agent_id == "a1"
