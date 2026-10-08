@@ -746,3 +746,14 @@ def test_choice_outside_options_refused() -> None:
     m, _ = make(handler)
     with pytest.raises(RemoteResponseError):
         m.choice("s", "q", ["a", "b"])
+
+
+def test_hard_stop_before_send_is_a_timeout() -> None:
+    url, shutdown = _trickle_server(0.3)
+    m = RemoteSystemOneModel(endpoint=url, api_key=KEY, timeout_s=1.0, max_retries=0)
+    try:
+        for _ in range(200):
+            with pytest.raises(RemoteTimeoutError):
+                m._attempt(url, b"{}", 1e-6, 0.0)
+    finally:
+        shutdown()

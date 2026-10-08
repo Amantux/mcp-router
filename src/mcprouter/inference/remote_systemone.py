@@ -340,6 +340,10 @@ class RemoteSystemOneModel:
             failure = "timeout"
         except (httpx.HTTPError, OSError):
             failure = "timeout" if fired.is_set() else "unreachable"
+        except RuntimeError:
+            if not fired.is_set():
+                raise
+            failure = "timeout"  # hard stop closed the client before send()
         finally:
             timer.cancel()
             if own:
