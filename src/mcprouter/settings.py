@@ -22,10 +22,16 @@ class Settings:
     device: str = "auto"  # auto | cuda | cpu
     operating_mode: str = "balanced"  # performance | balanced | battery
     models_cache_dir: str = "./models-cache"
+    idle_unload_s: float = 300.0  # battery mode only
+    embed_batch_size: int = 32
+    laya_noul_mode: str = "choice"  # choice | native
     # Routing
     max_exposed_tools: int = 8
     retrieval_candidates: int = 20
     route_confidence_floor: float = 0.35
+    # Per-call deadline for decision-model questions; a hung model becomes an
+    # InferenceError and the route falls back deterministically (FR-06).
+    decision_timeout_s: float = 2.0
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
@@ -47,11 +53,15 @@ class Settings:
             device=get("MCPR_DEVICE", d.device),
             operating_mode=get("MCPR_OPERATING_MODE", d.operating_mode),
             models_cache_dir=get("MCPR_MODELS_CACHE_DIR", d.models_cache_dir),
+            idle_unload_s=float(get("MCPR_IDLE_UNLOAD_S", str(d.idle_unload_s))),
+            embed_batch_size=int(get("MCPR_EMBED_BATCH_SIZE", str(d.embed_batch_size))),
+            laya_noul_mode=get("MCPR_LAYA_NOUL_MODE", d.laya_noul_mode),
             max_exposed_tools=int(get("MCPR_MAX_EXPOSED_TOOLS", str(d.max_exposed_tools))),
             retrieval_candidates=int(get("MCPR_RETRIEVAL_CANDIDATES", str(d.retrieval_candidates))),
             route_confidence_floor=float(
                 get("MCPR_ROUTE_CONFIDENCE_FLOOR", str(d.route_confidence_floor))
             ),
+            decision_timeout_s=float(get("MCPR_DECISION_TIMEOUT_S", str(d.decision_timeout_s))),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),

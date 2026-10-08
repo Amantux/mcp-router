@@ -207,7 +207,10 @@ def default_decision_loader(
     from mcprouter.inference.laya import LayaDecisionModel
 
     return LayaDecisionModel.load(
-        settings.laya_model_id, device=device, cache_dir=_hub_cache(settings)
+        settings.laya_model_id,
+        device=device,
+        cache_dir=_hub_cache(settings),
+        noul_mode=settings.laya_noul_mode,
     )
 
 
