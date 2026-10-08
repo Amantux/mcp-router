@@ -330,3 +330,42 @@ def test_embedding_indices_must_be_permutation() -> None:
     data["data"][1]["index"] = 0
     with pytest.raises(EmbeddingRuntimeError, match="unusable"):
         emb(Recorder(httpx.Response(200, json=data))).embed(["x", "y"])
+
+
+# ------------------------------------------------------------- total deadline
+class FakeClock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_retry_refused_when_sleep_would_cross_deadline() -> None:
+    clock, slept = FakeClock(), []
+    rec = Recorder(httpx.Response(503, headers={"retry-after": "5"}), chat({"p_yes": 0.4}))
+    m = build_aoai_decision_model(
+        CFG, 2.0, transport=httpx.MockTransport(rec), sleep=slept.append, clock=clock
+    )
+    with pytest.raises(DecisionRuntimeError, match="timed out"):
+        m.noul("s", "q")
+    assert slept == [] and len(rec.requests) == 1
+
+
+def test_slow_attempt_consumes_budget_and_remaining_is_the_timeout() -> None:
+    clock = FakeClock()
+    seen: list[float] = []
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"]["read"])
+        clock.t += 1.5  # slow upstream
+        return httpx.Response(503, headers={"retry-after": "0.4"})
+
+    m = build_aoai_decision_model(
+        CFG, 2.0, transport=httpx.MockTransport(slow), sleep=lambda s: None, clock=clock
+    )
+    with pytest.raises(DecisionRuntimeError, match="timed out"):
+        m.noul("s", "q")
+    # attempt 1 got the full 2.0s; the retry gets only what is left (0.5s);
+    # after it the budget is spent and no third attempt is made.
+    assert seen == [pytest.approx(2.0), pytest.approx(0.5)]

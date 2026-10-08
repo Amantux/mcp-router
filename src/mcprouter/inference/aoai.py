@@ -47,6 +47,7 @@ from mcprouter.inference.errors import (
     InferenceError,
     ModelUnavailableError,
 )
+from mcprouter.inference.urlcheck import InvalidEndpointError, validate_outbound_url
 from mcprouter.inference.validation import ValidatedDecisionModel
 from mcprouter.interfaces import ChoiceResult, ScoreResult
 from mcprouter.settings import AoaiSettings
@@ -82,21 +83,25 @@ class _HttpError(InferenceError):
 def _validate_aoai_endpoint(raw: str) -> str:
     """Return the ``.../openai/v1`` base URL for an Azure OpenAI resource URL.
 
-    Same rules as mcpclient.targets.validate_http_url plus https-only and an
-    Azure host-suffix allowlist. TODO(wave-3): unify with executor A's
-    inference/urlcheck.py.
+    The shared outbound rules (urlcheck.validate_outbound_url, https-only here)
+    run first; the Azure host-suffix allowlist and resource-label rule on top.
     """
     if not raw or any(c.isspace() for c in raw):
         raise AoaiConfigError("MCPR_AOAI_ENDPOINT is missing or contains whitespace")
+    failure = ""
+    try:
+        validate_outbound_url(raw, allow_http_localhost=False)
+    except InvalidEndpointError as exc:
+        failure = str(exc)  # curated by urlcheck; never echoes the URL
+    if failure:
+        raise AoaiConfigError(f"MCPR_AOAI_ENDPOINT: {failure}")
     try:
         parts = urlsplit(raw)
         port = parts.port
-    except ValueError:
+    except ValueError:  # pragma: no cover - urlcheck already parsed it
         raise AoaiConfigError("MCPR_AOAI_ENDPOINT is malformed") from None
-    if parts.scheme != "https":
+    if parts.scheme != "https":  # pragma: no cover - urlcheck enforces it
         raise AoaiConfigError("MCPR_AOAI_ENDPOINT must use https")
-    if "@" in parts.netloc or parts.username is not None or parts.password is not None:
-        raise AoaiConfigError("MCPR_AOAI_ENDPOINT must not contain credentials")
     host = (parts.hostname or "").lower()
     if not host or host.endswith(".") or not host.endswith(_ALLOWED_SUFFIXES):
         raise AoaiConfigError(
@@ -148,6 +153,7 @@ class _AoaiHttp:
         timeout_s: float,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not cfg.api_key:
             raise AoaiConfigError("MCPR_AOAI_API_KEY (or _FILE) is not set")
@@ -157,6 +163,8 @@ class _AoaiHttp:
         self._base = _validate_aoai_endpoint(cfg.endpoint)
         self._retries = cfg.max_retries
         self._sleep = sleep
+        self._clock = clock
+        self._timeout_s = timeout_s
         self._client = httpx.Client(
             timeout=timeout_s,
             transport=transport,
@@ -176,13 +184,22 @@ class _AoaiHttp:
         return base * (0.5 + random.random() / 2)  # noqa: S311 - jitter, not crypto
 
     def post(self, path: str, payload: dict[str, Any]) -> Any:
+        """One logical call under a TOTAL deadline of ``timeout_s``: each attempt
+        gets the remaining budget as its httpx timeout, a retry whose sleep would
+        end past the deadline is refused, and the body read re-checks it."""
         url = self._base + path
+        deadline = self._clock() + self._timeout_s
         for attempt in range(self._retries + 1):
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise _HttpError("Azure OpenAI request timed out")
             try:
-                with self._client.stream("POST", url, json=payload) as resp:
+                with self._client.stream("POST", url, json=payload, timeout=remaining) as resp:
                     status = resp.status_code
                     if status in _RETRY_STATUSES and attempt < self._retries:
                         delay = self._backoff(attempt, resp.headers.get("retry-after"))
+                        if self._clock() + delay > deadline:
+                            raise _HttpError("Azure OpenAI request timed out")
                         log.warning("aoai %s -> %d; retrying in %.2fs", path, status, delay)
                         self._sleep(delay)
                         continue
@@ -192,6 +209,8 @@ class _AoaiHttp:
                     buf = bytearray()
                     for chunk in resp.iter_bytes():
                         buf.extend(chunk)
+                        if self._clock() > deadline:
+                            raise _HttpError("Azure OpenAI request timed out")
                         if len(buf) > MAX_RESPONSE_BYTES:
                             raise _HttpError("Azure OpenAI response exceeded the 1 MiB cap")
                     return _parse_capped(bytes(buf))
@@ -241,12 +260,13 @@ class AoaiDecisionModel:
         *,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not cfg.chat_deployment:
             raise AoaiConfigError("MCPR_AOAI_CHAT_DEPLOYMENT is not set")
         self.deployment = cfg.chat_deployment
         self.name = f"aoai:{cfg.chat_deployment}"
-        self._http = _AoaiHttp(cfg, timeout_s, transport, sleep)
+        self._http = _AoaiHttp(cfg, timeout_s, transport, sleep, clock)
 
     def _ask(self, state: str, question: str, schema_name: str, schema: dict[str, Any]) -> Any:
         payload = {
@@ -347,10 +367,11 @@ def build_aoai_decision_model(
     *,
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> ValidatedDecisionModel:
     """The only supported way to get the AOAI decision model: always validated."""
     return ValidatedDecisionModel(
-        AoaiDecisionModel(cfg, decision_timeout_s, transport=transport, sleep=sleep)
+        AoaiDecisionModel(cfg, decision_timeout_s, transport=transport, sleep=sleep, clock=clock)
     )
 
 
@@ -364,12 +385,13 @@ class AoaiEmbeddingBackend:
         *,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not cfg.embedding_deployment:
             raise AoaiConfigError("MCPR_AOAI_EMBEDDING_DEPLOYMENT is not set")
         self.deployment = cfg.embedding_deployment
         self.name = f"aoai:{cfg.embedding_deployment}"
-        self._http = _AoaiHttp(cfg, EMBED_TIMEOUT_S, transport, sleep)
+        self._http = _AoaiHttp(cfg, EMBED_TIMEOUT_S, transport, sleep, clock)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []

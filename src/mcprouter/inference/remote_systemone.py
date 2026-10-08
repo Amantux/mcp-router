@@ -337,6 +337,10 @@ class RemoteSystemOneModel:
                 return status, resp.headers.get("retry-after", "")
             finally:
                 resp.close()
+                # resp.request.headers carries the key: drop every frame/closure
+                # reference so error reporters walking locals can't reach it.
+                holder.clear()
+                del resp
         except httpx.TimeoutException:
             failure = "timeout"
         except (httpx.HTTPError, OSError):
@@ -354,18 +358,27 @@ class RemoteSystemOneModel:
         raise RemoteDecisionError("remote decision service is unreachable")
 
     def _read_capped(self, resp: httpx.Response, deadline: float) -> bytes:
+        """Errors are raised only after ``resp`` is dropped from this frame:
+        resp.request.headers carries the key, and error reporters walk locals."""
+        error: RemoteDecisionError | None = None
+        buf = bytearray()
         declared = resp.headers.get("content-length", "")
         if _ANY_DIGITS_RE.fullmatch(declared) and (
             not _DIGITS_RE.fullmatch(declared) or int(declared) > MAX_RESPONSE_BYTES
         ):
-            raise RemoteResponseError("remote decision response is too large")
-        buf = bytearray()
-        for chunk in resp.iter_bytes():
-            buf += chunk
-            if len(buf) > MAX_RESPONSE_BYTES:
-                raise RemoteResponseError("remote decision response is too large")
-            if self._clock() > deadline:
-                raise RemoteTimeoutError("remote decision call timed out")
+            error = RemoteResponseError("remote decision response is too large")
+        else:
+            for chunk in resp.iter_bytes():
+                buf += chunk
+                if len(buf) > MAX_RESPONSE_BYTES:
+                    error = RemoteResponseError("remote decision response is too large")
+                    break
+                if self._clock() > deadline:
+                    error = RemoteTimeoutError("remote decision call timed out")
+                    break
+        del resp
+        if error is not None:
+            raise error
         return bytes(buf)
 
     @staticmethod

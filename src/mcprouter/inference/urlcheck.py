@@ -40,7 +40,13 @@ from mcprouter.mcpclient.targets import validate_http_url
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _FORBIDDEN_NETS = tuple(
     ipaddress.ip_network(n)
-    for n in ("169.254.0.0/16", "fe80::/10", "100.100.100.200/32", "fd00:ec2::254/128")
+    for n in (
+        "169.254.0.0/16",
+        "fe80::/10",
+        "100.100.100.200/32",
+        "fd00:ec2::254/128",
+        "64:ff9b:1::/48",  # NAT64 local-use (RFC 8215): translator-defined, refuse
+    )
 )
 _MALFORMED = "endpoint URL is malformed"
 

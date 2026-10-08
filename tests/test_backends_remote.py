@@ -708,6 +708,8 @@ def test_hostile_content_length_is_typed(hdr: bytes) -> None:
         "[::ffff:169.254.169.254]",
         "[::ffff:100.100.100.200]",
         "1684301000",  # 100.100.100.200 as decimal
+        "[64:ff9b:1::a00:5]",  # NAT64 local-use (RFC 8215)
+        "[64:ff9b:1::1]",
     ],
 )
 def test_alternative_metadata_encodings_refused(host: str) -> None:
@@ -757,3 +759,37 @@ def test_hard_stop_before_send_is_a_timeout() -> None:
                 m._attempt(url, b"{}", 1e-6, 0.0)
     finally:
         shutdown()
+
+
+def _assert_key_unreachable(v: Any, depth: int = 0) -> None:
+    """Walk a frame local deep enough to reach a held request's headers."""
+    if depth > 3:
+        return
+    assert KEY not in repr(v)
+    if isinstance(v, httpx.Response):
+        assert KEY not in repr(dict(v.request.headers))
+    elif isinstance(v, httpx.Request):
+        assert KEY not in repr(dict(v.headers))
+    elif isinstance(v, dict):
+        for x in v.values():
+            _assert_key_unreachable(x, depth + 1)
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            _assert_key_unreachable(x, depth + 1)
+
+
+def test_key_absent_from_locals_on_body_error_path() -> None:
+    """An error raised while the response is open (oversized body) must not
+    leave ``resp`` (whose request headers carry the key) in any frame."""
+    big = b'{"pad": "' + b"x" * MAX_RESPONSE_BYTES + b'"}'
+    m, _ = make(lambda r: httpx.Response(200, content=big))
+    with pytest.raises(RemoteResponseError) as ei:
+        m.noul("s", "q")
+    tb = ei.value.__traceback__
+    names: set[str] = set()
+    while tb is not None:
+        for name, v in tb.tb_frame.f_locals.items():
+            names.add(name)
+            _assert_key_unreachable(v)
+        tb = tb.tb_next
+    assert "holder" in names  # the _attempt frame was actually inspected
