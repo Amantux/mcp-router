@@ -12,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from mcprouter.generation import bump_catalog
 from mcprouter.registry.api_deps import curated_errors, get_session, require_admin
 from mcprouter.registry.catalog import (
     MAX_LIMIT,
@@ -95,6 +96,7 @@ def patch_classification(
             session, tool_id, ClassificationUpdate(fields=body.to_fields()), actor=admin
         )
         session.commit()
+        bump_catalog()  # route cache (wave 2)
         return tool_out(tool, server_name=server_name_of(session, tool.server_id))
 
 
@@ -102,6 +104,7 @@ def _toggle(session: Session, tool_id: str, enabled: bool, admin: str) -> ToolOu
     with curated_errors():
         tool = set_enabled(session, tool_id, enabled, actor=admin)
         session.commit()
+        bump_catalog()  # route cache (wave 2)
         return tool_out(tool, server_name=server_name_of(session, tool.server_id))
 
 

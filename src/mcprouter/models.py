@@ -130,6 +130,8 @@ class AgentPrincipal(Base):
     key_hash: Mapped[str] = mapped_column(String(128))  # sha256 of API key
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     max_tools: Mapped[int] = mapped_column(Integer, default=8)
+    # Cap on DISTINCT servers in this agent's exposure; None = unlimited.
+    max_servers: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

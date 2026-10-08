@@ -14,8 +14,10 @@ Request flow:
           (/mcp, DNS-rebinding protection) -> handlers below.
 
 * tools/list  = the agent's last route() result (or a deterministic default:
-  top-N most-used tools), RE-FILTERED through policy, capped at
-  min(principal.max_tools, settings.max_exposed_tools). Stable names
+  top-N most-used tools), RE-FILTERED through policy, capped by the
+  routing.budgets clamp chain: min(principal.max_tools, max_exposed_tools)
+  tools over at most min(principal.max_servers, max_exposed_servers)
+  DISTINCT servers (in exposure order; None = unlimited). Stable names
   `server_name.tool_name`. cacheScope=private, ttlMs=0.
 * tools/call  = always via ExecutionManager.execute (policy, rate limit,
   validation, approval, audit). Never calls an upstream directly. A tool
@@ -33,11 +35,12 @@ Request flow:
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import anyio
@@ -69,6 +72,7 @@ from mcprouter.gateway.exposure import ExposureStore
 from mcprouter.interfaces import RouteFn, RouteRequest, RouteResult
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from mcprouter.policy.engine import evaluate
+from mcprouter.routing.budgets import effective_budgets
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -79,6 +83,21 @@ PRINCIPAL_SCOPE_KEY = "mcprouter.principal"
 MAX_QUERY_LEN = 2000
 MAX_TRACKED_SESSIONS_PER_AGENT = 32
 NOTIFY_TIMEOUT_S = 2.0
+ROUTE_REQUEST_ID_KWARG = "route_request_id"
+
+
+def _accepts_kwarg(fn: Callable[..., object], name: str) -> bool:
+    """Feature-detect an optional keyword (cross-branch seam: the analytics
+    track adds `route_request_id` to ExecutionManager.execute)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    p = params.get(name)
+    if p is not None:
+        return p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return any(q.kind is inspect.Parameter.VAR_KEYWORD for q in params.values())
+
 
 _META_TOOL_DEF = types.Tool(
     name=META_TOOL,
@@ -209,6 +228,7 @@ class GatewayServer:
         self._security = security
         self._settings = settings
         self._manager = manager
+        self._manager_takes_route_id = _accepts_kwarg(manager.execute, ROUTE_REQUEST_ID_KWARG)
         self._route_fn = route_fn
         self.exposure = ExposureStore()
         self._route_limiter = SlidingWindowLimiter(settings.rate_limit_per_agent_per_min)
@@ -284,13 +304,17 @@ class GatewayServer:
 
     # ------------------------------------------------------------ exposure
     def _cap(self, principal: AgentPrincipal) -> int:
-        return max(0, min(principal.max_tools, self._settings.max_exposed_tools))
+        return max(0, effective_budgets(principal, self._settings).max_tools)
+
+    def _server_cap(self, principal: AgentPrincipal) -> int | None:
+        return effective_budgets(principal, self._settings).max_servers
 
     def visible_tools(
         self, principal: AgentPrincipal
     ) -> list[tuple[MCPToolRecord, MCPServerRecord, bool]]:
         """(tool, server, requires_approval) the agent may see now. Sync (DB)."""
         cap = self._cap(principal)
+        server_cap = self._server_cap(principal)
         exposure = self.exposure.get(principal.agent_id)
         with self._factory() as s:
             q = (
@@ -300,6 +324,9 @@ class GatewayServer:
                     MCPToolRecord.enabled.is_(True),
                     MCPToolRecord.available.is_(True),
                     MCPServerRecord.enabled.is_(True),
+                    # Discovery's eligibility rule, same as routing's retriever
+                    # (integration gap 6): an offline server's tools are not shown.
+                    MCPServerRecord.status != "offline",
                 )
             )
             if exposure is not None:
@@ -321,9 +348,16 @@ class GatewayServer:
                 s.scalars(select(PolicyRule).where(PolicyRule.agent_id == principal.agent_id)).all()
             )
             out: list[tuple[MCPToolRecord, MCPServerRecord, bool]] = []
+            servers_shown: set[str] = set()
             for tool, server in candidates:
                 if len(out) >= cap:
                     break
+                if (
+                    server_cap is not None
+                    and server.id not in servers_shown
+                    and len(servers_shown) >= server_cap
+                ):
+                    continue  # distinct-server budget (routing.budgets)
                 if (
                     self._route_fn is not None
                     and stable_tool_id(server.name, tool.name) == META_TOOL
@@ -333,6 +367,7 @@ class GatewayServer:
                 decision = evaluate(principal, server, tool, rules)
                 if decision.allow:
                     out.append((tool, server, decision.requires_approval))
+                    servers_shown.add(server.id)
             s.expunge_all()  # detach (tools share server objects)
             return out
 
@@ -386,8 +421,16 @@ class GatewayServer:
         if params.name == META_TOOL and self._route_fn is not None:
             return await self._find_tools(principal, params.arguments)
         tool_id = await anyio.to_thread.run_sync(self._resolve_stable_id, params.name)
+        # Analytics seam (wave 2): attribute the call to the route that exposed
+        # the agent's current tool set. Exposure is per AGENT (all its sessions
+        # share it), so this is the agent's last route request_id. Passed only
+        # when the manager's execute() declares the optional keyword.
+        extra: dict[str, Any] = {}
+        exposure = self.exposure.get(principal.agent_id)
+        if exposure is not None and self._manager_takes_route_id:
+            extra[ROUTE_REQUEST_ID_KWARG] = exposure.request_id
         # Unknown names still go through the manager so the attempt is audited.
-        res = await self._manager.execute(principal, tool_id or "", params.arguments or {})
+        res = await self._manager.execute(principal, tool_id or "", params.arguments or {}, **extra)
         return _to_call_result(res)
 
     async def _on_listen(
@@ -415,6 +458,7 @@ class GatewayServer:
             query=redact(query),  # model input: secrets never reach the router
             agent_id=principal.agent_id,
             max_tools=self._cap(principal),
+            max_servers=self._server_cap(principal),
         )
         try:
             result = await anyio.to_thread.run_sync(route_fn, request)

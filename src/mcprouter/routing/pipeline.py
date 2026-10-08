@@ -29,13 +29,21 @@ QUESTION — one tool per Score question, one tool per line of the Noul
 question. That is what `score_batch(state, questions, levels)` and the
 deterministic-v1 model assume (it compares `state` against the question /
 each question line), and how the inference bench drives Laya.
-  f. Truncate to clamp(max_tools, 1, max_exposed_tools).
+  f. Budgets: cap the DISTINCT servers represented (`max_servers`, in rank
+     order; slots freed by a skipped server are back-filled from deeper
+     ranks), then truncate to clamp(max_tools, 1, max_exposed_tools). The
+     API computes both with routing.budgets (request may lower, never raise).
 
 Deterministic failure path (FR-06): ANY exception or contract-violating answer
 from the decision model => retrieval-score-only ranking, `fallback_used=True`.
 Retrieval/DB errors are NOT swallowed — they are not model failures.
 
 Every decision is persisted as a RoutingDecisionRecord (id = request_id).
+
+Route cache (routing/cache.py): a hit skips stages a-e but is re-validated
+against current eligibility + `scope.permits` before it is returned (never
+skips authorization); its decision row is marked `model_version =
+"cached/<model>"`.
 """
 
 from __future__ import annotations
@@ -46,9 +54,10 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.generation import catalog_generation, policy_generation
 from mcprouter.interfaces import (
     BatchScoringDecisionModel,
     DecisionModel,
@@ -59,7 +68,11 @@ from mcprouter.interfaces import (
     ScopeFilter,
     ToolCandidate,
 )
-from mcprouter.models import RoutingDecisionRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, RoutingDecisionRecord
+from mcprouter.routing.budgets import cap_servers
+from mcprouter.routing.cache import CachedRoute, CachedTool, RouteCache, normalize_query
+from mcprouter.routing.retriever import eligibility_filters
+from mcprouter.routing.trace import PolicyFiltered, RouteTrace
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -83,6 +96,11 @@ SCOPE_OVERFETCH = 3  # retrieve extra so per-tool scope drops don't starve stage
 _KNOWN_OPS = ("read", "write", "execute")
 _DESC_MAX = 400  # bound model input per candidate
 _NOUL_DESC_MAX = 120  # per line of the no-match question
+# RoutingDecisionRecord.model_version prefix for a decision served from the
+# route cache (column-free convention: "cached/<model that made it>").
+CACHED_MARKER = "cached/"
+# ... and for an admin simulation (/route/simulate): "simulated/<model>".
+SIMULATED_MARKER = "simulated/"
 
 
 class ModelContractError(RuntimeError):
@@ -107,18 +125,60 @@ class RoutePipeline:
         self._retriever = retriever
         self._model = model
         self._settings = settings
+        self._cache = RouteCache.from_settings(
+            settings.route_cache_size, settings.route_cache_ttl_s
+        )
 
     @property
     def model_name(self) -> str:
         return self._model.name
 
-    def route(self, request: RouteRequest, scope: ScopeFilter) -> RouteResult:
-        """`request.allowed_servers` are server IDS (the API resolves names)."""
+    def route(
+        self, request: RouteRequest, scope: ScopeFilter, *, trace: RouteTrace | None = None
+    ) -> RouteResult:
+        """`request.allowed_servers` are server IDS (the API resolves names).
+
+        `trace` = admin SIMULATION (routing/trace.py): diagnostics are
+        collected, the route cache is bypassed, and the decision row is marked
+        `simulated/`. The routed set is computed exactly as for a live route."""
         t0 = time.perf_counter()
         request_id = str(uuid.uuid4())
         max_tools = min(max(request.max_tools, 1), max(self._settings.max_exposed_tools, 1))
+        # Same clamp chain as the API (routing.budgets): the global cap still
+        # applies to a RouteRequest built by any other caller.
+        max_servers = _min_set(request.max_servers, self._settings.max_exposed_servers)
 
-        candidates = self._scoped_candidates(request, scope)
+        # Route cache: may skip retrieval + model calls, NEVER authorization —
+        # `_revalidate` re-runs eligibility and scope.permits on every hit.
+        base_key = (
+            None if trace is not None else self._cache_key(request, scope, max_tools, max_servers)
+        )
+        if base_key is not None and self._cache is not None:
+            # The model name is read at lookup AND at store time: an engine
+            # that lazy-loads during this route changes it ("x (not loaded)").
+            key = (*base_key, self._model.name)
+            hit = self._cache.get(key)
+            if hit is not None:
+                cached_tools = self._revalidate(hit, request, scope)
+                if cached_tools is not None:
+                    latency_ms = (time.perf_counter() - t0) * 1000.0
+                    model_version = f"{CACHED_MARKER}{hit.model_version}"[:80]
+                    self._persist(
+                        request, request_id, cached_tools, model_version, False, latency_ms
+                    )
+                    return RouteResult(
+                        request_id=request_id,
+                        tools=cached_tools,
+                        fallback_used=False,
+                        latency_ms=latency_ms,
+                        model_version=model_version,
+                        no_match=hit.no_match or not cached_tools,
+                        cached=True,
+                    )
+                # Something it held is no longer eligible/permitted: recompute.
+                self._cache.discard(key)
+
+        candidates = self._scoped_candidates(request, scope, trace)
         fallback = False
         no_match = False
         model_version = self._model.name[:80]  # RoutingDecisionRecord.model_version
@@ -127,7 +187,9 @@ class RoutePipeline:
             no_match = True
         else:
             try:
-                ranked, no_match = self._decide(request.query, candidates, max_tools)
+                ranked, no_match = self._decide(
+                    request.query, candidates, max_tools, max_servers, trace
+                )
             except Exception as exc:  # noqa: BLE001 — FR-06: ANY model failure => fallback
                 log.warning(
                     "decision model failed (%s); deterministic retrieval fallback request_id=%s",
@@ -138,8 +200,22 @@ class RoutePipeline:
                 model_version = f"retrieval-fallback/{self._model.name}"[:80]
                 ranked = [_Scored(c, c.retrieval_score) for c in candidates]
                 ranked.sort(key=_rank_key)
+                if trace is not None:
+                    # A failure may land mid-stage: drop partial model stages.
+                    trace.stages = [st for st in trace.stages if st.stage == "retrieval"]
+                    trace.stage(
+                        "fallback",
+                        len(candidates),
+                        len(ranked),
+                        error=type(exc).__name__,
+                        scores={r.cand.tool_id: round(r.score, 6) for r in ranked},
+                    )
 
-        selected = [] if no_match else ranked[:max_tools]
+        # Budgets: cap DISTINCT servers in rank order first (slots freed by a
+        # skipped server are back-filled from deeper ranks), then the count.
+        selected = [] if no_match else _cap(ranked, max_tools, max_servers)
+        if trace is not None and not no_match:
+            _trace_budgets(trace, ranked, max_tools, max_servers)
         # Defence in depth: re-assert scope on what is actually exposed.
         selected = [r for r in selected if scope.permits(r.cand)]
         tools = [
@@ -151,6 +227,19 @@ class RoutePipeline:
             )
             for r in selected
         ]
+        if base_key is not None and self._cache is not None and not fallback:
+            # Fallback results are never cached: a transient model timeout
+            # must not pin a degraded ranking for the TTL.
+            self._cache.put(
+                (*base_key, self._model.name),
+                CachedRoute(
+                    tools=tuple(CachedTool(t.tool_id, t.score) for t in tools),
+                    no_match=no_match or not tools,
+                    model_version=model_version,
+                ),
+            )
+        if trace is not None:
+            model_version = f"{SIMULATED_MARKER}{model_version}"[:80]
         latency_ms = (time.perf_counter() - t0) * 1000.0
         self._persist(request, request_id, tools, model_version, fallback, latency_ms)
         return RouteResult(
@@ -162,17 +251,84 @@ class RoutePipeline:
             no_match=no_match or not tools,
         )
 
+    # ------------------------------------------------------------- cache
+    def _cache_key(
+        self, request: RouteRequest, scope: ScopeFilter, max_tools: int, max_servers: int | None
+    ) -> tuple[object, ...] | None:
+        if self._cache is None:
+            return None
+        fingerprint = getattr(scope, "fingerprint", None)
+        fp = fingerprint() if callable(fingerprint) else None
+        if not isinstance(fp, str):
+            return None  # unknown ScopeFilter: cannot be keyed safely -> no caching
+        allowed = (
+            None if request.allowed_servers is None else tuple(sorted(set(request.allowed_servers)))
+        )
+        return (
+            request.agent_id,
+            normalize_query(request.query),
+            fp,
+            catalog_generation(),
+            policy_generation(),
+            max_tools,
+            max_servers,
+            allowed,
+        )
+
+    def _revalidate(
+        self, hit: CachedRoute, request: RouteRequest, scope: ScopeFilter
+    ) -> list[RoutedTool] | None:
+        """Re-authorize a cache hit against CURRENT state: catalog eligibility
+        (fresh rows: enabled/available/server enabled/not offline) and the
+        CURRENT scope (server ids + `permits` on the freshly loaded
+        operation). Returns None if any cached tool no longer passes."""
+        if not hit.tools:
+            return []
+        ids = [t.tool_id for t in hit.tools]
+        with self._factory() as s:
+            rows = s.execute(
+                select(
+                    MCPToolRecord.id,
+                    MCPToolRecord.server_id,
+                    MCPToolRecord.name,
+                    MCPServerRecord.name,
+                    MCPToolRecord.description,
+                    MCPToolRecord.domain,
+                    MCPToolRecord.operation,
+                )
+                .join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
+                .where(MCPToolRecord.id.in_(ids), *eligibility_filters())
+            ).all()
+        by_id = {r[0]: r for r in rows}
+        server_ids = _permitted_server_ids(request, scope)
+        permitted = None if server_ids is None else set(server_ids)
+        out: list[RoutedTool] = []
+        for ct in hit.tools:
+            row = by_id.get(ct.tool_id)
+            if row is None:
+                return None
+            cand = ToolCandidate(
+                tool_id=row[0],
+                server_id=row[1],
+                tool_name=row[2],
+                server_name=row[3],
+                description=row[4] or "",
+                domain=row[5],
+                operation=row[6],
+                retrieval_score=0.0,
+            )
+            if permitted is not None and cand.server_id not in permitted:
+                return None
+            if not scope.permits(cand):
+                return None
+            out.append(RoutedTool(cand.tool_id, cand.server_name, cand.tool_name, ct.score))
+        return out
+
     # ----------------------------------------------------------- stage a
-    def _scoped_candidates(self, request: RouteRequest, scope: ScopeFilter) -> list[ToolCandidate]:
-        scope_ids = scope.server_ids()
-        server_ids: list[str] | None
-        if scope_ids is None:
-            server_ids = request.allowed_servers
-        elif request.allowed_servers is None:
-            server_ids = list(scope_ids)
-        else:
-            allowed = set(request.allowed_servers)
-            server_ids = [sid for sid in scope_ids if sid in allowed]
+    def _scoped_candidates(
+        self, request: RouteRequest, scope: ScopeFilter, trace: RouteTrace | None = None
+    ) -> list[ToolCandidate]:
+        server_ids = _permitted_server_ids(request, scope)
         limit = self._settings.retrieval_candidates
         raw = self._retriever.retrieve(
             request.query, limit=limit * SCOPE_OVERFETCH, server_ids=server_ids
@@ -180,15 +336,73 @@ class RoutePipeline:
         # Enforce server scope HERE too: never trust an injected Retriever to
         # honour server_ids (e.g. `if server_ids:` would read [] as "all").
         permitted_ids = None if server_ids is None else set(server_ids)
-        return [
+        kept = [
             c
             for c in raw
             if (permitted_ids is None or c.server_id in permitted_ids) and scope.permits(c)
-        ][:limit]
+        ]
+        out = kept[:limit]
+        if trace is not None:
+            self._trace_retrieval(trace, request, scope, raw, kept, out, permitted_ids)
+        return out
+
+    def _trace_retrieval(
+        self,
+        trace: RouteTrace,
+        request: RouteRequest,
+        scope: ScopeFilter,
+        raw: list[ToolCandidate],
+        kept: list[ToolCandidate],
+        out: list[ToolCandidate],
+        permitted_ids: set[str] | None,
+    ) -> None:
+        """Simulation only. Server-level scope is pushed into SQL, so tools on
+        out-of-scope servers never reach `raw`; one extra retrieval WITHOUT
+        the scope's server restriction (the request's own allowed_servers
+        still apply) surfaces them, with the policy engine's reason."""
+        explain = getattr(scope, "explain", None)
+
+        def reason(c: ToolCandidate) -> str:
+            if callable(explain):
+                text = explain(c)
+                if isinstance(text, str) and text:
+                    return text
+            if permitted_ids is not None and c.server_id not in permitted_ids:
+                return "server not in scope"
+            return "denied by scope"
+
+        kept_ids = {c.tool_id for c in kept}
+        seen: set[str] = set()
+        denied: list[ToolCandidate] = []
+        extra = self._retriever.retrieve(
+            request.query,
+            limit=self._settings.retrieval_candidates * SCOPE_OVERFETCH,
+            server_ids=request.allowed_servers,
+        )
+        for c in [*raw, *extra]:
+            if c.tool_id in kept_ids or c.tool_id in seen:
+                continue
+            seen.add(c.tool_id)
+            denied.append(c)
+            trace.policy_filtered.append(PolicyFiltered(c, reason(c)))
+        trace.candidates = list(out)
+        trace.stage(
+            "retrieval",
+            len(raw),
+            len(out),
+            [c for c in raw if c.tool_id not in kept_ids] + kept[len(out) :],
+            limit=self._settings.retrieval_candidates,
+            policyFiltered=len(denied),
+        )
 
     # -------------------------------------------------------- stages b-e
     def _decide(
-        self, query: str, cands: list[ToolCandidate], max_tools: int
+        self,
+        query: str,
+        cands: list[ToolCandidate],
+        max_tools: int,
+        max_servers: int | None = None,
+        trace: RouteTrace | None = None,
     ) -> tuple[list[_Scored], bool]:
         m = self._model
         # b. domain (hard prune, with a calibrated multi-label margin)
@@ -202,7 +416,19 @@ class RoutePipeline:
                 for d in domains
                 if d == res.option or res.probabilities.get(d, 0.0) >= DOMAIN_KEEP_RATIO * p_top
             }
+            before = cands
             cands = [c for c in cands if c.domain is None or c.domain in keep]
+            if trace is not None:
+                trace.stage(
+                    "domain",
+                    len(before),
+                    len(cands),
+                    [c for c in before if c not in cands],
+                    options=domains,
+                    chosen=res.option,
+                    probabilities=dict(res.probabilities),
+                    kept=sorted(keep),
+                )
 
         # c. operation (soft)
         weights = dict.fromkeys((c.tool_id for c in cands), 1.0)
@@ -213,6 +439,17 @@ class RoutePipeline:
             for c in cands:
                 if c.operation in _KNOWN_OPS and c.operation != res.option:
                     weights[c.tool_id] *= OPERATION_MISMATCH_WEIGHT
+            if trace is not None:
+                trace.stage(
+                    "operation",
+                    len(cands),
+                    len(cands),
+                    options=ops,
+                    chosen=res.option,
+                    probabilities=dict(res.probabilities),
+                    downweighted=[tid for tid, w in weights.items() if w != 1.0],
+                    weight=OPERATION_MISMATCH_WEIGHT,
+                )
 
         # d. per-candidate relevance: state = task, one question per candidate
         questions = [_tool_question(c) for c in cands]
@@ -234,16 +471,33 @@ class RoutePipeline:
             blended = MODEL_WEIGHT * relevance + (1.0 - MODEL_WEIGHT) * c.retrieval_score
             scored.append(_Scored(c, blended * weights[c.tool_id]))
         scored.sort(key=_rank_key)
+        if trace is not None:
+            trace.stage(
+                "score",
+                len(cands),
+                len(scored),
+                scores={r.cand.tool_id: round(r.score, 6) for r in scored},
+            )
 
         # e. no-match detection over what would actually be exposed
         shown = "\n".join(
             f"- {r.cand.server_name}/{r.cand.tool_name}: {r.cand.description[:_NOUL_DESC_MAX]}"
-            for r in scored[:max_tools]
+            for r in _cap(scored, max_tools, max_servers)
         )
         p_yes = m.noul(query, f"{NOUL_QUESTION}\n{shown}")
         if not _is_prob(p_yes):
             raise ModelContractError("noul probability malformed")
-        return scored, p_yes < self._settings.route_confidence_floor
+        no_match = p_yes < self._settings.route_confidence_floor
+        if trace is not None:
+            trace.stage(
+                "noMatch",
+                len(scored),
+                0 if no_match else len(scored),
+                pYes=round(p_yes, 6),
+                floor=self._settings.route_confidence_floor,
+                noMatch=no_match,
+            )
+        return scored, no_match
 
     # ------------------------------------------------------------ persist
     def _persist(
@@ -273,6 +527,48 @@ class RoutePipeline:
                 )
             )
             s.commit()
+
+
+def _permitted_server_ids(request: RouteRequest, scope: ScopeFilter) -> list[str] | None:
+    """Scope's server ids intersected with the request's allowed_servers
+    (None = no server-level restriction)."""
+    scope_ids = scope.server_ids()
+    if scope_ids is None:
+        return request.allowed_servers
+    if request.allowed_servers is None:
+        return list(scope_ids)
+    allowed = set(request.allowed_servers)
+    return [sid for sid in scope_ids if sid in allowed]
+
+
+def _trace_budgets(
+    trace: RouteTrace, ranked: list[_Scored], max_tools: int, max_servers: int | None
+) -> None:
+    capped = cap_servers(ranked, lambda r: r.cand.server_id, max_servers)
+    kept = {id(r) for r in capped}
+    trace.stage(
+        "maxServers",
+        len(ranked),
+        len(capped),
+        [r.cand for r in ranked if id(r) not in kept],
+        limit=max_servers,
+    )
+    trace.stage(
+        "maxTools",
+        len(capped),
+        min(len(capped), max_tools),
+        [r.cand for r in capped[max_tools:]],
+        limit=max_tools,
+    )
+
+
+def _cap(ranked: list[_Scored], max_tools: int, max_servers: int | None) -> list[_Scored]:
+    return cap_servers(ranked, lambda r: r.cand.server_id, max_servers)[:max_tools]
+
+
+def _min_set(*values: int | None) -> int | None:
+    present = [v for v in values if v is not None]
+    return min(present) if present else None
 
 
 def _rank_key(r: _Scored) -> tuple[float, str, str]:

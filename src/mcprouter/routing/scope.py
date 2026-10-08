@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from mcprouter.interfaces import ToolCandidate
+from mcprouter.interfaces import ScopeFilter, ToolCandidate
 
 _OP_RANK = {"read": 0, "write": 1, "execute": 2}
 
@@ -23,6 +23,9 @@ _OP_RANK = {"read": 0, "write": 1, "execute": 2}
 class AllowAllScope:
     def server_ids(self) -> list[str] | None:
         return None
+
+    def fingerprint(self) -> str:  # route-cache key component
+        return "allow-all"
 
     def permits(self, candidate: ToolCandidate) -> bool:
         return True
@@ -36,9 +39,28 @@ class StaticScope:
     def server_ids(self) -> list[str] | None:
         return None if self.servers is None else list(self.servers)
 
+    def fingerprint(self) -> str:  # route-cache key component
+        servers = "*" if self.servers is None else ",".join(sorted(self.servers))
+        return f"static:{self.max_operation}:{servers}"
+
     def permits(self, candidate: ToolCandidate) -> bool:
         # Deny by default: an unknown/unclassified operation is not provably
         # within any ceiling, so it is refused.
         op = _OP_RANK.get(candidate.operation)
         ceiling = _OP_RANK.get(self.max_operation)
         return op is not None and ceiling is not None and op <= ceiling
+
+
+class UncachedScope:
+    """Delegates to another scope but deliberately has NO `fingerprint()`, so
+    the route cache never keys (and never serves) routes made under it. Used
+    by /route/evaluate: an eval re-run must measure the pipeline, not the cache."""
+
+    def __init__(self, inner: ScopeFilter) -> None:
+        self._inner = inner
+
+    def server_ids(self) -> list[str] | None:
+        return self._inner.server_ids()
+
+    def permits(self, candidate: ToolCandidate) -> bool:
+        return self._inner.permits(candidate)

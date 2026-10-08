@@ -42,6 +42,7 @@ from mcprouter.discovery import (
 )
 from mcprouter.discovery.credentials import env_names
 from mcprouter.discovery.registry import get_server, set_server_enabled, tool_counts
+from mcprouter.generation import bump_catalog
 from mcprouter.mcpclient import ConnectorError
 from mcprouter.models import MCPServerRecord
 
@@ -193,9 +194,11 @@ def patch_server(server_id: str, body: ServerPatch, request: Request) -> ServerO
         with _factory(request)() as s, s.begin():
             rec = set_server_enabled(s, server_id, body.enabled)
             s.flush()
-            return _views(s, [rec])[0]
+            view = _views(s, [rec])[0]
     except ServerNotFoundError:
         raise _not_found() from None
+    bump_catalog()  # route cache (wave 2): after the commit above
+    return view
 
 
 @router.post("", response_model=ServerOut, status_code=status.HTTP_201_CREATED)
@@ -286,4 +289,5 @@ def remove_server(server_id: str, request: Request) -> Response:
         raise _not_found() from None
     except ServerInUseError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from None
+    bump_catalog()  # route cache (wave 2)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

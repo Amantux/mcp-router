@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import EmbeddingBackend, ToolCandidate
 from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.routing.cache import QueryEmbeddingCache
 
 RRF_K = 60
 _MAX_QUERY_WORDS = 32
@@ -104,6 +105,17 @@ def ensure_keyword_index(engine: Engine) -> None:
         conn.execute(text(ddl))
 
 
+def eligibility_filters() -> list[ColumnElement[bool]]:
+    """Routing eligibility (discovery's rule): tool enabled + available, server
+    enabled and not offline. Shared by both legs and the route-cache re-check."""
+    return [
+        MCPToolRecord.enabled.is_(True),
+        MCPToolRecord.available.is_(True),
+        MCPServerRecord.enabled.is_(True),
+        MCPServerRecord.status != "offline",
+    ]
+
+
 @dataclass(frozen=True)
 class _Row:
     tool_id: str
@@ -128,6 +140,7 @@ class HybridRetriever:
         self._factory = session_factory
         self._embedder = embedder
         self._leg_multiplier = leg_multiplier
+        self._query_vectors = QueryEmbeddingCache()  # keyed (text, backend name)
 
     def retrieve(
         self,
@@ -140,7 +153,9 @@ class HybridRetriever:
         if limit <= 0 or server_ids == []:
             return []
         leg_limit = max(limit * self._leg_multiplier, limit)
-        qvec = self._embedder.embed([query])[0]
+        qvec = self._query_vectors.get_or_compute(
+            query, self._embedder.name, lambda q: self._embedder.embed([q])[0]
+        )
         with self._factory() as s:
             vector_rows = self._vector_leg(s, qvec, leg_limit, server_ids, enabled_only)
             keyword_rows = self._keyword_leg(s, query, leg_limit, server_ids, enabled_only)
@@ -191,12 +206,7 @@ class HybridRetriever:
     def _filters(server_ids: list[str] | None, enabled_only: bool) -> list[ColumnElement[bool]]:
         f: list[ColumnElement[bool]] = []
         if enabled_only:
-            f += [
-                MCPToolRecord.enabled.is_(True),
-                MCPToolRecord.available.is_(True),
-                MCPServerRecord.enabled.is_(True),
-                MCPServerRecord.status != "offline",
-            ]
+            f += eligibility_filters()
         if server_ids is not None:
             f.append(MCPToolRecord.server_id.in_(server_ids))
         return f

@@ -85,7 +85,16 @@ def test_route_happy_path_wire_shape(seeded: dict[str, str]) -> None:
     r = c.post("/api/v1/route", json={"query": "search issues", "agent_id": "a1", "max_tools": 2})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"request_id", "tools", "fallback_used", "latency_ms", "no_match"}
+    assert set(body) == {
+        "request_id",
+        "tools",
+        "fallback_used",
+        "latency_ms",
+        "no_match",
+        "max_tools_applied",
+        "max_servers_applied",
+        "cached",
+    }
     assert body["fallback_used"] is False and body["no_match"] is False
     assert len(body["tools"]) <= 2
     assert set(body["tools"][0]) == {"server", "tool", "score"}
