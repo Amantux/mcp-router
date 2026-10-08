@@ -31,7 +31,7 @@ const ISSUES = root({
 
 describe("initialDraft", () => {
   it("applies defaults (scalars, enum, boolean) and leaves the rest blank", () => {
-    const d = initialDraft(ISSUES, true) as DraftObject;
+    const d = initialDraft(ISSUES) as DraftObject;
     expect(d.state).toBe("0");
     expect(d.limit).toBe("30");
     expect(d.archived).toBe("false");
@@ -45,6 +45,18 @@ describe("initialDraft", () => {
   it("starts required booleans at false and preselects a single-option required enum", () => {
     const r = root({ type: "object", required: ["ok", "v"], properties: { ok: { type: "boolean" }, v: { const: "1" } } });
     expect(initialDraft(r)).toEqual({ ok: "false", v: "0" });
+  });
+
+  it("does not seed required booleans/enums inside an untouched optional group (it stays omittable)", () => {
+    const r = root({
+      type: "object",
+      properties: {
+        opts: { type: "object", required: ["verbose", "name", "mode"], properties: { verbose: { type: "boolean" }, name: { type: "string" }, mode: { const: "x" } } },
+      },
+    });
+    const d = initialDraft(r);
+    expect(d).toEqual({ opts: { verbose: "", name: "", mode: "" } });
+    expect(toArguments(r, d)).toEqual({ value: {}, errors: {} });
   });
 
   it("uses an object default for a nested group", () => {
@@ -151,6 +163,7 @@ describe("fromArguments (JSON → form, best effort)", () => {
     expect(fromArguments(ISSUES, { labels: ["two\nlines"] })).toMatchObject({ ok: false, reason: "labels: a list item contains a line break" });
     expect(fromArguments(ISSUES, { labels: [] })).toMatchObject({ ok: false });
     expect(fromArguments(ISSUES, { kinds: ["bug", "bug"] })).toMatchObject({ ok: false });
+    expect(fromArguments(ISSUES, { kinds: [] })).toMatchObject({ ok: false, reason: "kinds: an empty list can't be told apart from an unset field" });
     expect(fromArguments(ISSUES, { since: {} })).toMatchObject({ ok: false });
     expect(fromArguments(ISSUES, { includeDrafts: null })).toMatchObject({ ok: false });
     expect(fromArguments(ISSUES, [1, 2])).toEqual({ ok: false, reason: "arguments must be a JSON object" });

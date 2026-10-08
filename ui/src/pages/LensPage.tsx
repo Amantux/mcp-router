@@ -266,6 +266,11 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
 
   useEffect(() => () => inflight.current?.abort(), []);
 
+  // Sliders re-query only the lens on screen; once the agent or query is edited, wait for an explicit submit.
+  useEffect(() => {
+    if (last.current && (last.current.agentId !== agentId || last.current.query !== query.trim())) last.current = null;
+  }, [agentId, query]);
+
   const submit = () => {
     const e: typeof errors = {};
     if (!agentId) e.agentId = "Choose the agent whose view you want to see.";

@@ -89,7 +89,8 @@ describe("PlaygroundPage", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Run create_issue as the admin token?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    await user.click(within(dialog).getByRole("button", { name: "Run tool" }));
+    // Fluent keeps the surface aria-hidden during its open transition; wait it out.
+    await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 3000 }));
     const ok = await screen.findByTestId("outcome-ok");
     expect(within(ok).getByText("Ran create_issue")).toBeTruthy();
     expect(within(ok).getByLabelText("Result block 1").textContent).toBe('{\n  "number": 7\n}');
@@ -126,6 +127,23 @@ describe("PlaygroundPage", () => {
 });
 
 describe("ExecutionOutcomeView — pending approval", () => {
+  it("stops polling and says so when the approval is gone (agent 404) or the credentials are refused (401)", async () => {
+    setCredentials({ agentKey: "agt" });
+    let polls = 0;
+    mockFetch({ "GET /api/v1/me/approvals/ap-x": () => (polls++, { status: 404 }), "GET /api/v1/me/approvals/ap-y": () => (polls++, { status: 401 }) });
+    const view = (id: string) => (
+      <ExecutionOutcomeView tool={{ name: "x" }} asAgent pollMs={20} outcome={{ status: "pending_approval", detail: "", recordId: null, approvalId: id }} />
+    );
+    const r = renderWithProviders(view("ap-x"), { route: "/" });
+    await screen.findByTestId("approval-gone");
+    r.unmount();
+    renderWithProviders(view("ap-y"), { route: "/" });
+    await screen.findByTestId("approval-refused");
+    const settled = polls;
+    await new Promise((res) => setTimeout(res, 80));
+    expect(polls).toBe(settled);
+  });
+
   it("links to the approvals list and polls until the approval resolves", async () => {
     setCredentials({ agentKey: "agt" });
     let polls = 0;

@@ -60,7 +60,7 @@ export const METRICS_URL = "/metrics";
 // ------------------------------------------------------------ case mapping
 // Opaque = user/tool data: tool schemas, version snapshots, score maps, tool
 // call arguments and outputs, approval summaries (redacted arguments).
-const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores", "arguments", "content", "structuredContent", "summary"]);
+const OPAQUE_KEYS = new Set(["inputSchema", "snapshot", "scores", "arguments", "content", "structuredContent", "summary", "catalogDrift"]);
 
 export function snakeToCamel(key: string): string {
   return key.replace(/_+([a-z0-9])/g, (_m, c: string) => c.toUpperCase());
@@ -113,6 +113,14 @@ export function describeError(err: unknown): { status: string; advice: string } 
   if (s === 0)
     return { status: "network error", advice: "Couldn't reach the MCP Router backend. Check it is running on port 8400, then retry." };
   const status = `HTTP ${s}`;
+  if ((s === 401 || s === 403) && err.identity === "agent")
+    return {
+      status,
+      advice:
+        s === 401
+          ? "The backend refused the agent key. Open Connect (gear icon) and paste a current agent key, or forget it to act as admin."
+          : "The agent this key belongs to isn't allowed to do this.",
+    };
   if (s === 401 || s === 403)
     return { status, advice: "The backend refused these credentials. Open Connect (gear icon) and paste the admin token, then retry." };
   if (s === 404)
@@ -175,7 +183,7 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
     throw new ApiError(0, path, presented);
   }
-  if (!opts.public) noteResponse(identity, res.status);
+  if (!opts.public) noteResponse(presented, res.status);
   if (!res.ok) throw new ApiError(res.status, path, presented);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -457,7 +465,14 @@ export async function listApprovals(status?: ApprovalStatus, signal?: AbortSigna
  * is no admin get-by-id endpoint). Undefined if it no longer exists.
  */
 export async function getApproval(id: string, asAgent: boolean, signal?: AbortSignal): Promise<Approval | undefined> {
-  if (asAgent) return request<Approval>("GET", `${API_BASE}/me/approvals/${encodeURIComponent(id)}`, { signal, as: "agent" });
+  if (asAgent) {
+    try {
+      return await request<Approval>("GET", `${API_BASE}/me/approvals/${encodeURIComponent(id)}`, { signal, as: "agent" });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return undefined; // gone (or not ours): same as the admin path
+      throw e;
+    }
+  }
   return (await listApprovals(undefined, signal)).find((a) => a.id === id);
 }
 

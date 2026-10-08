@@ -45,19 +45,29 @@ export function emptyDraft(node: FieldNode): Draft {
   }
 }
 
-/** Initial draft: schema defaults applied; required booleans start false; a single-option required enum is preselected. */
-export function initialDraft(node: FieldNode, required = false): Draft {
+/**
+ * Initial draft for a root object: schema defaults applied; required booleans
+ * start false and a single-option required enum is preselected — but only
+ * when every enclosing object is itself required. Seeding inside an optional
+ * group would make an untouched group look "used" (blocking Run on its other
+ * required fields, or silently sending it).
+ */
+export function initialDraft(root: FieldNode): Draft {
+  return seed(root, true);
+}
+
+function seed(node: FieldNode, mustSend: boolean): Draft {
   if (node.default !== undefined) {
     const fromDefault = draftFor(node, node.default);
     if (fromDefault.ok) return fromDefault.draft;
   }
   switch (node.kind) {
     case "object":
-      return Object.fromEntries(node.fields.map((f) => [f.key, initialDraft(f.node, f.required)]));
+      return Object.fromEntries(node.fields.map((f) => [f.key, seed(f.node, mustSend && f.required)]));
     case "boolean":
-      return required ? "false" : "";
+      return mustSend ? "false" : "";
     case "enum":
-      return required && node.options.length === 1 ? "0" : "";
+      return mustSend && node.options.length === 1 ? "0" : "";
     default:
       return emptyDraft(node);
   }
@@ -217,7 +227,7 @@ export type FromResult = { ok: true; draft: Draft } | { ok: false; reason: strin
 
 const fail = (path: string, why: string): FromResult => ({ ok: false, reason: `${path || "arguments"}: ${why}` });
 
-function draftFor(node: FieldNode, value: JsonValue, path = ""): FromResult {
+function draftFor(node: FieldNode, value: JsonValue, path = "", required = true): FromResult {
   switch (node.kind) {
     case "raw":
       return { ok: true, draft: JSON.stringify(value, null, 2) };
@@ -240,6 +250,8 @@ function draftFor(node: FieldNode, value: JsonValue, path = ""): FromResult {
     case "array": {
       if (!Array.isArray(value)) return fail(path, "expected a list");
       if (node.item.kind === "enum") {
+        // An optional enum-list left with no boxes ticked is omitted, so [] would be lost.
+        if (value.length === 0 && !required) return fail(path, "an empty list can't be told apart from an unset field");
         const opts = node.item.options;
         const idx: string[] = [];
         for (const v of value) {
@@ -274,7 +286,7 @@ function draftFor(node: FieldNode, value: JsonValue, path = ""): FromResult {
           out[f.key] = emptyDraft(f.node);
           continue;
         }
-        const d = draftFor(f.node, v, join(path, f.key));
+        const d = draftFor(f.node, v, join(path, f.key), f.required);
         if (!d.ok) return d;
         out[f.key] = d.draft;
       }

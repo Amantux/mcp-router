@@ -3,7 +3,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { getAuthSnapshot, hydrateAuth, setCredentials } from "./auth";
-import { getMe, listServers, listTools, probeAdmin } from "./client";
+import { describeError, getMe, listServers, listTools, probeAdmin } from "./client";
 import { AuthBanner, ConnectPanel } from "../components/ConnectPanel";
 import { useLoader } from "../hooks/useLoader";
 
@@ -103,6 +103,25 @@ describe("401/403 flips the global not-connected state", () => {
     await getMe().catch(() => {});
     expect(getAuthSnapshot().status).not.toBe("rejected");
     expect(getAuthSnapshot().agentKeyRejected).toBe(false);
+  });
+
+  it("attributes a response to the credential presented when the request was sent", async () => {
+    setCredentials({ adminToken: ADMIN, agentKey: AGENT });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    mockFetch({ "GET /api/v1/me": async () => (await gate, { status: 403 }) });
+    const p = getMe().catch(() => {});
+    setCredentials({ agentKey: null }); // forgotten mid-flight
+    release();
+    await p;
+    expect(getAuthSnapshot().status).not.toBe("rejected");
+  });
+
+  it("gives agent-key advice, not admin-token advice, for an agent 401", async () => {
+    setCredentials({ agentKey: AGENT });
+    mockFetch({ "GET /api/v1/me": () => ({ status: 401 }) });
+    const err = await getMe().catch((e: unknown) => e);
+    expect(describeError(err).advice).toContain("refused the agent key");
   });
 
   it("a later 2xx admin response reconnects", async () => {

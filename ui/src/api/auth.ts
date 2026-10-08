@@ -129,9 +129,13 @@ export function effectiveIdentity(identity: Identity): Identity | "none" {
   return adminToken ? "admin" : "none";
 }
 
-/** Called by client.ts with the HTTP outcome of every request. */
-export function noteResponse(identity: Identity, status: number): void {
-  const asAgent = effectiveIdentity(identity) === "agent";
+/**
+ * Called by client.ts with the HTTP outcome of every request. `presented` is
+ * the credential captured when the request was SENT, so a key forgotten while
+ * the request was in flight can't misattribute the answer.
+ */
+export function noteResponse(presented: Identity, status: number): void {
+  const asAgent = presented === "agent";
   if (status === 401 || status === 403) {
     if (asAgent) {
       // 403 on an agent call is a policy answer, not a bad key; only 401 means the key is wrong.

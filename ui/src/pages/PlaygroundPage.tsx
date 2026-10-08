@@ -21,7 +21,7 @@ import {
 } from "@fluentui/react-components";
 import { PlayRegular, WrenchRegular } from "@fluentui/react-icons";
 import { Link, useSearchParams } from "react-router";
-import { executeTool, getApproval, getMe, getTool, isAbort, listServers, listTools } from "../api/client";
+import { ApiError, executeTool, getApproval, getMe, getTool, isAbort, listServers, listTools } from "../api/client";
 import { useAuth } from "../api/auth";
 import type { Approval, ExecuteResult, JsonObject, MCPTool } from "../api/types";
 import { ConfirmDialog, EmptyState, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
@@ -133,7 +133,8 @@ function prettyText(t: string): string {
 function ApprovalTracker({ approvalId, asAgent, pollMs }: { approvalId: string; asAgent: boolean; pollMs: number }) {
   const [approval, setApproval] = useState<Approval | null | undefined>(undefined);
   const [checkFailed, setCheckFailed] = useState(false);
-  const done = approval === null || (approval !== undefined && TERMINAL.includes(approval.status));
+  const [refused, setRefused] = useState(false);
+  const done = refused || approval === null || (approval !== undefined && TERMINAL.includes(approval.status));
 
   useEffect(() => {
     if (done) return;
@@ -145,7 +146,10 @@ function ApprovalTracker({ approvalId, asAgent, pollMs }: { approvalId: string; 
           setCheckFailed(false);
         })
         .catch((e: unknown) => {
-          if (!isAbort(e)) setCheckFailed(true);
+          if (isAbort(e)) return;
+          // Credentials refused: retrying can't help, so stop polling and say so.
+          if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setRefused(true);
+          else setCheckFailed(true);
         });
     void check();
     const id = window.setInterval(check, pollMs);
@@ -155,6 +159,15 @@ function ApprovalTracker({ approvalId, asAgent, pollMs }: { approvalId: string; 
     };
   }, [approvalId, asAgent, pollMs, done]);
 
+  if (refused)
+    return (
+      <MessageBar intent="error" data-testid="approval-refused">
+        <MessageBarBody>
+          The backend refused to show this approval's status for the current credentials. Check them in Connect, or follow it on the{" "}
+          <Link to="/approvals">Approvals</Link> page.
+        </MessageBarBody>
+      </MessageBar>
+    );
   if (approval === null)
     return (
       <MessageBar intent="info" data-testid="approval-gone">
