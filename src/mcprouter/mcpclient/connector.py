@@ -25,11 +25,13 @@ from dataclasses import dataclass
 from typing import IO, Any, Self
 
 import anyio
+import anyio.abc
 import httpx2
 from mcp import Client, MCPError
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server import Server
 from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
@@ -47,7 +49,8 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CONNECT_TIMEOUT_S = 15.0
 DEFAULT_REQUEST_TIMEOUT_S = 30.0
-MAX_LIST_PAGES = 100  # a paginator that never ends must not hang discovery
+MAX_LIST_PAGES = 100
+CLOSE_TIMEOUT_S = 5.0  # a paginator that never ends must not hang discovery
 
 # MCP JSON-RPC codes we map to specific curated messages.
 _CONNECTION_CLOSED = -32000
@@ -132,7 +135,7 @@ class Connector:
 
     def __init__(
         self,
-        target: ServerTarget | MCPServer,
+        target: ServerTarget | MCPServer | Server[Any],
         *,
         connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
         request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S,
@@ -144,14 +147,15 @@ class Connector:
         self._request_timeout_s = request_timeout_s
         self._client: Client | None = None
         self._stack: AsyncExitStack | None = None
+        self._tg: anyio.abc.TaskGroup | None = None
         self._stop: anyio.Event | None = None
         self._info: ServerInfo | None = None
         self._errlog: IO[str] | None = None
 
     # ------------------------------------------------------------ lifecycle
-    def _transport_cm(self) -> AbstractAsyncContextManager[Any] | MCPServer:
+    def _transport_cm(self) -> AbstractAsyncContextManager[Any] | MCPServer | Server[Any]:
         t = self._target
-        if isinstance(t, MCPServer):
+        if isinstance(t, MCPServer | Server):
             return t
         if t.transport == "stdio":
             assert t.command is not None  # guaranteed by validated()
@@ -202,15 +206,18 @@ class Connector:
                 await ready.wait()
         except TimeoutError as exc:
             failure.append(exc)
+        except BaseException:
+            # Outer cancellation (or anything else) mid-connect: unwind the task
+            # group we entered so anyio's scope stack stays intact.
+            await self._unwind(stack, tg, cancel=True)
+            raise
         if failure or self._client is None:
-            tg.cancel_scope.cancel()
-            await stack.aclose()
-            self._close_errlog()
+            await self._unwind(stack, tg, cancel=True)
             exc0: BaseException = failure[0] if failure else RuntimeError("closed during connect")
             err = _curate(exc0, phase="connect", transport=self._transport)
             log.info("mcp connect failed: kind=%s exc_type=%s", err.kind, type(exc0).__name__)
             raise err from exc0
-        self._stack = stack
+        self._stack, self._tg = stack, tg
         info = client.server_info
         self._info = ServerInfo(
             name=info.name if info else None,
@@ -225,17 +232,40 @@ class Connector:
             return await self.connect()
         return self._info
 
-    async def close(self) -> None:
-        stack, self._stack = self._stack, None
-        if self._stop is not None:
-            self._stop.set()
-        if stack is not None:
-            try:
-                await stack.aclose()
-            except Exception as exc:  # noqa: BLE001 — teardown noise; nothing to curate for
-                log.debug("mcp close raised %s (ignored)", type(exc).__name__)
+    async def _unwind(
+        self, stack: AsyncExitStack, tg: anyio.abc.TaskGroup, *, cancel: bool
+    ) -> None:
+        """Exit the runner's task group, bounded and immune to outer cancels.
+
+        The group's OWN scope is shielded and given a deadline (a new scope
+        around the exit would break anyio's LIFO scope rule). The deadline
+        bounds teardown — e.g. a legacy server's session-terminate request,
+        which the SDK gives a 300s read timeout.
+        """
+        scope = tg.cancel_scope
+        scope.shield = True
+        if cancel:
+            scope.cancel()
+        else:
+            scope.deadline = anyio.current_time() + CLOSE_TIMEOUT_S
+        try:
+            await stack.aclose()
+        except Exception as exc:  # noqa: BLE001 — teardown noise; nothing to curate
+            log.debug("mcp close raised %s (ignored)", type(exc).__name__)
         self._client = None
         self._close_errlog()
+
+    async def close(self) -> None:
+        stack, tg = self._stack, self._tg
+        self._stack = self._tg = None
+        self._info = None
+        if self._stop is not None:
+            self._stop.set()
+        if stack is not None and tg is not None:
+            await self._unwind(stack, tg, cancel=False)
+        else:
+            self._client = None
+            self._close_errlog()
 
     def _close_errlog(self) -> None:
         if self._errlog is not None:
@@ -281,9 +311,17 @@ class Connector:
                             )
                         )
                     cursor = page.next_cursor
-                    if cursor is None or cursor in seen:
+                    if cursor is None:
                         break
+                    if cursor in seen:
+                        # A partial listing must never reach apply_listing: it
+                        # would mark the unlisted tools removed.
+                        raise ProtocolFailureError(
+                            "server repeated a pagination cursor (tools/list)"
+                        )
                     seen.add(cursor)
+                else:
+                    raise ProtocolFailureError("server paginated without end (tools/list)")
         except Exception as exc:  # noqa: BLE001 — curated below
             raise _curate(exc, phase="tools/list", transport=self._transport) from exc
         return tools

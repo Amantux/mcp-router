@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 from mcp import MCPError
+from mcp.server import Server
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ListToolsResult, PaginatedRequestParams, Tool
 from testbed.fleet import generate_fleet
 from testbed.harness import http_fleet, sse_server, stdio_command_for_index, stdio_env
 from testbed.servers import build_server
@@ -201,3 +205,51 @@ async def test_calls_before_connect_are_refused() -> None:
     c = Connector(build_server(generate_fleet(1)[0]))
     with pytest.raises(NotConnectedError):
         await c.list_tools()
+
+
+def _paging_server(next_cursor: Callable[[str | None], str | None]) -> Server[Any]:
+    """Low-level server whose tools/list pagination we control."""
+
+    async def on_list_tools(ctx: Any, params: PaginatedRequestParams | None) -> ListToolsResult:
+        cur = params.cursor if params else None
+        tool = Tool(name=f"t_{cur or 'start'}", input_schema={"type": "object"})
+        return ListToolsResult(tools=[tool], next_cursor=next_cursor(cur))
+
+    return Server("pager", on_list_tools=on_list_tools)
+
+
+async def test_pagination_cycle_fails_instead_of_partial_listing() -> None:
+    srv = _paging_server(lambda cur: {"A": "B", "B": "A"}.get(cur or "", "A"))
+    async with Connector(srv) as c:
+        with pytest.raises(ProtocolFailureError, match="pagination cursor"):
+            await c.list_tools()
+
+
+async def test_endless_pagination_fails_instead_of_partial_listing() -> None:
+    srv = _paging_server(lambda cur: str(int(cur or "0") + 1))
+    async with Connector(srv) as c:
+        with pytest.raises(ProtocolFailureError, match="without end"):
+            await c.list_tools()
+
+
+async def test_finite_pagination_collects_every_page() -> None:
+    srv = _paging_server(lambda cur: None if cur == "3" else str(int(cur or "0") + 1))
+    async with Connector(srv) as c:
+        assert [t.name for t in await c.list_tools()] == ["t_start", "t_1", "t_2", "t_3"]
+
+
+async def test_outer_cancel_during_connect_leaves_scopes_intact(tmp_path: Path) -> None:
+    script = tmp_path / "hang.py"
+    script.write_text("import time\ntime.sleep(60)\n")
+    c = Connector(
+        ServerTarget(transport="stdio", command=(sys.executable, str(script))),
+        connect_timeout_s=30,
+    )
+    with anyio.move_on_after(0.5) as scope:
+        await c.connect()
+    assert scope.cancelled_caught
+    # The scope stack must be usable afterwards (a corrupted stack raises here).
+    with anyio.move_on_after(0.1):
+        await anyio.sleep(1)
+    async with Connector(build_server(generate_fleet(1)[0])) as ok:
+        assert (await ok.initialize()).name == "github"
