@@ -30,6 +30,7 @@ import anyio.to_thread
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
+from mcprouter.analytics.scheduler import RollupLoop
 from mcprouter.api import routes_dedup, routes_tools
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.routes_analytics import install_analytics
@@ -88,13 +89,21 @@ def create_app(
         # SPEC §7 "load once at startup" — off the event loop (Laya: seconds).
         await anyio.to_thread.run_sync(inference.load)
         loop: SyncLoop | None = None
+        rollups: RollupLoop | None = None
         try:
             if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
                 loop = SyncLoop(_app.state.discovery)
                 await loop.start()
                 _app.state.sync_loop = loop
+            if settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
+                rollups = RollupLoop(_app.state.session_factory)
+                await rollups.start()
+                _app.state.rollup_loop = rollups
             yield
         finally:
+            # Background loops stop BEFORE the inference engine unloads.
+            if rollups is not None:
+                await rollups.stop()
             if loop is not None:
                 await loop.stop()
             await anyio.to_thread.run_sync(inference.unload)
@@ -128,6 +137,7 @@ def create_app(
         ),
     )
     app.state.sync_loop = None  # started in the lifespan when MCPR_SYNC_ENABLED
+    app.state.rollup_loop = None  # started in the lifespan when MCPR_ANALYTICS_ROLLUP_ENABLED
 
     # Management API — all admin-gated by the gateway's require_admin
     # (servers/models/executions at the router; tools/dedup via the registry

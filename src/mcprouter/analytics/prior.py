@@ -1,7 +1,9 @@
 """Usage prior — a BOUNDED feedback signal the routing pipeline MAY consume.
 
 NOT wired into routing (that is the routing track's call). OFF by default:
-`MCPR_USAGE_PRIOR_ENABLED` (truthy: 1/true/yes/on; empty string = unset).
+`Settings.usage_prior_enabled` <- `MCPR_USAGE_PRIOR_ENABLED`, parsed strictly
+by settings.from_env (1/0, true/false, yes/no, on/off; empty string = unset;
+anything else fails startup). This module never reads the environment.
 
     usage_prior = cap * selection_rate * confidence
     selection_rate = clamp(selected / surfaced, 0, 1)
@@ -21,18 +23,15 @@ clear relevance gap.
 from __future__ import annotations
 
 import math
-import os
-from collections.abc import Mapping
+
+from mcprouter.settings import Settings
 
 DEFAULT_CAP = 0.05
 SATURATION_SURFACED = 200
-ENV_ENABLED = "MCPR_USAGE_PRIOR_ENABLED"
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def prior_enabled(env: Mapping[str, str] | None = None) -> bool:
-    raw = (os.environ if env is None else env).get(ENV_ENABLED, "")
-    return raw.strip().lower() in _TRUTHY
+def prior_enabled(settings: Settings) -> bool:
+    return settings.usage_prior_enabled
 
 
 def usage_prior(

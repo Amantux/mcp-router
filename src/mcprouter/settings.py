@@ -40,6 +40,12 @@ class Settings:
     # Discovery: run the background SyncLoop (catalog sync + health) inside
     # the app process. Off by default = manual refresh only (v0.1 behaviour).
     sync_enabled: bool = False
+    # Analytics. The usage prior (analytics/prior.py) is a bounded score nudge,
+    # NOT wired into routing yet; this is its one switch. The rollup loop
+    # recomputes tool_stats_daily once a day inside the app (alternative:
+    # cron POST /api/v1/analytics/rollup). Both off by default.
+    usage_prior_enabled: bool = False
+    analytics_rollup_enabled: bool = False
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
@@ -74,6 +80,8 @@ class Settings:
             route_cache_ttl_s=float(get("MCPR_ROUTE_CACHE_TTL_S", str(d.route_cache_ttl_s))),
             route_cache_size=int(get("MCPR_ROUTE_CACHE_SIZE", str(d.route_cache_size))),
             sync_enabled=_bool(get("MCPR_SYNC_ENABLED", "false")),
+            usage_prior_enabled=_bool(get("MCPR_USAGE_PRIOR_ENABLED", "false")),
+            analytics_rollup_enabled=_bool(get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false")),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),
