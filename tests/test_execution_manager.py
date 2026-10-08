@@ -597,3 +597,39 @@ async def test_approval_args_cleared_when_invoke_path_fails(
     with sec_db() as s:
         row = s.get(ApprovalRequest, pending.approval_id)
         assert row is not None and row.status == "failed" and row.arguments is None
+
+
+class _SlowThenFastInvoker(FakeInvoker):
+    """Distinct latencies so a running mean and the EMA cannot coincide."""
+
+    async def call_tool(
+        self, server: Any, tool_name: str, arguments: dict[str, Any], timeout_s: float
+    ) -> Any:
+        if not self.calls:
+            await anyio.sleep(0.05)
+        return await super().call_tool(server, tool_name, arguments, timeout_s)
+
+
+async def test_manager_stats_match_the_single_registry_writer(
+    sec_db: sessionmaker[Session],
+    cat: Catalog,
+) -> None:
+    """Gap 5: the manager's update must be exactly registry.stats.record_execution
+    (EMA alpha 0.2), not a second implementation (the old running mean)."""
+    from mcprouter.registry.stats import EMA_ALPHA
+
+    add_rule(sec_db, "alice")
+    mgr = _mgr(sec_db, _SlowThenFastInvoker())
+    tid = cat.tools["github.list_issues"].id
+    await mgr.execute(cat.principals["alice"], tid, OK_ARGS)
+    await mgr.execute(cat.principals["alice"], tid, OK_ARGS)
+    lat = [r.latency_ms for r in _records(sec_db)]
+    assert len(lat) == 2 and all(x is not None for x in lat)
+    # The fixed test clock gives both rows one created_at: the slow call was first.
+    l2, l1 = sorted(float(x or 0) for x in lat)
+    assert abs(l1 - l2) > 1.0  # the two formulas really diverge here
+    with sec_db() as s:
+        t = s.get(MCPToolRecord, tid)
+        assert t is not None
+        assert (t.call_count, t.error_count) == (2, 0)
+        assert t.avg_latency_ms == pytest.approx((1 - EMA_ALPHA) * l1 + EMA_ALPHA * l2, rel=1e-9)

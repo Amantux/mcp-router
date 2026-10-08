@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import anyio
-from sqlalchemy import case, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import DEV_AGENT_ID
@@ -60,6 +60,7 @@ from mcprouter.models import (
     utcnow,
 )
 from mcprouter.policy.engine import effective_operation, evaluate
+from mcprouter.registry.stats import record_execution
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -213,20 +214,8 @@ class ExecutionManager:
                 .values(outcome=outcome, detail=_curate(detail), latency_ms=latency_ms)
             )
             if outcome in (OK, ERROR, TIMEOUT):
-                # One atomic UPDATE (RHS reads pre-update values): running mean.
-                avg = MCPToolRecord.avg_latency_ms
-                s.execute(
-                    update(MCPToolRecord)
-                    .where(MCPToolRecord.id == tool_id)
-                    .values(
-                        call_count=MCPToolRecord.call_count + 1,
-                        error_count=MCPToolRecord.error_count + (0 if outcome == OK else 1),
-                        avg_latency_ms=case(
-                            (avg.is_(None), latency_ms),
-                            else_=avg + (latency_ms - avg) / (MCPToolRecord.call_count + 1),
-                        ),
-                    )
-                )
+                # The ONE usage-stat writer (atomic UPDATE, EMA latency).
+                record_execution(s, tool_id, ok=outcome == OK, latency_ms=latency_ms)
             s.commit()
 
     def _refuse(self, agent_id: str, loaded: _Loaded | None, outcome: str, detail: str) -> str:
