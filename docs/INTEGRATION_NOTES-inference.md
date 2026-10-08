@@ -26,7 +26,15 @@ app.include_router(models_router)
   curated `503 {"detail": "inference engine is not configured"}`.
 * `engine.load()` with `bge`/`laya` takes several seconds (Laya ~4–7 s on
   CPU). Startup blocks for that long. If that's unacceptable, call it from a
-  background thread; the first request loads lazily anyway.
+  background thread; the first request loads lazily anyway. Loads run outside
+  the engine's state lock, so health probes never block on a cold load.
+* **[needed] Auth/side effects of the health route:** `routes_models.router`
+  has no auth dependency (none exists yet on master). It exposes model ids,
+  revisions, package versions and RSS: no secrets, but still operator
+  information. Put it behind the same admin/API-key dependency as the other
+  management routes. In battery mode the GET also performs the lazy idle
+  check, which can unload models. That is intended (it is a "touch" point),
+  but it means the probe has side effects.
 
 ## 2. Settings needs (`settings.py` is outside the fence) [recommended]
 
@@ -74,7 +82,7 @@ root, and the hub cache is `<models_cache_dir>/hub`. Set
 New public surface in `mcprouter.inference` (no existing signature changed):
 
 * `errors`: `InferenceError` > `ModelUnavailableError`,
-  `EmbeddingDimensionError`, `DecisionRuntimeError`,
+  `EmbeddingDimensionError`, `EmbeddingRuntimeError`, `DecisionRuntimeError`,
   `DecisionProtocolError`. All messages are curated and safe at an API
   boundary.
 * `engine.InferenceEngine`: `load/unload/set_mode/check_idle/health`,
@@ -95,6 +103,10 @@ New public surface in `mcprouter.inference` (no existing signature changed):
   set `fallback_used=True`". `RoutingDecision.modelVersion` = `.name`
   (`laya@55cf4c4ebb4e` or `deterministic-v1`).
 * Rank candidates with `score_batch`, not N × `score`.
+* **Options must be unique.** Pass qualified ids (e.g. `"server/tool"`),
+  not bare tool names: two servers often both expose `search`. A duplicate or
+  empty option list is a caller `ValueError` (deliberately NOT an
+  `InferenceError`), because a fallback model cannot fix a malformed question.
 * Laya caveats from the model card that routing must design around:
   - The base checkpoint is **near chance zero-shot** on the vendor's
     typed-decisions benchmark (0.362). Domain fine-tuning is how it reaches
@@ -119,7 +131,14 @@ New public surface in `mcprouter.inference` (no existing signature changed):
   then the caller commits. It re-embeds a tool when its vector is NULL, when
   sha256(`"name: description [tags]"`) changed (tags sorted and de-duplicated),
   or when the backend name differs. Unchanged tools never reach the model.
-  It does not bump `updated_at`.
+  It does not bump `updated_at`. Writes are optimistic
+  (`WHERE id AND updated_at = value-read`): a tool that a concurrent sync
+  changed is skipped (`EmbedReport.conflicts`) and re-embedded on the next
+  run. This relies on every metadata write going through the ORM, whose
+  `onupdate` bumps `updated_at`. A raw SQL writer that leaves `updated_at`
+  alone would defeat it.
+* `EmbeddingRuntimeError` (BGE encode failure, e.g. CUDA OOM) propagates out
+  of `embed_pending_tools`. The caller rolls back and retries on the next refresh.
 * Retrieval MUST filter `embedding_backend == engine.embedding_backend().name`
   before any vector comparison (scoping #5).
 * A handle from `embedding_backend()` raises `InferenceError` if the engine
