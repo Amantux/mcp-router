@@ -355,3 +355,144 @@ def test_process_engine_is_a_singleton() -> None:
         assert engine_mod._PROCESS_ENGINE is a
     finally:
         reset_process_engine()
+
+
+# ------------------------------------------------- review fixes (race/lock)
+class _Blocking(DeterministicDecisionModel):
+    """noul() blocks until released, to hold a request in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def noul(self, state: str, question: str) -> float:
+        self.entered.set()
+        self.release.wait(5)
+        return 0.5
+
+
+def test_battery_never_unloads_under_an_active_request() -> None:
+    clock = FakeClock()
+    blocker = _Blocking()
+    eng, ld = make(
+        Loaders(decider=lambda: blocker),
+        mode="battery",
+        idle_unload_s=10.0,
+        clock=clock,
+        idle_timer=False,
+    )
+    eng.load()
+    clock.t += 9.9  # nearly idle when the request starts
+    t = threading.Thread(target=eng.noul, args=("s", "q"))
+    t.start()
+    assert blocker.entered.wait(5)
+    clock.t += 30  # request runs "long"; last_used is stale relative to the clock
+    assert eng.check_idle() is False
+    assert eng.health(check_idle=False)["loaded"] is True
+    blocker.release.set()
+    t.join()
+    eng.embed(["after"])
+    assert ld.decide_loads == 1  # never unloaded -> never reloaded
+
+
+def test_request_start_counts_as_use() -> None:
+    clock = FakeClock()
+    eng, _ = make(mode="battery", idle_unload_s=10.0, clock=clock, idle_timer=False)
+    eng.load()
+    clock.t += 9.9
+    eng.embed(["x"])
+    clock.t += 5  # 14.9s since load, but only 5s since the request
+    assert eng.check_idle() is False
+
+
+def test_idle_timer_does_not_poll_during_a_long_request() -> None:
+    blocker = _Blocking()
+    eng, _ = make(Loaders(decider=lambda: blocker), mode="battery", idle_unload_s=0.05)
+    eng.load()
+    fires = 0
+    original = eng._on_timer
+
+    def counting() -> None:
+        nonlocal fires
+        fires += 1
+        original()
+
+    eng._on_timer = counting  # type: ignore[method-assign]
+    eng.set_mode("battery")  # arm with the counting callback
+    t = threading.Thread(target=eng.noul, args=("s", "q"))
+    t.start()
+    assert blocker.entered.wait(5)
+    time.sleep(0.6)
+    assert fires <= 1  # no 50ms re-check loop while busy
+    assert eng.health(check_idle=False)["loaded"] is True
+    blocker.release.set()
+    t.join()
+    eng.set_mode("balanced")
+
+
+def test_health_does_not_block_on_a_cold_load() -> None:
+    started = threading.Event()
+
+    def slow_embedding(settings: Settings, device: str) -> EmbeddingBackend:
+        started.set()
+        time.sleep(1.0)
+        return CountingEmbedder()
+
+    eng = InferenceEngine(
+        Settings(embedding_backend="bge", device="cpu"), embedding_loader=slow_embedding
+    )
+    t = threading.Thread(target=eng.load)
+    t.start()
+    assert started.wait(5)
+    t0 = time.perf_counter()
+    h = eng.health()
+    assert time.perf_counter() - t0 < 0.3
+    assert h["loaded"] is False
+    t.join()
+    assert eng.health()["loaded"] is True
+
+
+def test_zero_ml_default_does_not_import_torch() -> None:
+    import subprocess
+    import sys as _sys
+
+    code = (
+        "import sys\n"
+        "from mcprouter.inference.engine import InferenceEngine\n"
+        "from mcprouter.settings import Settings\n"
+        "e = InferenceEngine(Settings()); e.load(); e.embed(['x'])\n"
+        "assert e.health()['device'] == 'cpu'\n"
+        "print('torch' in sys.modules)\n"
+    )
+    out = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"
+
+
+def test_battery_never_unloads_a_request_waiting_for_its_slot() -> None:
+    """The reviewer's race: refs grabbed, limiter slot not yet acquired."""
+    from contextlib import contextmanager as _cm
+
+    clock = FakeClock()
+    eng, ld = make(mode="battery", idle_unload_s=10.0, clock=clock, idle_timer=False)
+    eng.load()
+    in_gap = threading.Event()
+    go = threading.Event()
+    real_slot = eng._limiter.slot
+
+    @_cm
+    def gated_slot():  # type: ignore[no-untyped-def]
+        in_gap.set()
+        go.wait(5)
+        with real_slot():
+            yield
+
+    eng._limiter.slot = gated_slot  # type: ignore[method-assign]
+    t = threading.Thread(target=eng.embed, args=(["x"],))
+    t.start()
+    assert in_gap.wait(5)
+    clock.t += 60
+    assert eng.check_idle() is False  # the waiting request must count as active
+    go.set()
+    t.join()
+    assert ld.embed_loads == 1

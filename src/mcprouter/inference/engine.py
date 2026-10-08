@@ -20,9 +20,14 @@ behind ONE engine per process:
 * Battery idle unload: in battery mode models are unloaded after
   `idle_unload_s` without inference. Two triggers, neither polls the GPU:
   (1) a lazy check on every request and health probe; (2) ONE one-shot
-  `threading.Timer`, armed after a request and re-armed for the remaining time
-  if activity happened meanwhile, so memory is actually released while idle
-  instead of waiting for the next request. The next request reloads (a cold
+  `threading.Timer`, armed when a request completes and re-armed for the
+  remaining time if activity happened meanwhile (never while a request is
+  active), so memory is actually released while idle instead of waiting for
+  the next request. A request counts as active from the moment it holds model
+  references (including while it waits for a slot), and never runs on a model
+  that idle unload has dropped.
+* Loads run outside the state lock: health probes never block on a cold
+  load, and concurrent first requests share one load (`_load_lock`). The next request reloads (a cold
   load costs seconds — the deliberate battery-mode trade-off).
 * Validation: the decision model handed to callers is always wrapped in
   ValidatedDecisionModel; nothing unvalidated escapes the engine.
@@ -114,10 +119,11 @@ def memory_stats(device: str) -> dict[str, int | None]:
     }
     torch: Any = sys.modules.get("torch")
     if device.startswith("cuda") and torch is not None and torch.cuda.is_available():
-        stats["cudaAllocatedBytes"] = int(torch.cuda.memory_allocated())
-        stats["cudaReservedBytes"] = int(torch.cuda.memory_reserved())
-        stats["cudaMaxAllocatedBytes"] = int(torch.cuda.max_memory_allocated())
-        stats["cudaTotalBytes"] = int(torch.cuda.get_device_properties(0).total_memory)
+        idx = int(device.split(":", 1)[1]) if ":" in device else torch.cuda.current_device()
+        stats["cudaAllocatedBytes"] = int(torch.cuda.memory_allocated(idx))
+        stats["cudaReservedBytes"] = int(torch.cuda.memory_reserved(idx))
+        stats["cudaMaxAllocatedBytes"] = int(torch.cuda.max_memory_allocated(idx))
+        stats["cudaTotalBytes"] = int(torch.cuda.get_device_properties(idx).total_memory)
     return stats
 
 
@@ -260,7 +266,9 @@ class InferenceEngine:
         self._decision_loader = decision_loader or default_decision_loader
         self._clock = clock
         self._idle_timer_enabled = idle_timer
-        self._lock = threading.RLock()
+        self._lock = threading.RLock()  # guards published state; never held during a load
+        self._load_lock = threading.Lock()  # serialises loads; health/requests never wait on it
+        self._active = 0  # requests between ref-grab and completion (incl. waiting for a slot)
         self._limiter = ConcurrencyLimiter(MODE_CONCURRENCY[self._mode])
         self._embedder: EmbeddingBackend | None = None
         self._decider: ValidatedDecisionModel | None = None
@@ -279,7 +287,11 @@ class InferenceEngine:
         return self._embedder is not None and self._decider is not None
 
     def load(self) -> None:
-        with self._lock:
+        """Build both backends once. Runs OUTSIDE `_lock` (a cold load can take
+        seconds, or minutes on a slow download), so health probes and the
+        bookkeeping of in-flight requests never wait on it; the result is
+        published atomically under `_lock`."""
+        with self._load_lock:
             if self.loaded:
                 return
             s = self._settings
@@ -287,18 +299,20 @@ class InferenceEngine:
                 raise ValueError(f"embedding backend must be one of {EMBEDDING_BACKENDS}")
             if s.decision_backend not in DECISION_BACKENDS:
                 raise ValueError(f"decision backend must be one of {DECISION_BACKENDS}")
-            self._device, self._device_note = resolve_device(s.device)
+            wants_ml = s.embedding_backend == "bge" or s.decision_backend == "laya"
+            # Zero-ML config: never import torch just to pick a device.
+            device, device_note = resolve_device(s.device) if wants_ml else ("cpu", None)
 
             t0 = time.perf_counter()
             embedder: EmbeddingBackend = HashEmbeddingBackend()
             emb_reason: str | None = None
             if s.embedding_backend == "bge":
                 try:
-                    embedder = self._embedding_loader(s, self._device)
+                    embedder = self._embedding_loader(s, device)
                 except ModelUnavailableError as exc:
                     emb_reason = str(exc)  # our own curated message, never upstream text
                     log.warning("embedding backend degraded to hash-v1: %s", emb_reason)
-            self._emb_info = self._describe(embedder, s.embedding_backend, emb_reason, t0)
+            emb_info = self._describe(embedder, s.embedding_backend, emb_reason, t0)
 
             t0 = time.perf_counter()
             ml_embedder = None if isinstance(embedder, HashEmbeddingBackend) else embedder
@@ -306,15 +320,18 @@ class InferenceEngine:
             dec_reason: str | None = None
             if s.decision_backend == "laya":
                 try:
-                    decider = self._decision_loader(s, self._device, embedder)
+                    decider = self._decision_loader(s, device, embedder)
                 except ModelUnavailableError as exc:
                     dec_reason = str(exc)
                     log.warning("decision backend degraded to deterministic-v1: %s", dec_reason)
-            self._dec_info = self._describe(decider, s.decision_backend, dec_reason, t0)
+            dec_info = self._describe(decider, s.decision_backend, dec_reason, t0)
 
-            self._embedder = embedder
-            self._decider = ValidatedDecisionModel(decider)
-            self._last_used = self._clock()
+            with self._lock:
+                self._device, self._device_note = device, device_note
+                self._emb_info, self._dec_info = emb_info, dec_info
+                self._embedder = embedder
+                self._decider = ValidatedDecisionModel(decider)
+                self._last_used = self._clock()
 
     def unload(self) -> None:
         with self._lock:
@@ -362,7 +379,7 @@ class InferenceEngine:
             if (
                 self._mode == "battery"
                 and self.loaded
-                and self._limiter.in_flight == 0
+                and self._active == 0
                 and self._clock() - self._last_used >= self._idle_unload_s
             ):
                 self.unload()
@@ -386,9 +403,15 @@ class InferenceEngine:
 
     def _on_timer(self) -> None:
         with self._lock:
+            # A timer that was cancelled while blocked on the lock must not clear
+            # (and thereby orphan) the timer that replaced it.
+            if self._timer is not threading.current_thread():
+                return
             self._timer = None
             if self._mode != "battery" or not self.loaded:
                 return
+            if self._active:
+                return  # busy: the request's completion re-arms; no polling while busy
             if not self.check_idle():
                 remaining = self._idle_unload_s - (self._clock() - self._last_used)
                 self._arm_timer(max(remaining, 0.05))
@@ -396,17 +419,24 @@ class InferenceEngine:
     # ------------------------------------------------------------- requests
     @contextmanager
     def _request(self) -> Iterator[tuple[EmbeddingBackend, ValidatedDecisionModel]]:
-        with self._lock:
-            self.check_idle()
-            if not self.loaded:
-                self.load()
-            assert self._embedder is not None and self._decider is not None
-            embedder, decider = self._embedder, self._decider
+        while True:
+            with self._lock:
+                self.check_idle()
+                if self._embedder is not None and self._decider is not None:
+                    embedder, decider = self._embedder, self._decider
+                    # Counted as active from the moment it holds refs (including
+                    # while it waits for a limiter slot), and its start is a use:
+                    # idle unload can never pull models from under a request.
+                    self._active += 1
+                    self._last_used = self._clock()
+                    break
+            self.load()  # outside _lock; raises on configuration errors
         try:
             with self._limiter.slot():
                 yield embedder, decider
         finally:
             with self._lock:
+                self._active -= 1
                 self._last_used = self._clock()
                 if self._mode == "battery":
                     self._arm_timer(self._idle_unload_s)
