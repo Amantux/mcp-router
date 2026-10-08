@@ -290,3 +290,23 @@ def test_dev_mode_runs_as_dev_under_deny_by_default(sec_db: sessionmaker[Session
     r = c.post(f"/api/v1/tools/{tid}/execute", json={"arguments": OK_ARGS})
     assert r.status_code == 200 and r.json()["status"] == "denied"
     assert inv.calls == [] and [x.agent_id for x in _records(sec_db)] == ["dev"]
+
+
+def test_executions_listing_exposes_route_request_id(sec_db: sessionmaker[Session]) -> None:
+    """/executions gains the read-only routeRequestId field."""
+    from mcprouter.api.routes_executions import router as executions_router
+
+    cat = seed(sec_db, [("github", "list_issues", "read")])
+    add_rule(sec_db, "alice")
+    app, _ = _build(sec_db, {"MCPR_ADMIN_TOKEN": ADMIN})
+    app.include_router(executions_router)
+    c = TestClient(app)
+    rrid = str(uuid.uuid4())
+    c.post(
+        _url(cat, "github.list_issues"),
+        json={"arguments": OK_ARGS, "routeRequestId": rrid},
+        headers=_agent("alice"),
+    )
+    c.post(_url(cat, "github.list_issues"), json={"arguments": OK_ARGS}, headers=_agent("alice"))
+    items = c.get("/api/v1/executions", headers=H_ADMIN).json()["items"]
+    assert sorted(i["routeRequestId"] or "" for i in items) == sorted([rrid, ""])

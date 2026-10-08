@@ -34,6 +34,9 @@ class ExecutionOut(_Wire):
     detail: str
     latency_ms: float | None
     created_at: datetime
+    # Wave-2 attribution (read-only): the routing decision this call followed;
+    # None = unattributed (legacy rows, approval replays, admin-initiated runs).
+    route_request_id: str | None = None
 
 
 class ExecutionPageOut(_Wire):
