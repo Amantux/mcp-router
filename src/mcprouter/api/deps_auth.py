@@ -120,6 +120,8 @@ def bootstrap_principals(session: Session, settings: Settings, config: SecurityC
     for the same agent_id (rotation = change the env and restart).
     """
     pairs = parse_agent_keys(settings.agent_keys)
+    if len({key for _, key in pairs}) != len(pairs):
+        raise AgentKeysConfigError("MCPR_AGENT_KEYS reuses one key for several agents")
     for agent_id, key in pairs:
         key_hash = hash_key(key)
         if config.admin_token_hash and hmac.compare_digest(key_hash, config.admin_token_hash):
@@ -152,15 +154,17 @@ def parse_bearer(header: str | None) -> str | None:
 
 def _match_principal(session: Session, token: str) -> AgentPrincipal | None:
     presented = hash_key(token)
-    found: AgentPrincipal | None = None
+    matches: list[AgentPrincipal] = []
     # Full scan with compare_digest and NO early exit (constant-time w.r.t.
     # which principal matched). Local-agent counts make this cheap.
     for p in session.scalars(select(AgentPrincipal)).all():
         if hmac.compare_digest(presented, p.key_hash):
-            found = p
-    if found is None or not found.enabled:
+            matches.append(p)
+    # Exactly one match or nothing: a key shared by two principals names no
+    # one (never "last wins").
+    if len(matches) != 1 or not matches[0].enabled:
         return None
-    return found
+    return matches[0]
 
 
 def _warn_dev_once() -> None:

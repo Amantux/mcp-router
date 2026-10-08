@@ -256,3 +256,23 @@ def test_unconfigured_app_fails_closed(db: sessionmaker[Session]) -> None:
 
     r = TestClient(app).get("/whoami")
     assert r.status_code == 503
+
+
+# ------------------------------------------------- adversarial-pass findings
+def test_bootstrap_rejects_shared_key_between_agents(db: sessionmaker[Session]) -> None:
+    settings = Settings(database_url=TEST_DB_URL, agent_keys=f"alice:{KEY_A},bob:{KEY_A}")
+    with db() as s, pytest.raises(AgentKeysConfigError) as ei:
+        bootstrap_principals(s, settings, SecurityConfig.build(settings, {}))
+    assert KEY_A not in str(ei.value)
+
+
+def test_ambiguous_key_match_is_401_not_last_wins(
+    make_client: Callable[..., TestClient], db: sessionmaker[Session]
+) -> None:
+    """Two principals with the same hash (e.g. inserted out-of-band): refuse
+    rather than pick an identity."""
+    c = make_client(agent_keys=f"alice:{KEY_A}")
+    with db() as s:
+        s.add(AgentPrincipal(agent_id="mallory", key_hash=hash_key(KEY_A)))
+        s.commit()
+    assert c.get("/whoami", headers={"Authorization": f"Bearer {KEY_A}"}).status_code == 401
