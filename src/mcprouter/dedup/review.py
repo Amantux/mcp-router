@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from mcprouter.models import DuplicateSuggestion, MCPServerRecord, MCPToolRecord
+from mcprouter.models import DuplicateSuggestion, MCPServerRecord, MCPToolRecord, utcnow
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.errors import InvalidArgument, InvalidTransition, SuggestionNotFound
@@ -95,6 +95,8 @@ def _one_line(s: str) -> str:
 def accept_suggestion(session: Session, suggestion_id: str, *, actor: str) -> DuplicateSuggestion:
     sug = _load_open(session, suggestion_id)
     sug.status = "accepted"
+    sug.resolved_by = _one_line(actor)[:120]
+    sug.resolved_at = utcnow()
     sug.rationale = f"{sug.rationale}\nAccepted by {_one_line(actor)}."
     session.flush()
     audit("dedup.accept", actor=actor, suggestion_id=sug.id)
@@ -111,6 +113,9 @@ def dismiss_suggestion(
         raise InvalidArgument(f"Justification must be at most {MAX_JUSTIFICATION} characters.")
     sug = _load_open(session, suggestion_id)
     sug.status = "dismissed"
+    sug.resolved_by = _one_line(actor)[:120]
+    sug.resolved_at = utcnow()
+    sug.resolution_note = note
     sug.rationale = f"{sug.rationale}\nDismissed by {_one_line(actor)}: {note}"
     session.flush()
     audit("dedup.dismiss", actor=actor, suggestion_id=sug.id, justification=note)

@@ -69,6 +69,10 @@ class MCPToolRecord(Base):
     server_id: Mapped[str] = mapped_column(ForeignKey("mcp_servers.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    # MCP Tool.title / .annotations as last listed (discovery writes them;
+    # annotations.readOnlyHint/destructiveHint are classifier signals).
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    annotations: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     input_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     schema_hash: Mapped[str] = mapped_column(String(64))  # sha256 of canonical schema
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -81,6 +85,9 @@ class MCPToolRecord(Base):
     )  # read|write|execute|unknown
     required_scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
     classification_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Who wrote the current classification: a classifier name ("rules-v1",
+    # "laya@...") or "human" (review/override). None = never classified.
+    classification_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     available: Mapped[bool] = mapped_column(Boolean, default=True)
     # Stats
@@ -191,4 +198,29 @@ class DuplicateSuggestion(Base):
     rationale: Mapped[str] = mapped_column(Text, default="")
     preferred_tool_id: Mapped[str | None] = mapped_column(String(36))
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|accepted|dismissed
+    resolved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ServerCredentialRecord(Base):
+    """Server-side credential storage for stdio servers (FR-07).
+
+    A separate table on purpose: secrets stay out of the `mcp_servers` row that
+    every serializer touches. Values are never logged or returned by the API
+    (only variable NAMES). Stored plaintext at rest — encryption-at-rest is an
+    open gap (docs/INTEGRATION_NOTES-integration.md).
+    """
+
+    __tablename__ = "mcp_server_credentials"
+
+    server_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_servers.id", ondelete="CASCADE"), primary_key=True
+    )
+    env: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+
+    def __repr__(self) -> str:  # never render values
+        return (
+            f"ServerCredentialRecord(server_id={self.server_id!r}, env=<{len(self.env)} redacted>)"
+        )

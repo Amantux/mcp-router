@@ -111,10 +111,10 @@ def _record_snapshot(rec: MCPToolRecord) -> dict[str, Any]:
     """Snapshot for a removal: the last known definition."""
     return {
         "name": rec.name,
-        "title": None,
+        "title": rec.title,
         "description": rec.description,
         "inputSchema": rec.input_schema,
-        "annotations": None,
+        "annotations": rec.annotations,
         "schemaHash": rec.schema_hash,
     }
 
@@ -190,6 +190,8 @@ def apply_listing(
                 server_id=server_id,
                 name=d.name,
                 description=d.description,
+                title=d.title,
+                annotations=d.annotations,
                 input_schema=d.input_schema,
                 schema_hash=shash,
                 version=1,
@@ -222,6 +224,8 @@ def apply_listing(
             continue
         rec.version += 1
         rec.description = d.description
+        rec.title = d.title
+        rec.annotations = d.annotations
         rec.input_schema = d.input_schema
         rec.schema_hash = shash
         rec.available = True

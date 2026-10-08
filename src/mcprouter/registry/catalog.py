@@ -182,6 +182,7 @@ def update_classification(
     for wire_name, value in upd.fields.items():
         setattr(tool, _CLASSIFICATION_COLUMNS[wire_name], value)
     tool.classification_reviewed = True
+    tool.classification_source = "human"
     session.flush()
     audit(
         "tool.classification.override",
@@ -193,7 +194,9 @@ def update_classification(
     return tool
 
 
-def apply_auto_classification(session: Session, tool_id: str, c: Classification) -> bool:
+def apply_auto_classification(
+    session: Session, tool_id: str, c: Classification, *, source: str | None = None
+) -> bool:
     """Write an AUTOMATIC classification. Returns False (and changes nothing)
     when a human has reviewed the record.
 
@@ -205,6 +208,8 @@ def apply_auto_classification(session: Session, tool_id: str, c: Classification)
     if c.operation not in OPERATIONS:
         raise InvalidArgument("operation must be one of read, write, execute, unknown.")
     values: dict[str, Any] = {"operation": c.operation, "domain": c.domain}
+    if source is not None:
+        values["classification_source"] = source
     if c.capabilities:
         values["capabilities"] = list(c.capabilities)
     stmt = (
@@ -237,7 +242,7 @@ def auto_classify(
     classified = skipped = 0
     for tid, name, desc, schema in session.execute(stmt).all():
         c = classifier.classify(name, desc or "", schema or {})
-        if apply_auto_classification(session, tid, c):
+        if apply_auto_classification(session, tid, c, source=classifier.name):
             classified += 1
         else:
             skipped += 1  # reviewed between our read and the write

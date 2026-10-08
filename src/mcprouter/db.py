@@ -20,11 +20,39 @@ def make_engine(settings: Settings) -> Engine:
     return create_engine(settings.database_url, pool_pre_ping=True)
 
 
+# Columns adopted into models.py at integration (v0.1). `create_all` never
+# alters an existing table, so a database created before the adoption gets
+# them here — additive and idempotent. This is a bridge, NOT a migration
+# system: the Alembic baseline is deferred (docs/INTEGRATION_NOTES-integration.md).
+# Literal statements (no identifier composition at all).
+_ADDITIVE_COLUMNS: tuple[str, ...] = (
+    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS title TEXT",
+    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS annotations JSON",
+    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS classification_source VARCHAR(80)",
+    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(120)",
+    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolved_at"
+    " TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolution_note TEXT",
+)
+
+
 def init_db(engine: Engine) -> None:
+    """The ONE schema-init path (create_all-style; Alembic deferred).
+
+    Creates every table registered on `Base` plus the side metadatas owned by
+    the gateway (`approval_requests`) and eval (`eval_results`) tracks."""
+    from mcprouter.eval.store import eval_metadata
+    from mcprouter.execution.models import SecurityBase
+
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
     Base.metadata.create_all(engine)
+    SecurityBase.metadata.create_all(engine)
+    eval_metadata.create_all(engine, checkfirst=True)
+    with engine.begin() as conn:
+        for stmt in _ADDITIVE_COLUMNS:
+            conn.execute(text(stmt))
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

@@ -198,6 +198,9 @@ class SuggestionOut(Wire):
     rationale: str
     preferred_tool_id: str | None
     status: str
+    resolved_by: str | None = None
+    resolved_at: datetime | None = None
+    resolution_note: str | None = None
     created_at: datetime
 
 
@@ -234,5 +237,8 @@ def suggestion_out(sug: DuplicateSuggestion, refs: dict[str, SuggestionToolRef])
         rationale=sug.rationale,
         preferred_tool_id=sug.preferred_tool_id,
         status=sug.status,
+        resolved_by=sug.resolved_by,
+        resolved_at=sug.resolved_at,
+        resolution_note=sug.resolution_note,
         created_at=sug.created_at,
     )
