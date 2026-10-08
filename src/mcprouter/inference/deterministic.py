@@ -127,6 +127,9 @@ class DeterministicDecisionModel:
         probs = _softmax(logits)
         return ScoreResult(level=_argmax(probs), probabilities=probs)
 
+    def score_batch(self, state: str, questions: list[str], levels: list[str]) -> list[ScoreResult]:
+        return [self.score(state, q, levels) for q in questions]
+
     def noul(self, state: str, question: str) -> float:
         segments = [s for s in question.splitlines() if s.strip()] or [question]
         best = max(self._similarities(state, segments))

@@ -113,3 +113,16 @@ class RouteResult:
     latency_ms: float
     model_version: str
     no_match: bool = False
+
+
+# ------------------------------------------- appended: inference workstream
+# Append-only addition (recorded in docs/INTEGRATION_NOTES-inference.md).
+# Ranking N retrieval candidates is N Score questions over the same state.
+# Laya answers all of them in ONE forward pass (measured on CPU: 8 batched
+# ~352ms vs ~760ms sequential), so the batched form is part of the contract.
+# Every engine-provided DecisionModel implements it.
+@runtime_checkable
+class BatchScoringDecisionModel(DecisionModel, Protocol):
+    def score_batch(self, state: str, questions: list[str], levels: list[str]) -> list[ScoreResult]:
+        """One ScoreResult per question, in order, all on the same `levels` scale."""
+        ...

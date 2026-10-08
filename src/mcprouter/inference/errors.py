@@ -23,6 +23,12 @@ class EmbeddingDimensionError(InferenceError):
     instead of silently degrading."""
 
 
+class DecisionRuntimeError(InferenceError):
+    """A loaded ML decision model failed while answering (e.g. CUDA OOM that
+    the runtime could not absorb). Callers fall back to the deterministic
+    model for that request and set `fallback_used`."""
+
+
 class DecisionProtocolError(InferenceError):
     """A DecisionModel returned something the protocol forbids (an option not
     in the supplied list, probabilities that are not a distribution, a level

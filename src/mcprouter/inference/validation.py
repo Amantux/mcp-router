@@ -19,7 +19,12 @@ from __future__ import annotations
 import math
 
 from mcprouter.inference.errors import DecisionProtocolError
-from mcprouter.interfaces import ChoiceResult, DecisionModel, ScoreResult
+from mcprouter.interfaces import (
+    BatchScoringDecisionModel,
+    ChoiceResult,
+    DecisionModel,
+    ScoreResult,
+)
 
 
 def _sum_tolerance(k: int) -> float:
@@ -84,6 +89,18 @@ class ValidatedDecisionModel:
         original = list(levels)
         result = self.inner.score(state, question, list(original))
         return validate_score(result, original)
+
+    def score_batch(self, state: str, questions: list[str], levels: list[str]) -> list[ScoreResult]:
+        """Batched Score; uses the inner model's native batching when it has one."""
+        _check_labels(levels, "level")
+        original = list(levels)
+        if isinstance(self.inner, BatchScoringDecisionModel):
+            results = self.inner.score_batch(state, list(questions), list(original))
+        else:
+            results = [self.inner.score(state, q, list(original)) for q in questions]
+        if len(results) != len(questions):
+            raise DecisionProtocolError("score_batch: one result per question is required")
+        return [validate_score(r, original) for r in results]
 
     def noul(self, state: str, question: str) -> float:
         return validate_noul(self.inner.noul(state, question))
