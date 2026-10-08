@@ -496,3 +496,19 @@ def test_battery_never_unloads_a_request_waiting_for_its_slot() -> None:
     go.set()
     t.join()
     assert ld.embed_loads == 1
+
+
+def test_engine_score_batch_paths_are_validated() -> None:
+    from mcprouter.interfaces import ScoreResult
+
+    class BadBatch(DeterministicDecisionModel):
+        def score_batch(
+            self, state: str, questions: list[str], levels: list[str]
+        ) -> list[ScoreResult]:
+            return [ScoreResult(level=9, probabilities=[0.5, 0.5]) for _ in questions]
+
+    eng, _ = make(Loaders(decider=BadBatch))
+    with pytest.raises(DecisionProtocolError):
+        eng.score_batch("s", ["q"], ["no", "yes"])
+    with pytest.raises(DecisionProtocolError):
+        eng.decision_model().score_batch("s", ["q"], ["no", "yes"])

@@ -181,3 +181,53 @@ def test_real_laya_score_noul_and_batch(real_laya: LayaDecisionModel) -> None:
     no = guarded.noul(state, "Can the tool 'book_flight: book an airline flight' do this task?")
     print(f"[laya] noul yes={yes:.3f} no={no:.3f}")
     assert yes > 0.5 > no
+
+
+class Scripted:
+    """Agent returning a fixed (malformed) payload."""
+
+    def __init__(self, payload: Any) -> None:
+        self.payload = payload
+
+    def predict(self, state: str, questions: dict[str, Any]) -> Any:
+        return self.payload
+
+
+@pytest.mark.parametrize(
+    ("payload", "call"),
+    [
+        ({"answers": {}}, "choice"),  # missing q
+        ({"answers": {"q": {"probabilities": {"a": 0.5, "b": 0.5}}}}, "choice"),  # no choice
+        ({"answers": {"q": {"choice": "a", "probabilities": {"a": "x", "b": 0.5}}}}, "choice"),
+        ({"answers": {"q": None}}, "choice"),
+        ({"answers": {"q0": {"probabilities": {"0": 0.5, "1": 0.5}}}}, "score_batch"),  # no q1
+        ({"answers": {"q": {"probabilities": {"0": 1.0}}}}, "score"),  # missing level 1
+        ({"answers": {"q": {"type": "choice"}}}, "noul"),
+        ({"answers": {"q": {}}}, "noul_native"),
+        (None, "choice"),
+    ],
+)
+def test_malformed_answers_become_curated_runtime_errors(payload: Any, call: str) -> None:
+    m = model(Scripted(payload))  # type: ignore[arg-type]
+    if call == "noul_native":
+        m = model(Scripted(payload), noul_mode="native")  # type: ignore[arg-type]
+    calls = {
+        "choice": lambda: m.choice("s", "q", ["a", "b"]),
+        "score": lambda: m.score("s", "q", ["no", "yes"]),
+        "score_batch": lambda: m.score_batch("s", ["q0", "q1"], ["no", "yes"]),
+        "noul": lambda: m.noul("s", "q"),
+        "noul_native": lambda: m.noul("s", "q"),
+    }
+    with pytest.raises(DecisionRuntimeError) as ei:
+        calls[call]()
+    assert str(ei.value) in {
+        "decision model returned a malformed answer",
+        "decision model inference failed",
+        "decision model returned no answers",
+    }
+
+
+def test_load_warning_log_is_crlf_scrubbed(caplog: pytest.LogCaptureFixture) -> None:
+    from mcprouter.inference.laya import _scrub
+
+    assert _scrub("a\r\nforged line\rb\n") == "a  forged line b "

@@ -47,6 +47,14 @@ LAYA_DEFAULT_MODEL_ID = "convaiinnovations/laya"
 LAYA_FILES = ("rl_agent_config.json", "model.safetensors", "tokenizer/*", "encoder/*")
 NOUL_MODES = ("choice", "native")
 _NOUL_CRITERIA = {"A": "yes", "B": "no"}
+_MALFORMED = "decision model returned a malformed answer"
+# Anything a malformed answer payload can raise while we parse it.
+_PARSE_ERRORS = (KeyError, TypeError, ValueError, AttributeError, IndexError)
+
+
+def _scrub(text: str) -> str:
+    """CR/LF-scrub library-supplied text before logging (log forging)."""
+    return text.replace("\r", " ").replace("\n", " ")
 
 
 def _renormalise(probs: list[float]) -> list[float]:
@@ -125,7 +133,7 @@ class LayaDecisionModel:
             raise ModelUnavailableError("decision model could not be loaded") from exc
         for w in caught:
             # e.g. "checkpoint ships invalid temperatures ... using choice:11+ -> 0.5"
-            log.warning("laya load warning: %s", str(w.message).replace("\n", " ")[:300])
+            log.warning("laya load warning: %s", _scrub(str(w.message))[:300])
         return cls(
             agent,
             model_id=model_id,
@@ -148,33 +156,40 @@ class LayaDecisionModel:
         return answers
 
     @staticmethod
-    def _score_from(answer: dict[str, Any], k: int) -> ScoreResult:
+    def _score_from(answer: Any, k: int) -> ScoreResult:
         raw = answer["probabilities"]
         probs = _renormalise([float(raw[str(i)]) for i in range(k)])
         level = max(range(k), key=lambda i: probs[i])
         return ScoreResult(level=level, probabilities=probs)
 
+    # Every answer-parsing path below runs inside `except _PARSE_ERRORS`, so a
+    # malformed payload surfaces as a curated DecisionRuntimeError (the routing
+    # fallback trigger), never as a raw KeyError/ValueError carrying model text.
+
     # ------------------------------------------------------------- protocol
     def choice(self, state: str, question: str, options: list[str]) -> ChoiceResult:
-        ans = self._predict(
+        answers = self._predict(
             state, {"q": {"type": "choice", "instructions": question, "criteria": list(options)}}
-        )["q"]
-        raw = ans["probabilities"]
+        )
         try:
+            ans = answers["q"]
+            raw = ans["probabilities"]
             probs = _renormalise([float(raw[o]) for o in options])
-        except KeyError as exc:
-            raise DecisionRuntimeError("decision model answered with unknown options") from exc
-        # Returned verbatim from OUR list (validation re-checks this upstream).
-        chosen = str(ans["choice"])
+            chosen = str(ans["choice"])  # validation re-checks membership upstream
+        except _PARSE_ERRORS as exc:
+            raise DecisionRuntimeError(_MALFORMED) from exc
         return ChoiceResult(
             option=chosen, probabilities={o: p for o, p in zip(options, probs, strict=True)}
         )
 
     def score(self, state: str, question: str, levels: list[str]) -> ScoreResult:
-        ans = self._predict(
+        answers = self._predict(
             state, {"q": {"type": "score", "instructions": question, "criteria": list(levels)}}
-        )["q"]
-        return self._score_from(ans, len(levels))
+        )
+        try:
+            return self._score_from(answers["q"], len(levels))
+        except _PARSE_ERRORS as exc:
+            raise DecisionRuntimeError(_MALFORMED) from exc
 
     def score_batch(self, state: str, questions: list[str], levels: list[str]) -> list[ScoreResult]:
         """Every question answered in ONE forward pass (Laya's native batching)."""
@@ -185,14 +200,24 @@ class LayaDecisionModel:
             for i, q in enumerate(questions)
         }
         answers = self._predict(state, qs)
-        return [self._score_from(answers[f"q{i}"], len(levels)) for i in range(len(questions))]
+        try:
+            return [self._score_from(answers[f"q{i}"], len(levels)) for i in range(len(questions))]
+        except _PARSE_ERRORS as exc:
+            raise DecisionRuntimeError(_MALFORMED) from exc
 
     def noul(self, state: str, question: str) -> float:
         if self.noul_mode == "native":
-            ans = self._predict(state, {"q": {"type": "noul", "instructions": question}})["q"]
-            return float(ans["noul"])
-        ans = self._predict(
+            answers = self._predict(state, {"q": {"type": "noul", "instructions": question}})
+            try:
+                return float(answers["q"]["noul"])
+            except _PARSE_ERRORS as exc:
+                raise DecisionRuntimeError(_MALFORMED) from exc
+        answers = self._predict(
             state, {"q": {"type": "choice", "instructions": question, "criteria": _NOUL_CRITERIA}}
-        )["q"]
-        yes, no = _renormalise([float(ans["probabilities"]["A"]), float(ans["probabilities"]["B"])])
+        )
+        try:
+            raw = answers["q"]["probabilities"]
+            yes, _no = _renormalise([float(raw["A"]), float(raw["B"])])
+        except _PARSE_ERRORS as exc:
+            raise DecisionRuntimeError(_MALFORMED) from exc
         return yes

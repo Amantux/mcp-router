@@ -32,15 +32,27 @@ def _sum_tolerance(k: int) -> float:
     return 1e-3 + 5e-5 * k
 
 
+def _is_prob(p: object) -> bool:
+    return (
+        isinstance(p, int | float)
+        and not isinstance(p, bool)
+        and math.isfinite(p)
+        and 0.0 <= p <= 1.0
+    )
+
+
 def _check_distribution(probs: list[float], what: str) -> None:
     for p in probs:
-        if not math.isfinite(p) or p < 0.0 or p > 1.0:
+        if not _is_prob(p):
             raise DecisionProtocolError(f"{what}: probability outside [0, 1]")
     if abs(sum(probs) - 1.0) > _sum_tolerance(len(probs)):
         raise DecisionProtocolError(f"{what}: probabilities do not sum to 1")
 
 
 def _check_labels(labels: list[str], kind: str) -> None:
+    """Caller errors (ValueError, deliberately not an InferenceError): falling
+    back to another model cannot fix a malformed question. Options must be
+    unique — pass qualified ids (e.g. "server/tool"), not bare tool names."""
     if not labels:
         raise ValueError(f"at least one {kind} is required")
     if len(set(labels)) != len(labels):
@@ -57,7 +69,7 @@ def validate_choice(result: ChoiceResult, options: list[str]) -> ChoiceResult:
 
 
 def validate_score(result: ScoreResult, levels: list[str]) -> ScoreResult:
-    if not 0 <= result.level < len(levels):
+    if type(result.level) is not int or not 0 <= result.level < len(levels):
         raise DecisionProtocolError("score: level index out of range")
     if len(result.probabilities) != len(levels):
         raise DecisionProtocolError("score: one probability per level is required")
@@ -66,7 +78,7 @@ def validate_score(result: ScoreResult, levels: list[str]) -> ScoreResult:
 
 
 def validate_noul(p: float) -> float:
-    if not math.isfinite(p) or p < 0.0 or p > 1.0:
+    if not _is_prob(p):
         raise DecisionProtocolError("noul: probability outside [0, 1]")
     return p
 

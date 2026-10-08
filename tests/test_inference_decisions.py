@@ -175,3 +175,51 @@ def test_wrapper_passes_valid_results_through_and_keeps_name() -> None:
     assert isinstance(w, DecisionModel)
     assert w.name == "deterministic-v1"
     assert w.choice(FILE_Q, "?", ["communication", "files"]).option == "files"
+
+
+# ------------------------------------------- review fixes: batch + types
+class _BadBatch(DeterministicDecisionModel):
+    def __init__(self, results: list[ScoreResult]) -> None:
+        super().__init__()
+        self.results = results
+
+    def score_batch(self, state: str, questions: list[str], levels: list[str]) -> list[ScoreResult]:
+        return self.results
+
+
+@pytest.mark.parametrize(
+    "results",
+    [
+        [ScoreResult(level=0, probabilities=[0.9, 0.9])],  # not a distribution
+        [ScoreResult(level=5, probabilities=[0.5, 0.5])],  # level out of range
+        [],  # too few results: would misalign candidates and scores
+        [ScoreResult(0, [1.0, 0.0])] * 2,  # too many
+    ],
+)
+def test_wrapper_validates_score_batch(results: list[ScoreResult]) -> None:
+    with pytest.raises(DecisionProtocolError):
+        ValidatedDecisionModel(_BadBatch(results)).score_batch("s", ["q1"], ["no", "yes"])
+
+
+@pytest.mark.parametrize("level", [0.5, True, 1.9999])
+def test_wrapper_requires_integer_levels(level: object) -> None:
+    class Bad(DeterministicDecisionModel):
+        def score(self, state: str, question: str, levels: list[str]) -> ScoreResult:
+            return ScoreResult(level=level, probabilities=[0.5, 0.5])  # type: ignore[arg-type]
+
+    with pytest.raises(DecisionProtocolError):
+        ValidatedDecisionModel(Bad()).score("s", "q", ["no", "yes"])
+
+
+def test_wrapper_types_non_numeric_probabilities() -> None:
+    class Bad(DeterministicDecisionModel):
+        def choice(self, state: str, question: str, options: list[str]) -> ChoiceResult:
+            return ChoiceResult(option="a", probabilities={"a": "x", "b": 0.5})  # type: ignore[dict-item]
+
+        def noul(self, state: str, question: str) -> float:
+            return "0.5"  # type: ignore[return-value]
+
+    with pytest.raises(DecisionProtocolError):
+        ValidatedDecisionModel(Bad()).choice("s", "q", ["a", "b"])
+    with pytest.raises(DecisionProtocolError):
+        ValidatedDecisionModel(Bad()).noul("s", "q")

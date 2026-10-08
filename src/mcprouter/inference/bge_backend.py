@@ -20,7 +20,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, cast
 
-from mcprouter.inference.errors import EmbeddingDimensionError, ModelUnavailableError
+from mcprouter.inference.errors import (
+    EmbeddingDimensionError,
+    EmbeddingRuntimeError,
+    ModelUnavailableError,
+)
 from mcprouter.models import EMBEDDING_DIM
 
 if TYPE_CHECKING:
@@ -91,20 +95,25 @@ class BgeEmbeddingBackend:
             log.warning("embedding model load failed (%s)", type(exc).__name__)
             raise ModelUnavailableError("embedding model could not be loaded") from exc
 
-        if device.startswith("cuda"):
-            model.half()
-        model.eval()
-
-        declared = model.get_embedding_dimension()
-        if declared != EMBEDDING_DIM:
-            raise EmbeddingDimensionError(
-                f"embedding model produces {declared}-dim vectors; the catalog requires "
-                f"{EMBEDDING_DIM}"
+        try:
+            if device.startswith("cuda"):
+                model.half()
+            model.eval()
+            declared = model.get_embedding_dimension()
+            if declared != EMBEDDING_DIM:
+                raise EmbeddingDimensionError(
+                    f"embedding model produces {declared}-dim vectors; the catalog requires "
+                    f"{EMBEDDING_DIM}"
+                )
+            backend = cls(
+                model, model_id=model_id, revision=pinned, device=device, batch_size=batch_size
             )
-        backend = cls(
-            model, model_id=model_id, revision=pinned, device=device, batch_size=batch_size
-        )
-        (probe,) = backend.embed(["dimension probe"])
+            (probe,) = backend.embed(["dimension probe"])
+        except EmbeddingDimensionError:
+            raise  # configuration error: never degrade silently
+        except Exception as exc:  # noqa: BLE001 — e.g. CUDA OOM on .half()/probe; curated
+            log.warning("embedding model warm-up failed (%s)", type(exc).__name__)
+            raise ModelUnavailableError("embedding model could not be initialised") from exc
         if len(probe) != EMBEDDING_DIM:
             raise EmbeddingDimensionError(
                 f"embedding model forward produced {len(probe)}-dim vectors; the catalog "
@@ -118,14 +127,18 @@ class BgeEmbeddingBackend:
         import numpy as np
         import torch
 
-        with torch.inference_mode():
-            out = self._model.encode(
-                texts,
-                batch_size=self.batch_size,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-                show_progress_bar=False,
-            )
+        try:
+            with torch.inference_mode():
+                out = self._model.encode(
+                    texts,
+                    batch_size=self.batch_size,
+                    normalize_embeddings=True,
+                    convert_to_numpy=True,
+                    show_progress_bar=False,
+                )
+        except Exception as exc:  # noqa: BLE001 — runtime failure -> typed, curated
+            log.warning("embedding inference failed (%s)", type(exc).__name__)
+            raise EmbeddingRuntimeError("embedding model inference failed") from exc
         # FP16 on CUDA comes back as float16; store float32 like every other backend.
         arr = np.asarray(cast(Any, out), dtype=np.float32)
         if arr.ndim != 2 or arr.shape[1] != EMBEDDING_DIM:

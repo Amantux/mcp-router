@@ -29,6 +29,11 @@ class DecisionRuntimeError(InferenceError):
     model for that request and set `fallback_used`."""
 
 
+class EmbeddingRuntimeError(InferenceError):
+    """A loaded ML embedding model failed while embedding (e.g. CUDA OOM).
+    Curated message; the caller decides whether to retry or skip the batch."""
+
+
 class DecisionProtocolError(InferenceError):
     """A DecisionModel returned something the protocol forbids (an option not
     in the supplied list, probabilities that are not a distribution, a level

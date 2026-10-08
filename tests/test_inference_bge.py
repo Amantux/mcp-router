@@ -93,3 +93,42 @@ def test_real_bge_on_cpu(real_bge: BgeEmbeddingBackend) -> None:
     # Semantic, not lexical: "document on disk" shares no token with "read_file".
     assert cos(q, near) > cos(q, far)
     assert real_bge.embed(["same text"]) == real_bge.embed(["same text"])
+
+
+def test_post_construct_failure_degrades_with_curated_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("sentence_transformers")
+
+    class OomOnProbe:
+        def __init__(self, *a: Any, **kw: Any) -> None: ...
+        def half(self) -> None: ...
+        def eval(self) -> None: ...
+        def get_embedding_dimension(self) -> int:
+            return 384
+
+        def encode(self, *a: Any, **kw: Any) -> Any:
+            raise RuntimeError("CUDA out of memory at /secret/path")
+
+    import sentence_transformers
+
+    monkeypatch.setattr(sentence_transformers, "SentenceTransformer", OomOnProbe)
+    with pytest.raises(ModelUnavailableError) as ei:
+        BgeEmbeddingBackend.load(device="cpu")
+    assert "secret" not in str(ei.value)
+
+
+def test_runtime_embed_failure_is_typed(monkeypatch: pytest.MonkeyPatch) -> None:
+    pytest.importorskip("torch")
+    from mcprouter.inference.errors import EmbeddingRuntimeError
+
+    class Broken:
+        def encode(self, *a: Any, **kw: Any) -> Any:
+            raise RuntimeError("driver error /secret/path")
+
+    be = BgeEmbeddingBackend(
+        Broken(), model_id="BAAI/bge-small-en-v1.5", revision=None, device="cpu"
+    )  # type: ignore[arg-type]
+    with pytest.raises(EmbeddingRuntimeError) as ei:
+        be.embed(["x"])
+    assert "secret" not in str(ei.value)
