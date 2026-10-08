@@ -33,6 +33,27 @@ def _db_available() -> bool:
 
 requires_db = pytest.mark.skipif(not _db_available(), reason="compose db not running")
 
+
+@pytest.fixture(autouse=True)
+def _dispose_engines(monkeypatch: pytest.MonkeyPatch):  # noqa: ANN202 - generator fixture
+    """Every create_app() builds its own engine + pool; without disposal a
+    full run exhausts Postgres max_connections. Dispose what each test made."""
+    import mcprouter.db as db_mod
+
+    made = []
+    real = db_mod.create_engine
+
+    def tracking(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        eng = real(*args, **kwargs)
+        made.append(eng)
+        return eng
+
+    monkeypatch.setattr(db_mod, "create_engine", tracking)
+    yield
+    for eng in made:
+        eng.dispose()
+
+
 _CLEAN_TABLES = [
     "approval_requests",
     "eval_results",
