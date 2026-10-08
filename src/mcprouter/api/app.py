@@ -32,8 +32,10 @@ from prometheus_client import make_asgi_app
 
 from mcprouter.analytics.scheduler import RollupLoop
 from mcprouter.api import routes_dedup, routes_tools
+from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.routes_analytics import install_analytics
+from mcprouter.api.routes_decision import router as decision_router
 from mcprouter.api.routes_execute import router as execute_router
 from mcprouter.api.routes_executions import router as executions_router
 from mcprouter.api.routes_models import router as models_router
@@ -146,16 +148,16 @@ def create_app(
     app.include_router(routes_tools.router)
     app.include_router(routes_dedup.router)
     app.include_router(models_router)
+    app.include_router(decision_router)
     app.include_router(executions_router)
 
     # Routing: policy-backed scope (ONE policy implementation) + model deadline.
     scope_resolver = policy_scope_resolver(factory, security)
-    pipeline = RoutePipeline(
-        factory,
-        HybridRetriever(factory, embedder),
-        DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s),
-        settings,
-    )
+    # ONE deadline model per app: its in-flight cap bounds the worker threads a
+    # wedged backend can strand, across routing AND the decision edge.
+    decision_model = DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s)
+    app.state.decision_model = decision_model
+    pipeline = RoutePipeline(factory, HybridRetriever(factory, embedder), decision_model, settings)
     install_routing(app, pipeline, scope_resolver=scope_resolver)
 
     def route_fn(request: RouteRequest) -> RouteResult:
@@ -180,4 +182,6 @@ def create_app(
         return {"status": "ok"}
 
     app.mount("/metrics", make_asgi_app())
+    # Outermost: refuse oversized bodies before routing, auth or parsing.
+    app.add_middleware(BodySizeLimitMiddleware)
     return app

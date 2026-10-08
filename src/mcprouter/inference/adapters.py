@@ -15,8 +15,11 @@ retriever), plus the per-call decision deadline.
 
 from __future__ import annotations
 
+import contextvars
 import threading
+import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any, TypeVar
 
 from mcprouter.inference.engine import InferenceEngine
@@ -26,6 +29,9 @@ from mcprouter.interfaces import ChoiceResult, DecisionModel, ScoreResult
 T = TypeVar("T")
 
 DEFAULT_MAX_IN_FLIGHT = 16
+# Absolute monotonic deadline for the current request (set by serve.answer); every
+# question shares it, so N questions cannot take N x timeout.
+REQUEST_DEADLINE: ContextVar[float | None] = ContextVar("mcpr_decision_deadline", default=None)
 
 
 class EngineEmbedder:
@@ -86,6 +92,13 @@ class DeadlineDecisionModel:
         raise AttributeError("DeadlineDecisionModel.name is derived from the model")
 
     def _call(self, fn: Callable[[DecisionModel], T]) -> T:
+        wait_s = self._timeout_s
+        deadline = REQUEST_DEADLINE.get()
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DecisionRuntimeError("decision request deadline exceeded")
+            wait_s = min(wait_s, remaining)
         with self._lock:
             if self._in_flight >= self._max_in_flight:
                 raise DecisionRuntimeError("decision model is not responding")
@@ -103,9 +116,11 @@ class DeadlineDecisionModel:
                     self._in_flight -= 1
                 done.set()
 
-        threading.Thread(target=run, name="decision-call", daemon=True).start()
-        if not done.wait(self._timeout_s):
-            raise DecisionRuntimeError(f"decision model timed out after {self._timeout_s:g}s")
+        # Carry the caller's context (request deadline, decision hop) into the worker.
+        ctx = contextvars.copy_context()
+        threading.Thread(target=ctx.run, args=(run,), name="decision-call", daemon=True).start()
+        if not done.wait(wait_s):
+            raise DecisionRuntimeError(f"decision model timed out after {wait_s:g}s")
         if "error" in box:
             raise box["error"]
         value: T = box["value"]

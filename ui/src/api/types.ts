@@ -175,6 +175,22 @@ export interface LoadedModel {
   version?: string;
 }
 
+// Inference backend descriptors (routes_models.py decision_backend /
+// embedding_backend). Hosts only — never full URLs or credentials.
+export interface DecisionBackendInfo {
+  kind: string | null; // "laya" | "deterministic" | "remote" | "aoai"
+  model: string | null;
+  endpointHost: string | null;
+  deployment: string | null;
+}
+
+export interface EmbeddingBackendInfo {
+  kind: string | null; // "local" | "aoai"
+  name: string | null;
+  endpointHost: string | null;
+  deployment: string | null;
+}
+
 export interface ModelsHealth {
   device: string; // "cuda" | "cpu"
   mode: string; // "performance" | "balanced" | "battery"
@@ -184,6 +200,8 @@ export interface ModelsHealth {
   // Optional latency readouts if the backend tracks them.
   routingP50Ms?: number;
   routingP95Ms?: number;
+  decisionBackend?: DecisionBackendInfo | null;
+  embeddingBackend?: EmbeddingBackendInfo | null;
 }
 
 export interface Healthz {

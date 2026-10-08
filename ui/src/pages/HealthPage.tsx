@@ -37,6 +37,33 @@ function MemoryBar({ used, total, label }: { used?: number; total?: number; labe
   );
 }
 
+function BackendCard({
+  title,
+  info,
+  label,
+}: {
+  title: string;
+  info: { kind: string | null; endpointHost: string | null; deployment: string | null } | null | undefined;
+  label: { name: string; value: string | null };
+}) {
+  const s = useStyles();
+  if (!info) return null;
+  return (
+    <Card size="small" aria-label={title}>
+      <CardHeader
+        header={<Subtitle2>{title}</Subtitle2>}
+        action={<Badge appearance="tint">{info.kind ?? "unknown"}</Badge>}
+      />
+      <div className={s.kv}>
+        <Caption1>{label.name}</Caption1>
+        <Text weight="semibold">{info.deployment ?? label.value ?? "—"}</Text>
+        <Caption1>Endpoint</Caption1>
+        <Text weight="semibold">{info.endpointHost ?? "local"}</Text>
+      </div>
+    </Card>
+  );
+}
+
 function SystemCards({ h }: { h: ModelsHealth }) {
   const s = useStyles();
   return (
@@ -75,6 +102,16 @@ function SystemCards({ h }: { h: ModelsHealth }) {
           </div>
         </Card>
       )}
+      <BackendCard
+        title="Decision backend"
+        info={h.decisionBackend}
+        label={{ name: "Model", value: h.decisionBackend?.model ?? null }}
+      />
+      <BackendCard
+        title="Embedding backend"
+        info={h.embeddingBackend}
+        label={{ name: "Model", value: h.embeddingBackend?.name ?? null }}
+      />
     </div>
   );
 }

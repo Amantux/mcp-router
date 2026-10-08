@@ -5,7 +5,9 @@ pure function so tests can build differently-configured apps in one process)."""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -17,7 +19,7 @@ class Settings:
     # Inference
     embedding_backend: str = "hash"  # hash | bge  (bge needs the [inference] extra)
     embedding_model_id: str = "BAAI/bge-small-en-v1.5"
-    decision_backend: str = "deterministic"  # deterministic | laya
+    decision_backend: str = "deterministic"  # deterministic | laya | remote
     laya_model_id: str = "convaiinnovations/laya"
     device: str = "auto"  # auto | cuda | cpu
     operating_mode: str = "balanced"  # performance | balanced | battery
@@ -49,6 +51,14 @@ class Settings:
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
+    # wave-3 remote decision backend (MCPR_DECISION_BACKEND=remote).
+    # Endpoint is a full URL; with no path, /v1/decisions is appended. The key
+    # comes from MCPR_DECISION_API_KEY_FILE (wins when both are set) or
+    # MCPR_DECISION_API_KEY; excluded from repr so it never reaches a log.
+    decision_endpoint: str = "https://api.aimlapi.com/v1/decisions"
+    decision_model: str = "typesafe/jev"
+    decision_api_key: str = field(default="", repr=False)
+    decision_max_retries: int = 2
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -92,6 +102,14 @@ class Settings:
             rate_limit_per_agent_per_min=int(
                 get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
             ),
+            # wave-3 remote decision backend
+            decision_endpoint=get("MCPR_DECISION_ENDPOINT", d.decision_endpoint),
+            decision_model=get("MCPR_DECISION_MODEL", d.decision_model),
+            decision_api_key=_secret("MCPR_DECISION_API_KEY", get),
+            decision_max_retries=_bounded_retries(
+                get("MCPR_DECISION_MAX_RETRIES", str(d.decision_max_retries)),
+                "MCPR_DECISION_MAX_RETRIES",
+            ),
         )
 
 
@@ -118,3 +136,103 @@ def _opt_int(raw: str) -> int | None:
     if value < 1:
         raise ValueError("must be a positive integer when set")
     return value
+
+
+# wave-3 remote decision backend
+def _secret(name: str, get: Callable[[str, str], str]) -> str:
+    """<NAME>_FILE wins over <NAME>; surrounding whitespace is stripped. A set
+    but unreadable, non-UTF-8 or oversized (> 64 KiB) file fails loudly; the
+    message names the variable, never the content."""
+    path = get(f"{name}_FILE", "")
+    if not path:
+        return _printable_key(get(name, "").strip(), name)
+    failed = False
+    data = b""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(_MAX_KEY_FILE_BYTES + 1)
+    except OSError:
+        failed = True
+    if failed:
+        raise ValueError(f"{name}_FILE: cannot read the key file")
+    if len(data) > _MAX_KEY_FILE_BYTES:
+        raise ValueError(f"{name}_FILE: key file is larger than 64 KiB")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        failed = True
+    if failed:
+        raise ValueError(f"{name}_FILE: key file is not UTF-8 text")
+    return _printable_key(text.strip(), name)
+
+
+_KEY_RE = re.compile(r"[\x21-\x7e]*")
+
+
+def _printable_key(key: str, name: str) -> str:
+    """A key goes into an HTTP header: printable ASCII, no whitespace/control.
+    The message names the variable, never the key."""
+    if not _KEY_RE.fullmatch(key):
+        raise ValueError(f"{name}: key must be printable ASCII with no whitespace")
+    return key
+
+
+_MAX_KEY_FILE_BYTES = 64 * 1024
+_MAX_DECISION_RETRIES = 10
+
+
+def _bounded_retries(raw: str, name: str) -> int:
+    value = int(raw)
+    if not 0 <= value <= _MAX_DECISION_RETRIES:
+        raise ValueError(f"{name}: must be between 0 and {_MAX_DECISION_RETRIES}")
+    return value
+
+
+# wave-3 Azure OpenAI backends
+# Self-contained so it never conflicts with other appended blocks. Selected by
+# MCPR_DECISION_BACKEND=aoai and/or MCPR_EMBEDDING_BACKEND=aoai (Settings above
+# carries those strings unchanged; the wiring run maps "aoai" to
+# mcprouter.inference.aoai). The endpoint is NOT validated here: it is
+# validated at point of use (inference/aoai.py) because env is not the only
+# way config arrives.
+@dataclass(frozen=True)
+class AoaiSettings:
+    endpoint: str = ""  # https://<resource>.openai.azure.com | *.services.ai.azure.com
+    api_key: str = ""
+    chat_deployment: str = ""
+    embedding_deployment: str = ""
+    max_retries: int = 2
+
+    def __repr__(self) -> str:  # never print the key
+        return (
+            f"AoaiSettings(endpoint={self.endpoint!r}, api_key_set={bool(self.api_key)}, "
+            f"chat_deployment={self.chat_deployment!r}, "
+            f"embedding_deployment={self.embedding_deployment!r}, max_retries={self.max_retries})"
+        )
+
+    @classmethod
+    def from_env(cls) -> AoaiSettings:
+        def get(name: str) -> str:
+            v = os.environ.get(name, "")
+            return v.strip() if v.strip() else ""  # empty string means unset
+
+        key = ""
+        key_file = get("MCPR_AOAI_API_KEY_FILE")
+        if key_file:  # _FILE wins over the plain variable
+            with open(key_file, encoding="utf-8") as fh:
+                key = fh.read().strip()
+            if not key:
+                raise ValueError("MCPR_AOAI_API_KEY_FILE: file is empty")
+        else:
+            key = get("MCPR_AOAI_API_KEY")
+        retries_raw = get("MCPR_AOAI_MAX_RETRIES") or "2"
+        retries = int(retries_raw)
+        if not 0 <= retries <= 10:
+            raise ValueError("MCPR_AOAI_MAX_RETRIES: expected an integer in 0..10")
+        return cls(
+            endpoint=get("MCPR_AOAI_ENDPOINT"),
+            api_key=key,
+            chat_deployment=get("MCPR_AOAI_CHAT_DEPLOYMENT"),
+            embedding_deployment=get("MCPR_AOAI_EMBEDDING_DEPLOYMENT"),
+            max_retries=retries,
+        )
