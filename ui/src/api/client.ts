@@ -444,11 +444,21 @@ export async function getMe(signal?: AbortSignal): Promise<Principal> {
  * manager's outcome for every status — a policy denial is a 200 with
  * status "denied", not an exception. `roundTripMs` is measured here.
  */
-// CONTRACT: POST /api/v1/tools/{id}/execute {arguments}; see ExecuteResult in types.ts.
-export async function executeTool(toolId: string, args: JsonObject, signal?: AbortSignal): Promise<ExecuteResult & { roundTripMs: number }> {
+// Backend: api/routes_execute.py. With the ADMIN token the backend requires
+// `agentId` (400 otherwise) and runs the call as that agent, under its policy;
+// with an agent key, `agentId` may only name that same agent (403 otherwise).
+export async function executeTool(
+  toolId: string,
+  args: JsonObject,
+  signal?: AbortSignal,
+  opts: { agentId?: string; routeRequestId?: string } = {},
+): Promise<ExecuteResult & { roundTripMs: number }> {
   const t0 = performance.now();
+  const body: JsonObject = { arguments: args };
+  if (opts.agentId) body.agentId = opts.agentId;
+  if (opts.routeRequestId) body.routeRequestId = opts.routeRequestId;
   const raw = await request<ExecuteResult>("POST", `${API_BASE}/tools/${encodeURIComponent(toolId)}/execute`, {
-    body: { arguments: args },
+    body,
     signal,
     as: "agent",
   });
@@ -510,7 +520,10 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     before: Number(st.before ?? 0),
     after: Number(st.after ?? 0),
   }));
-  const clamps = arr(pick("clamps") ?? pick("budgets")) as unknown as BudgetClamp[];
+  // Backend (routes_route.DiagnosticsOut): diagnostics.budgetClamps[] and
+  // diagnostics.candidatesConsidered[] (a list; the lens shows its length).
+  const clamps = arr(pick("budgetClamps") ?? pick("clamps") ?? pick("budgets")) as unknown as BudgetClamp[];
+  const considered = pick("candidatesConsidered");
   return {
     requestId: (raw.requestId as string | undefined) ?? undefined,
     agentId: String(raw.agentId ?? agentId),
@@ -528,7 +541,7 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
       applied: numOrNull(c.applied),
       clampedBy: (c.clampedBy as string | null | undefined) ?? null,
     })),
-    candidates: numOrNull(pick("candidates") ?? pick("candidateCount")),
+    candidates: Array.isArray(considered) ? considered.length : numOrNull(pick("candidates") ?? pick("candidateCount")),
     stages,
     filtered,
   };

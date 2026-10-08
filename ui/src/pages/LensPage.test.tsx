@@ -65,6 +65,63 @@ describe("LensResult", () => {
   });
 });
 
+// The EXACT backend shape (api/routes_route.py SimulateResponse, camelCase
+// on the wire; budgets notes §4), read from the routing code.
+const BACKEND_SIM = {
+  requestId: "sim-2",
+  agentId: "agent1",
+  simulated: true,
+  tools: [{ toolId: "t-1", server: "github", tool: "search_issues", score: 0.8 }],
+  noMatch: false,
+  fallbackUsed: false,
+  latencyMs: 33.4,
+  modelVersion: "simulated/deterministic-v1",
+  maxToolsApplied: 5,
+  maxServersApplied: 2,
+  diagnostics: {
+    candidatesConsidered: [
+      { toolId: "t-1", server: "github", tool: "search_issues", domain: "development", operation: "read", retrievalScore: 0.49, matchedOn: ["vector"] },
+      { toolId: "t-2", server: "github", tool: "create_issue", domain: "development", operation: "write", retrievalScore: 0.4, matchedOn: [] },
+      { toolId: "t-3", server: "slack", tool: "search_messages", domain: "communication", operation: "read", retrievalScore: 0.3, matchedOn: [] },
+    ],
+    stages: [
+      { stage: "retrieval", before: 3, after: 1, pruned: [{ toolId: "t-2", server: "github", tool: "create_issue" }], detail: { limit: 20, policyFiltered: 2 } },
+      { stage: "maxTools", before: 1, after: 1, pruned: [], detail: { limit: 5 } },
+    ],
+    policyFiltered: [{ toolId: "t-3", server: "slack", tool: "search_messages", operation: "read", reason: "no matching policy rule" }],
+    budgetClamps: [
+      { budget: "maxTools", requested: 5, principal: 8, globalCap: 8, applied: 5, clampedBy: null },
+      { budget: "maxServers", requested: 4, principal: 2, globalCap: null, applied: 2, clampedBy: "principal" },
+    ],
+  },
+};
+
+describe("normaliseSimulation (backend shape)", () => {
+  it("reads budgetClamps and candidatesConsidered from diagnostics", () => {
+    const n = normaliseSimulation(camel(BACKEND_SIM), "agent1");
+    expect(n.clamps.map((c) => [c.budget, c.applied, c.clampedBy])).toEqual([
+      ["maxTools", 5, null],
+      ["maxServers", 2, "principal"],
+    ]);
+    expect(n.clamps[0].globalCap).toBe(8);
+    expect(n.candidates).toBe(3);
+    expect(n.stages).toEqual([
+      { stage: "retrieval", before: 3, after: 1 },
+      { stage: "maxTools", before: 1, after: 1 },
+    ]);
+    expect(n.filtered).toEqual([{ toolId: "t-3", serverName: "slack", toolName: "search_messages", reason: "no matching policy rule", stage: undefined }]);
+    expect([n.maxToolsApplied, n.maxServersApplied, n.requestId, n.noMatch]).toEqual([5, 2, "sim-2", false]);
+    expect(n.tools).toEqual([{ toolId: "t-1", serverName: "github", toolName: "search_issues", score: 0.8 }]);
+  });
+
+  it("renders the backend shape in the lens", () => {
+    renderWithProviders(<LensResult result={normaliseSimulation(camel(BACKEND_SIM), "agent1")} showFiltered />);
+    expect(screen.getByTestId("clamp-maxServers-by").textContent).toBe("Limited by the agent's own cap.");
+    expect(screen.getByText("3 candidates considered")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "Filtered tools" })).getByText("search_messages")).toBeTruthy();
+  });
+});
+
 describe("LensPage", () => {
   it("simulates for a picked principal, then re-queries (debounced) when a budget slider moves", async () => {
     const user = userEvent.setup();

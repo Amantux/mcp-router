@@ -3,6 +3,7 @@ import {
   ApiError,
   camelizeKeys,
   describeError,
+  executeTool,
   getModelsHealth,
   getTool,
   listDedupSuggestions,
@@ -110,6 +111,52 @@ describe("client requests", () => {
       latencyMs: 42.1,
     });
     expect(calls[0].body).toEqual({ query: "prs", agentId: "a1", maxTools: 5 });
+  });
+
+  it("camelises the wave-2 /route budget fields (sent snake_case)", async () => {
+    mockFetch({
+      "POST /api/v1/route": () => ({
+        json: {
+          request_id: "r2",
+          tools: [],
+          fallback_used: false,
+          latency_ms: 3,
+          no_match: true,
+          max_tools_applied: 5,
+          max_servers_applied: null,
+          cached: true,
+        },
+      }),
+    });
+    const res = await simulateRoute({ query: "prs", agentId: "a1", maxTools: 5 });
+    expect(res.maxToolsApplied).toBe(5);
+    expect(res.maxServersApplied).toBeNull();
+    expect(res.cached).toBe(true);
+    expect(res.noMatch).toBe(true);
+  });
+
+  it("executeTool sends agentId/routeRequestId only when given, and keeps result content opaque", async () => {
+    const { calls } = mockFetch({
+      "POST /api/v1/tools/t1/execute": () => ({
+        json: {
+          status: "ok",
+          detail: "",
+          recordId: "rec1",
+          approvalId: null,
+          errors: [],
+          result: { content: [{ type: "text", text: "x", some_key: 1 }], isError: false, structuredContent: { a_b: 1 } },
+          latencyMs: 4.2,
+        },
+      }),
+    });
+    await executeTool("t1", { repo_name: "a" });
+    const res = await executeTool("t1", { repo_name: "a" }, undefined, { agentId: "agent1", routeRequestId: "r9" });
+    expect(calls[0].body).toEqual({ arguments: { repo_name: "a" } });
+    expect(calls[1].body).toEqual({ arguments: { repo_name: "a" }, agentId: "agent1", routeRequestId: "r9" });
+    expect(res.status).toBe("ok");
+    expect(res.latencyMs).toBe(4.2);
+    expect(res.result?.content).toEqual([{ type: "text", text: "x", some_key: 1 }]);
+    expect(res.result?.structuredContent).toEqual({ a_b: 1 });
   });
 
   it("throws ApiError with status only — the response body never reaches the message", async () => {

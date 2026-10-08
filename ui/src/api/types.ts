@@ -157,6 +157,11 @@ export interface RouteResponse {
   modelVersion?: string;
   // interfaces.RouteResult.no_match — not in SPEC §9 literal, present in the contract.
   noMatch?: boolean;
+  // Wave 2 (budgets): sent snake_case (max_tools_applied, ...) like the rest
+  // of /route; camelised by the client. null maxServersApplied = unlimited.
+  maxToolsApplied?: number;
+  maxServersApplied?: number | null;
+  cached?: boolean;
 }
 
 // ------------------------------------------------------------ models/health
@@ -259,13 +264,13 @@ export interface ToolCallOutput {
   structuredContent?: JsonValue | null;
 }
 
-// CONTRACT: POST /api/v1/tools/{toolId}/execute {arguments} → ExecutionManager's
-// ExecutionResult {status, detail, recordId, approvalId?, errors[], result?}
-// plus an optional server-side latencyMs. No REST execute endpoint exists in
-// v0.1 (execution is /mcp tools/call + the approval endpoint); the integrator
-// adds it or repoints executeTool() in client.ts. The request is made as the
-// agent key when one is set, else the admin token — the backend decides which
-// principal an admin-token call runs under.
+// Reconciled at wave-2 integration (api/routes_execute.py):
+// POST /api/v1/tools/{toolId}/execute {arguments, agentId?, routeRequestId?} →
+// {status, detail, recordId, approvalId, errors[], result, latencyMs}; every
+// manager outcome is a 200 with `status`. Made as the agent key when one is
+// set, else the admin token — and an admin-token call MUST name `agentId`
+// (400 otherwise); it then runs under that agent's policy, audited as
+// impersonation.
 export interface ExecuteResult {
   status: ExecutionStatus;
   /** Curated, redacted audit detail written by the manager. */
