@@ -113,3 +113,25 @@ class RouteResult:
     latency_ms: float
     model_version: str
     no_match: bool = False
+
+
+# ------------------------------------------------- routing scope (appended)
+# Added by the routing track (feat/routing); recorded in
+# docs/INTEGRATION_NOTES-routing.md. Append-only: no existing signature moved.
+@runtime_checkable
+class ScopeFilter(Protocol):
+    """A caller's PRE-AUTHORIZED scope, resolved by the gateway before routing.
+
+    Routing narrows *within* this scope and never widens it: candidates the
+    scope does not permit are dropped before the decision model sees them, so
+    no routing score can surface them. This is a pre-filter only — the
+    gateway's deterministic post-ranking authorization (FR-07) still runs.
+    """
+
+    def server_ids(self) -> list[str] | None:
+        """Server ids the caller may use; None = no server-level restriction."""
+        ...
+
+    def permits(self, candidate: ToolCandidate) -> bool:
+        """Deterministic per-tool check (e.g. operation ceiling, tool globs)."""
+        ...
