@@ -49,8 +49,11 @@ def _clamp(
     name: str, requested: int | None, principal: int | None, global_cap: int | None
 ) -> BudgetClamp:
     applied = _min_set(requested, principal, global_cap)
+    # What the caller effectively asked for: its own value, else the
+    # principal default. "Clamped" means a ceiling cut BELOW that.
+    baseline = requested if requested is not None else principal
     clamped_by: str | None = None
-    if applied is not None and (requested is None or applied < requested):
+    if applied is not None and baseline is not None and applied < baseline:
         # Attribute to the tightest ceiling; ties prefer the global cap (the
         # operator's setting) so the explanation is stable.
         if global_cap is not None and applied == global_cap:

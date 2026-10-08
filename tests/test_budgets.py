@@ -41,7 +41,8 @@ def _p(max_tools: int = 8, max_servers: int | None = None) -> AgentPrincipal:
 @pytest.mark.parametrize(
     ("requested", "principal", "global_cap", "applied", "clamped_by"),
     [
-        (None, 5, 8, 5, "principal"),  # omitted -> principal default
+        (None, 5, 8, 5, None),  # omitted -> principal default (not a clamp)
+        (None, 12, 8, 8, "global"),  # principal default cut by the global cap
         (3, 5, 8, 3, None),  # request lowers
         (7, 5, 8, 5, "principal"),  # request cannot raise past the principal
         (7, 12, 6, 6, "global"),  # ... nor past the global cap
