@@ -407,3 +407,29 @@ async def test_removal_snapshot_keeps_last_known_annotations(db: SF) -> None:
         "readOnlyHint": True,
         "destructiveHint": False,
     }
+
+
+# ------------------------------------------------- integration: ANALYZE
+def _analyze_count(db: SF) -> int:
+    from sqlalchemy import text
+
+    with db() as s:
+        return int(
+            s.execute(
+                text("SELECT analyze_count FROM pg_stat_user_tables WHERE relname = 'mcp_tools'")
+            ).scalar_one()
+        )
+
+
+@requires_db
+async def test_bulk_sync_refreshes_planner_statistics(db: SF) -> None:
+    """Routing measured a ~7x slower vector leg on stale stats after bulk sync."""
+    fleet = InprocFleet(generate_fleet(2))
+    _register(db, fleet)
+    svc = DiscoveryService(db, connector_factory=fleet.factory)
+    before = _analyze_count(db)
+    await svc.sync_all()
+    assert _analyze_count(db) > before
+    unchanged = _analyze_count(db)
+    await svc.sync_all()  # nothing changed -> no ANALYZE
+    assert _analyze_count(db) == unchanged

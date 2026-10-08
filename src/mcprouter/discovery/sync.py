@@ -34,7 +34,7 @@ from typing import Any
 
 import anyio
 import anyio.to_thread
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.discovery.hashing import metadata_fingerprint, schema_hash
@@ -419,7 +419,21 @@ class DiscoveryService:
         async with anyio.create_task_group() as tg:
             for sid in ids:
                 tg.start_soon(one, sid)
+        if any(isinstance(r, SyncReport) and r.changed for r in results.values()):
+            await anyio.to_thread.run_sync(self._analyze)
         return results
+
+    def _analyze(self) -> None:
+        """Refresh planner statistics after a bulk catalog change. Without it
+        the planner estimates ~4 rows and routing's vector leg runs ~7x slower
+        (docs/INTEGRATION_NOTES-routing.md). Best effort: a failure here never
+        fails the refresh."""
+        try:
+            with self._sf() as s:
+                s.execute(text("ANALYZE mcp_tools, mcp_servers"))
+                s.commit()
+        except Exception as exc:  # noqa: BLE001 — statistics are an optimisation only
+            log.warning("ANALYZE after catalog sync failed: %s", type(exc).__name__)
 
     async def check_all(self, server_ids: list[str]) -> dict[str, str]:
         """Health-probe many servers with bounded concurrency."""
