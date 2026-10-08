@@ -137,3 +137,61 @@ def test_decision_key_must_be_printable_ascii(bad: str, monkeypatch, tmp_path) -
     with pytest.raises(ValueError) as ei:
         Settings.from_env()
     assert bad not in str(ei.value)
+
+
+# wave-3 Azure OpenAI backends
+def test_aoai_settings_defaults_and_empty_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcprouter.settings import AoaiSettings
+
+    for n in ("ENDPOINT", "API_KEY", "API_KEY_FILE", "CHAT_DEPLOYMENT", "EMBEDDING_DEPLOYMENT"):
+        monkeypatch.setenv(f"MCPR_AOAI_{n}", "  ")
+    monkeypatch.setenv("MCPR_AOAI_MAX_RETRIES", "")
+    s = AoaiSettings.from_env()
+    assert s == AoaiSettings()
+    assert s.max_retries == 2
+
+
+def test_aoai_key_file_wins_and_is_stripped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    from pathlib import Path
+
+    from mcprouter.settings import AoaiSettings
+
+    f = Path(str(tmp_path)) / "key"
+    f.write_text("file-key\n", encoding="utf-8")
+    monkeypatch.setenv("MCPR_AOAI_API_KEY", "env-key")
+    monkeypatch.setenv("MCPR_AOAI_API_KEY_FILE", str(f))
+    monkeypatch.setenv("MCPR_AOAI_ENDPOINT", "https://r.openai.azure.com")
+    monkeypatch.setenv("MCPR_AOAI_CHAT_DEPLOYMENT", "gpt-4o-mini")
+    monkeypatch.setenv("MCPR_AOAI_EMBEDDING_DEPLOYMENT", "te3s")
+    monkeypatch.setenv("MCPR_AOAI_MAX_RETRIES", "0")
+    s = AoaiSettings.from_env()
+    assert s.api_key == "file-key"
+    assert (s.endpoint, s.chat_deployment, s.embedding_deployment, s.max_retries) == (
+        "https://r.openai.azure.com",
+        "gpt-4o-mini",
+        "te3s",
+        0,
+    )
+    assert "file-key" not in repr(s)
+    monkeypatch.delenv("MCPR_AOAI_API_KEY_FILE")
+    assert AoaiSettings.from_env().api_key == "env-key"
+
+
+def test_aoai_settings_reject_bad_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    from pathlib import Path
+
+    from mcprouter.settings import AoaiSettings
+
+    monkeypatch.setenv("MCPR_AOAI_MAX_RETRIES", "99")
+    with pytest.raises(ValueError):
+        AoaiSettings.from_env()
+    monkeypatch.delenv("MCPR_AOAI_MAX_RETRIES")
+    empty = Path(str(tmp_path)) / "empty"
+    empty.write_text("\n", encoding="utf-8")
+    monkeypatch.setenv("MCPR_AOAI_API_KEY_FILE", str(empty))
+    with pytest.raises(ValueError):
+        AoaiSettings.from_env()

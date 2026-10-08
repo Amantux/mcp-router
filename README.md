@@ -1,14 +1,22 @@
 # MCP Router
 
-**A local-first MCP management and intelligent routing platform.** It discovers,
+**An open-source, Jev-based MCP router with edge capacity.** It discovers,
 catalogs, classifies and deduplicates every MCP server and tool you have — then
 exposes each AI agent only the small, relevant, *authorized* subset it needs for
 the task at hand, instead of flooding its context window with the whole catalog.
 
-- **Decision engine:** [Laya](https://huggingface.co/convaiinnovations/laya) —
-  a 421M non-autoregressive decision model (Apache 2.0) that answers typed
-  Choice/Score/Noul questions with calibrated probabilities in a single forward
-  pass. Because it can only *select among options supplied by deterministic
+*Jev-based* means routing decisions are **System One decisions** — typed
+Choice / Score / Noul questions answered with calibrated probabilities in a
+single forward pass, the paradigm introduced by
+[TypeSafe's Jev](https://docs.aimlapi.com/api-references/decision-models/typesafe/jev) —
+rather than generated text. The decision engine is pluggable: run it **at the
+edge** on a laptop GPU or CPU, point it at a **hosted endpoint** (Jev, or
+another MCP Router serving its local model), or use **Azure OpenAI** with a URL
+and key. See [Backends](#backends).
+
+- **Default decision engine:** [Laya](https://huggingface.co/convaiinnovations/laya) —
+  a 421M open-weight, Jev-compatible decision model (Apache 2.0). Because a
+  decision model can only *select among options supplied by deterministic
   code*, it structurally cannot invent tool names or execute anything.
 - **Retrieval:** BGE-small embeddings in PostgreSQL + pgvector, fused with
   Postgres full-text keyword search (reciprocal-rank fusion).
