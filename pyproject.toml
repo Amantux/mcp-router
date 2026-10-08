@@ -16,6 +16,9 @@ dependencies = [
   "prometheus-client==0.24.1",
   "structlog==25.5.0",
   "jsonschema==4.26.0",
+  # Imported directly by mcpclient for transport-error mapping (transitive via
+  # mcp); declared so a resolver change cannot silently drop it.
+  "httpx2==2.13.1",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +36,7 @@ inference = [
   "torch>=2.4",
   "transformers>=4.48",
   "sentence-transformers>=3.3",
+  "laya==0.4.0",
 ]
 
 [build-system]
@@ -55,9 +59,18 @@ ignore = ["B008"]  # FastAPI Depends() in defaults — framework idiom
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["mcprouter"]
+files = ["src/mcprouter", "bench"]
 mypy_path = "src"
+
+# The [inference] extra is OPTIONAL and CI runs without it. These modules are
+# imported lazily inside the inference backends; when absent they type as Any.
+# When installed (torch/numpy/sentence-transformers/huggingface_hub ship
+# py.typed) this override has no effect. laya ships no py.typed either way.
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "numpy", "numpy.*", "sentence_transformers", "sentence_transformers.*", "huggingface_hub", "huggingface_hub.*", "laya", "laya.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["slow: loads/downloads real models; set MCPR_RUN_SLOW=1"]

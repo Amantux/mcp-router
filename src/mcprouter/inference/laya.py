@@ -101,9 +101,9 @@ class LayaDecisionModel:
         noul_mode: str = "choice",
     ) -> LayaDecisionModel:
         try:
-            import laya  # type: ignore[import-untyped]  # ships no py.typed
+            import laya  # ships no py.typed; see [[tool.mypy.overrides]]
             from huggingface_hub import snapshot_download
-            from laya.revisions import PINNED_REVISIONS  # type: ignore[import-untyped]
+            from laya.revisions import PINNED_REVISIONS
         except ImportError as exc:
             raise ModelUnavailableError(
                 "decision model unavailable: the 'laya' package is not installed"
