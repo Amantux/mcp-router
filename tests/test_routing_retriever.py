@@ -174,3 +174,20 @@ def test_keyword_index_is_idempotent_and_matches_the_query(db: sessionmaker[Sess
             )
         )
     assert KEYWORD_INDEX in plan
+
+
+def test_exact_ties_break_by_server_then_tool_name_not_random_id(
+    db: sessionmaker[Session],
+) -> None:
+    """Ids are random UUIDs minted per catalog; tie-breaking on them made the
+    synthetic eval non-reproducible (top-1 0.79-0.83 across identical runs)."""
+    emb = FakeHashEmbedder()
+    with db() as s:
+        a = add_server(s, "aaa")
+        b = add_server(s, "bbb")
+        # id order deliberately contradicts name order
+        add_tool(s, b, "lookup", "Lookup records", embedder=emb, id="0" * 36)
+        add_tool(s, a, "lookup", "Lookup records", embedder=emb, id="f" * 36)
+        s.commit()
+    got = HybridRetriever(db, emb).retrieve("lookup records", limit=2)
+    assert [c.server_name for c in got] == ["aaa", "bbb"]

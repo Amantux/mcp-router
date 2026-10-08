@@ -81,7 +81,7 @@ _KEYWORD_SQL = text(
            ARRAY(SELECT words.w FROM words
                  WHERE words.q::text <> '' AND h.doc @@ words.q) AS matched
     FROM hits h
-    ORDER BY ts_rank_cd(h.doc, (SELECT q FROM tsq)) DESC, h.id
+    ORDER BY ts_rank_cd(h.doc, (SELECT q FROM tsq)) DESC, h.server_name, h.name
     LIMIT :lim
     """
 )
@@ -156,8 +156,12 @@ class HybridRetriever:
             kw_terms[row.tool_id] = words
             fused[row.tool_id] = fused.get(row.tool_id, 0.0) + 1.0 / (RRF_K + rank)
         best = 2.0 / (RRF_K + 1)
-        # Deterministic order: score desc, then id.
-        top = sorted(fused.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]
+        # Deterministic, catalog-stable order: score desc, then server/tool
+        # NAME (ids are random per catalog, so an id tie-break is not reproducible).
+        top = sorted(
+            fused.items(),
+            key=lambda kv: (-kv[1], rows[kv[0]].server_name, rows[kv[0]].tool_name),
+        )[:limit]
 
         vector_set = {r.tool_id for r in vector_rows}
         out: list[ToolCandidate] = []
@@ -224,7 +228,7 @@ class HybridRetriever:
                     *self._filters(server_ids, enabled_only),
                 )
             )
-            .order_by(dist, MCPToolRecord.id)
+            .order_by(dist, MCPServerRecord.name, MCPToolRecord.name)
             .limit(lim)
         )
         return [_Row(*r) for r in s.execute(stmt)]

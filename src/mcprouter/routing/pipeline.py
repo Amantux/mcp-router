@@ -127,7 +127,7 @@ class RoutePipeline:
                 fallback = True
                 model_version = f"retrieval-fallback/{self._model.name}"[:80]
                 ranked = [_Scored(c, c.retrieval_score) for c in candidates]
-                ranked.sort(key=lambda r: (-r.score, r.cand.tool_id))
+                ranked.sort(key=_rank_key)
 
         selected = [] if no_match else ranked[:max_tools]
         # Defence in depth: re-assert scope on what is actually exposed.
@@ -210,7 +210,7 @@ class RoutePipeline:
             relevance = sum(i * p for i, p in enumerate(probs)) / (top_level * total)
             blended = MODEL_WEIGHT * relevance + (1.0 - MODEL_WEIGHT) * c.retrieval_score
             scored.append(_Scored(c, blended * weights[c.tool_id]))
-        scored.sort(key=lambda r: (-r.score, r.cand.tool_id))
+        scored.sort(key=_rank_key)
 
         # e. no-match detection over what would actually be exposed
         shown = "\n".join(f"- {r.cand.server_name}/{r.cand.tool_name}" for r in scored[:max_tools])
@@ -247,6 +247,11 @@ class RoutePipeline:
                 )
             )
             s.commit()
+
+
+def _rank_key(r: _Scored) -> tuple[float, str, str]:
+    # Ties break on catalog names, not random ids: reproducible evals.
+    return (-r.score, r.cand.server_name, r.cand.tool_name)
 
 
 def _tool_state(query: str, c: ToolCandidate) -> str:
