@@ -14,6 +14,21 @@ the task at hand, instead of flooding its context window with the whole catalog.
   Postgres full-text keyword search (reciprocal-rank fusion).
 - **Security:** a deterministic, deny-by-default policy engine and execution
   manager. Model scores are relevance data — they can never widen access.
+- **Exposure budgets + route cache:** per-request, per-agent and global caps on
+  exposed tools *and* distinct servers (a request can lower a budget, never
+  raise it); a generation-invalidated route cache that re-checks
+  authorization on every hit.
+- **Efficiency analytics (the funnel):** every routing decision is followed
+  through *surfaced → selected → succeeded*, with execution-to-decision
+  attribution, position bias, context-token savings vs. the agent's full
+  authorized catalog, per-agent profiles, wasted-exposure and staleness
+  suggestions, daily rollups and Prometheus totals. Admin simulations are
+  excluded; cache hits count as real traffic.
+- **Dashboard:** a tool **playground** (schema-generated forms, runs through
+  the same execution manager over `POST /api/v1/tools/{id}/execute`), an
+  approvals queue, the **agent lens** (see exactly what one agent would be
+  shown for a query, with every budget clamp and policy filter explained),
+  and the analytics funnel.
 - **Zero-ML fallback everywhere:** the entire stack runs with no torch
   installed (hash embeddings + lexical decision model), and any model failure
   or timeout degrades to deterministic retrieval ranking, flagged
@@ -91,6 +106,13 @@ import an existing Claude-Desktop-style `mcpServers` config via
 `POST /api/v1/servers/import`, then point your agent at `http://host:8400/mcp`
 with its API key.
 
+Analytics rollups: set `MCPR_ANALYTICS_ROLLUP_ENABLED=true` to recompute
+the daily funnel rollups inside the app (a pass at startup, then every 24h),
+or leave it off and run `POST /api/v1/analytics/rollup` (admin token) from
+cron once a day. Either way, days that were never rolled up are computed live
+from raw rows — rollups only make old windows faster. Run `ANALYZE` after
+bulk imports.
+
 Want a synthetic fleet to play with? `python -m testbed.serve --servers 10`
 spins up realistic MCP servers with overlapping tools across five domains.
 
@@ -98,7 +120,7 @@ spins up realistic MCP servers with overlapping tools across five domains.
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| 631 backend + 26 UI tests green; e2e: discover → route → execute → audit | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| 800 backend + 94 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 |
 | 100 servers / 1,000 tools full refresh in 6.1s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |
@@ -130,12 +152,15 @@ src/mcprouter/
   registry/    catalog search, classification + human review, usage stats
   dedup/       duplicate detection → human-reviewed suggestions (never auto-disable)
   inference/   hash + BGE embeddings · Laya adapter · deterministic fallback · engine
-  routing/     hybrid retrieval · hierarchical pipeline · no-match gate
+  routing/     hybrid retrieval · hierarchical pipeline · no-match gate ·
+               exposure budgets · route cache · simulate traces
   policy/      deny-by-default rules engine + scope filter
   execution/   validation · approvals · rate limits · redaction · audit
   gateway/     per-agent MCP endpoint with dynamic tool exposure
+  analytics/   funnel · attribution · context economy · profiles · rollups · metrics
   eval/        routing-quality framework + synthetic dataset (77 cases)
-ui/            React + Vite + Fluent UI v9 management dashboard
+ui/            React + Vite + Fluent UI v9 dashboard: catalog, playground,
+               approvals, agent lens, analytics funnel
 testbed/       synthetic MCP server fleet with ground-truth labels
 bench/         latency/VRAM benchmark harness + committed CPU baselines
 docs/          spec · scoping · security model · hardware validation runbook
