@@ -8,7 +8,8 @@ Order matters:
   policy/approval routes -> MCP gateway at /mcp (wraps the lifespan).
 
 Wave 2 (budgets/cache/lifecycle): DiscoveryService carries the post-sync
-classify+embed hook (mcprouter.lifecycle).
+classify+embed hook (mcprouter.lifecycle); the lifespan starts the SyncLoop
+when MCPR_SYNC_ENABLED and stops it on shutdown, before the engine unloads.
 
 Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
 routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
@@ -33,7 +34,7 @@ from mcprouter.api.routes_policy import router as policy_router
 from mcprouter.api.routes_route import install_routing
 from mcprouter.api.routes_servers import router as servers_router
 from mcprouter.db import init_db, make_engine, make_session_factory
-from mcprouter.discovery import DiscoveryService
+from mcprouter.discovery import DiscoveryService, SyncLoop
 from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.execution.manager import ExecutionManager
 from mcprouter.gateway.server import build_gateway
@@ -80,9 +81,16 @@ def create_app(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # SPEC §7 "load once at startup" — off the event loop (Laya: seconds).
         await anyio.to_thread.run_sync(inference.load)
+        loop: SyncLoop | None = None
         try:
+            if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
+                loop = SyncLoop(_app.state.discovery)
+                await loop.start()
+                _app.state.sync_loop = loop
             yield
         finally:
+            if loop is not None:
+                await loop.stop()
             await anyio.to_thread.run_sync(inference.unload)
 
     app = FastAPI(title="MCP Router", version="0.1.0", docs_url="/docs", lifespan=lifespan)
@@ -113,6 +121,7 @@ def create_app(
             factory, embedder, embed_batch_size=settings.embed_batch_size
         ),
     )
+    app.state.sync_loop = None  # started in the lifespan when MCPR_SYNC_ENABLED
 
     # Management API — all admin-gated by the gateway's require_admin
     # (servers/models/executions at the router; tools/dedup via the registry

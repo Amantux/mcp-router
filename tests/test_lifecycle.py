@@ -5,7 +5,9 @@ MCPR_SYNC_ENABLED."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -141,3 +143,45 @@ def test_manual_refresh_endpoint_classifies_and_embeds(db: SF) -> None:
     r = TestClient(app).post(f"/api/v1/servers/{sid}/refresh")
     assert r.status_code == 200, r.text
     _assert_classified_and_embedded(app.state.session_factory, sid)
+
+
+# ------------------------------------------------------------ gap 4: loop
+def test_sync_enabled_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCPR_SYNC_ENABLED", "")
+    assert Settings.from_env().sync_enabled is False  # empty string = unset
+    for raw in ("true", "1", "YES", "on"):
+        monkeypatch.setenv("MCPR_SYNC_ENABLED", raw)
+        assert Settings.from_env().sync_enabled is True
+    for raw in ("false", "0", "no", "off"):
+        monkeypatch.setenv("MCPR_SYNC_ENABLED", raw)
+        assert Settings.from_env().sync_enabled is False
+    monkeypatch.setenv("MCPR_SYNC_ENABLED", "maybe")
+    with pytest.raises(ValueError):
+        Settings.from_env()
+
+
+@requires_db
+def test_create_app_starts_and_stops_sync_loop_when_enabled(
+    db: SF, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stopped: list[bool] = []
+    real_stop = SyncLoop.stop
+
+    async def spy_stop(self: SyncLoop) -> None:
+        stopped.append(self.running)  # still running when the lifespan stops it
+        await real_stop(self)
+
+    monkeypatch.setattr(SyncLoop, "stop", spy_stop)
+    app = create_app(Settings(database_url=TEST_DB_URL, sync_enabled=True), env={})
+    with TestClient(app):
+        loop: Any = app.state.sync_loop
+        assert isinstance(loop, SyncLoop) and loop.running
+    assert stopped == [True]  # stopped explicitly in lifespan shutdown
+    assert not loop.running
+
+
+@requires_db
+def test_create_app_does_not_start_sync_loop_by_default(db: SF) -> None:
+    app = create_app(Settings(database_url=TEST_DB_URL), env={})
+    with TestClient(app):
+        assert app.state.sync_loop is None

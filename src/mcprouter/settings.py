@@ -37,6 +37,9 @@ class Settings:
     # Per-call deadline for decision-model questions; a hung model becomes an
     # InferenceError and the route falls back deterministically (FR-06).
     decision_timeout_s: float = 2.0
+    # Discovery: run the background SyncLoop (catalog sync + health) inside
+    # the app process. Off by default = manual refresh only (v0.1 behaviour).
+    sync_enabled: bool = False
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
@@ -70,6 +73,7 @@ class Settings:
             decision_timeout_s=float(get("MCPR_DECISION_TIMEOUT_S", str(d.decision_timeout_s))),
             route_cache_ttl_s=float(get("MCPR_ROUTE_CACHE_TTL_S", str(d.route_cache_ttl_s))),
             route_cache_size=int(get("MCPR_ROUTE_CACHE_SIZE", str(d.route_cache_size))),
+            sync_enabled=_bool(get("MCPR_SYNC_ENABLED", "false")),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),
@@ -77,6 +81,21 @@ class Settings:
                 get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
             ),
         )
+
+
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off"})
+
+
+def _bool(raw: str) -> bool:
+    """Strict boolean: an unrecognised value fails loudly at startup rather
+    than silently meaning false."""
+    v = raw.strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    raise ValueError("expected one of 1/0, true/false, yes/no, on/off")
 
 
 def _opt_int(raw: str) -> int | None:
