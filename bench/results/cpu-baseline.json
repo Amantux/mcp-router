@@ -1,0 +1,196 @@
+{
+  "harness": "bench.routing_latency",
+  "recordedAt": "2026-10-08T05:21:48+00:00",
+  "config": {
+    "embedding": "bge",
+    "decision": "laya",
+    "requestedDevice": "auto",
+    "mode": "performance",
+    "iterations": 20,
+    "warmup": 3,
+    "batchSizes": [
+      1,
+      8,
+      32
+    ],
+    "threads": 8
+  },
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Linux-5.15.0-174-generic-x86_64-with-glibc2.35",
+    "machine": "x86_64",
+    "cpuCount": 112,
+    "loadAvg1m": 135.35,
+    "torch": "2.14.1+cpu",
+    "torchThreads": 8,
+    "gitCommit": "80b0076"
+  },
+  "device": "cpu",
+  "backends": {
+    "embedding": {
+      "backend": "bge-small-en-v1.5",
+      "requested": "bge",
+      "modelId": "BAAI/bge-small-en-v1.5",
+      "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "precision": "float32",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "loadSeconds": 6.544
+    },
+    "decision": {
+      "backend": "laya@55cf4c4ebb4e",
+      "requested": "laya",
+      "modelId": "convaiinnovations/laya",
+      "revision": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851",
+      "precision": "float32",
+      "fallbackUsed": false,
+      "fallbackReason": null,
+      "loadSeconds": 1.439
+    }
+  },
+  "coldLoadSeconds": 7.983,
+  "embedMs": {
+    "1": {
+      "n": 20,
+      "p50": 35.27,
+      "p95": 59.32,
+      "p99": 64.24,
+      "min": 23.94,
+      "max": 65.47,
+      "mean": 37.5
+    },
+    "8": {
+      "n": 20,
+      "p50": 121.98,
+      "p95": 183.24,
+      "p99": 194.62,
+      "min": 57.17,
+      "max": 197.46,
+      "mean": 116.4
+    },
+    "32": {
+      "n": 20,
+      "p50": 246.22,
+      "p95": 433.56,
+      "p99": 488.58,
+      "min": 188.54,
+      "max": 502.33,
+      "mean": 278.49
+    }
+  },
+  "decisionMs": {
+    "choice5": {
+      "n": 20,
+      "p50": 379.6,
+      "p95": 550.49,
+      "p99": 589.8,
+      "min": 311.27,
+      "max": 599.63,
+      "mean": 413.77
+    },
+    "noul": {
+      "n": 20,
+      "p50": 249.43,
+      "p95": 327.57,
+      "p99": 332.0,
+      "min": 223.34,
+      "max": 333.1,
+      "mean": 259.37
+    },
+    "scoreBatch1": {
+      "n": 20,
+      "p50": 334.35,
+      "p95": 377.46,
+      "p99": 396.84,
+      "min": 260.97,
+      "max": 401.69,
+      "mean": 331.95
+    },
+    "scoreSequential1": {
+      "n": 20,
+      "p50": 263.38,
+      "p95": 334.97,
+      "p99": 434.05,
+      "min": 221.84,
+      "max": 458.82,
+      "mean": 273.93
+    },
+    "scoreBatch8": {
+      "n": 20,
+      "p50": 1365.72,
+      "p95": 1608.62,
+      "p99": 1615.9,
+      "min": 1057.61,
+      "max": 1617.71,
+      "mean": 1386.15
+    },
+    "scoreSequential8": {
+      "n": 10,
+      "p50": 2368.51,
+      "p95": 2758.41,
+      "p99": 2903.07,
+      "min": 2040.21,
+      "max": 2939.24,
+      "mean": 2381.75
+    },
+    "scoreBatch32": {
+      "n": 20,
+      "p50": 4676.4,
+      "p95": 5329.31,
+      "p99": 5436.62,
+      "min": 3275.96,
+      "max": 5463.45,
+      "mean": 4426.19
+    },
+    "scoreSequential32": {
+      "n": 3,
+      "p50": 6476.39,
+      "p95": 6711.77,
+      "p99": 6732.69,
+      "min": 6059.87,
+      "max": 6737.93,
+      "mean": 6424.73
+    }
+  },
+  "routeCompositeMs": {
+    "1": {
+      "n": 20,
+      "p50": 582.99,
+      "p95": 645.63,
+      "p99": 660.33,
+      "min": 549.9,
+      "max": 664.0,
+      "mean": 590.14
+    },
+    "8": {
+      "n": 20,
+      "p50": 1472.76,
+      "p95": 1817.83,
+      "p99": 1971.58,
+      "min": 1157.63,
+      "max": 2010.02,
+      "mean": 1509.39
+    },
+    "32": {
+      "n": 20,
+      "p50": 3679.3,
+      "p95": 4169.65,
+      "p99": 4193.54,
+      "min": 3359.16,
+      "max": 4199.51,
+      "mean": 3712.12
+    }
+  },
+  "memory": {
+    "rssBytes": 2454847488,
+    "peakRssBytes": 3151798272
+  },
+  "parity": {
+    "skipped": "not requested"
+  },
+  "targets": {
+    "warmRouteP95Ms": 150,
+    "vramTypicalBytes": 4294967296,
+    "note": "SPEC \u00a73/\u00a710 engineering targets; only meaningful on the target GPU"
+  }
+}
