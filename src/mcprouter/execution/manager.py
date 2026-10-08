@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -189,6 +190,7 @@ class ExecutionManager:
         outcome: str,
         detail: str,
         latency_ms: float | None = None,
+        route_request_id: str | None = None,
     ) -> str:
         with self._factory() as s:
             rec = ExecutionRecord(
@@ -199,6 +201,7 @@ class ExecutionManager:
                 detail=_curate(detail),
                 latency_ms=latency_ms,
                 created_at=self._clock(),
+                route_request_id=route_request_id,
             )
             s.add(rec)
             s.commit()
@@ -218,20 +221,39 @@ class ExecutionManager:
                 record_execution(s, tool_id, ok=outcome == OK, latency_ms=latency_ms)
             s.commit()
 
-    def _refuse(self, agent_id: str, loaded: _Loaded | None, outcome: str, detail: str) -> str:
+    def _refuse(
+        self,
+        agent_id: str,
+        loaded: _Loaded | None,
+        outcome: str,
+        detail: str,
+        route_request_id: str | None = None,
+    ) -> str:
         return self._audit(
             agent_id,
             loaded.tool.id if loaded else None,
             loaded.server.id if loaded else None,
             outcome,
             detail,
+            None,
+            route_request_id,
         )
 
     # ----------------------------------------------------------- execute
     async def execute(
-        self, principal: AgentPrincipal, tool: MCPToolRecord | str, arguments: Any
+        self,
+        principal: AgentPrincipal,
+        tool: MCPToolRecord | str,
+        arguments: Any,
+        *,
+        route_request_id: str | None = None,
     ) -> ExecutionResult:
+        """`route_request_id`: the routing decision (RoutingDecisionRecord.id)
+        this call followed, if known. Telemetry only — it is recorded on every
+        audit row of this attempt and NEVER affects authorization. A malformed
+        value is dropped (unattributed), never a reason to fail the call."""
         tool_id = tool if isinstance(tool, str) else tool.id
+        rrid = _attribution(route_request_id)
         # Private deep copy FIRST: what is validated is exactly what is invoked.
         args = copy.deepcopy(arguments)
         agent_id = principal.agent_id
@@ -239,7 +261,7 @@ class ExecutionManager:
         loaded = await anyio.to_thread.run_sync(self._load, principal, tool_id)
         if loaded is None:
             rid = await anyio.to_thread.run_sync(
-                self._audit, agent_id, None, None, DENIED, "unknown tool or principal"
+                self._audit, agent_id, None, None, DENIED, "unknown tool or principal", None, rrid
             )
             return ExecutionResult(DENIED, "unknown tool or principal", rid)
 
@@ -247,7 +269,7 @@ class ExecutionManager:
         decision = evaluate(loaded.principal, loaded.server, loaded.tool, loaded.rules)
         if not decision.allow:
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, DENIED, decision.reason
+                self._refuse, agent_id, loaded, DENIED, decision.reason, rrid
             )
             return ExecutionResult(DENIED, decision.reason, rid)
 
@@ -255,7 +277,7 @@ class ExecutionManager:
         if not self._limiter.try_acquire(agent_id):
             detail = "rate limit exceeded"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, RATE_LIMITED, detail
+                self._refuse, agent_id, loaded, RATE_LIMITED, detail, rrid
             )
             return ExecutionResult(RATE_LIMITED, detail, rid)
 
@@ -263,7 +285,7 @@ class ExecutionManager:
         if not (loaded.tool.enabled and loaded.tool.available and loaded.server.enabled):
             detail = "tool unavailable"
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, UNAVAILABLE, detail
+                self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid
             )
             return ExecutionResult(UNAVAILABLE, detail, rid)
 
@@ -273,27 +295,33 @@ class ExecutionManager:
         except ArgumentValidationError as exc:
             detail = "argument validation failed: " + "; ".join(exc.errors)
             rid = await anyio.to_thread.run_sync(
-                self._refuse, agent_id, loaded, INVALID_ARGS, detail
+                self._refuse, agent_id, loaded, INVALID_ARGS, detail, rrid
             )
             return ExecutionResult(INVALID_ARGS, detail, rid, errors=exc.errors)
 
         # (e) approval gate
         if decision.requires_approval:
-            approval_id, rid = await anyio.to_thread.run_sync(self._create_approval, loaded, args)
+            approval_id, rid = await anyio.to_thread.run_sync(
+                self._create_approval, loaded, args, rrid
+            )
             return ExecutionResult(
                 PENDING_APPROVAL, "approval required", rid, approval_id=approval_id
             )
 
         # (f) invoke
-        return await self._invoke(agent_id, loaded, args)
+        return await self._invoke(agent_id, loaded, args, rrid)
 
     async def _invoke(
-        self, agent_id: str, loaded: _Loaded, args: dict[str, Any]
+        self,
+        agent_id: str,
+        loaded: _Loaded,
+        args: dict[str, Any],
+        route_request_id: str | None = None,
     ) -> ExecutionResult:
         tool, server = loaded.tool, loaded.server
         # Audit BEFORE the side effect; a failed write aborts the call.
         rid = await anyio.to_thread.run_sync(
-            self._audit, agent_id, tool.id, server.id, STARTED, "invoking"
+            self._audit, agent_id, tool.id, server.id, STARTED, "invoking", None, route_request_id
         )
         t0 = time.perf_counter()
         outcome, detail, result = ERROR, "upstream invocation failed", None
@@ -324,7 +352,9 @@ class ExecutionManager:
         return ExecutionResult(outcome, detail, rid, result=result if outcome != TIMEOUT else None)
 
     # ---------------------------------------------------------- approvals
-    def _create_approval(self, loaded: _Loaded, args: dict[str, Any]) -> tuple[str, str]:
+    def _create_approval(
+        self, loaded: _Loaded, args: dict[str, Any], route_request_id: str | None = None
+    ) -> tuple[str, str]:
         now = self._clock()
         tool, server = loaded.tool, loaded.server
         with self._factory() as s:
@@ -352,6 +382,8 @@ class ExecutionManager:
             server.id,
             PENDING_APPROVAL,
             f"approval {approval_id} pending",
+            None,
+            route_request_id,
         )
         return approval_id, rid
 
@@ -501,6 +533,18 @@ def _view(row: ApprovalRequest) -> ApprovalView:
         decided_at=row.decided_at,
         result_preview=row.result_preview,
     )
+
+
+_ATTRIBUTION_ID = re.compile(r"[0-9A-Za-z-]{1,36}")
+
+
+def _attribution(route_request_id: object) -> str | None:
+    """Accept only id-shaped values that fit ExecutionRecord.route_request_id
+    (String(36)); anything else is dropped so telemetry can never make the
+    audit write — and therefore the call — fail."""
+    if isinstance(route_request_id, str) and _ATTRIBUTION_ID.fullmatch(route_request_id):
+        return route_request_id
+    return None
 
 
 def _ms(t0: float) -> float:
