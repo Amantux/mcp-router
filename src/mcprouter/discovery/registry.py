@@ -122,6 +122,12 @@ def get_server(session: Session, server_id: str, *, lock: bool = False) -> MCPSe
     return rec
 
 
+def set_server_enabled(session: Session, server_id: str, enabled: bool) -> MCPServerRecord:
+    rec = get_server(session, server_id, lock=True)
+    rec.enabled = enabled
+    return rec
+
+
 def target_for(session: Session, server: MCPServerRecord) -> ServerTarget:
     """Build a connection target from a stored row (validated at point of use
     by the Connector, whatever wrote the row)."""

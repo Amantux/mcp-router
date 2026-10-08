@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -41,7 +41,7 @@ from mcprouter.discovery import (
     register_server,
 )
 from mcprouter.discovery.credentials import env_names
-from mcprouter.discovery.registry import get_server, tool_counts
+from mcprouter.discovery.registry import get_server, set_server_enabled, tool_counts
 from mcprouter.mcpclient import ConnectorError
 from mcprouter.models import MCPServerRecord
 
@@ -64,9 +64,20 @@ class ServerIn(_Wire):
     name: str = Field(min_length=1, max_length=120)
     transport: Literal["stdio", "streamable-http", "sse"]
     endpoint: str | None = Field(default=None, max_length=2048)
-    command: list[str] | None = Field(default=None, min_length=1, max_length=64)
+    # `stdioCommand` accepted too (UI contract #2); `command` is canonical.
+    command: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        validation_alias=AliasChoices("command", "stdioCommand"),
+    )
     env: dict[str, str] | None = None  # write-only credentials
     enabled: bool = True
+
+
+class ServerPatch(_Wire):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+    enabled: bool
 
 
 class ServerOut(_Wire):
@@ -172,6 +183,19 @@ def get_server_view(server_id: str, request: Request) -> ServerOut:
             return _views(s, [get_server(s, server_id)])[0]
         except ServerNotFoundError:
             raise _not_found() from None
+
+
+@router.patch("/{server_id}", response_model=ServerOut)
+def patch_server(server_id: str, body: ServerPatch, request: Request) -> ServerOut:
+    """Enable/disable (UI contract #4). A disabled server is never dialled by
+    sync, and its tools are neither exposed nor executable."""
+    try:
+        with _factory(request)() as s, s.begin():
+            rec = set_server_enabled(s, server_id, body.enabled)
+            s.flush()
+            return _views(s, [rec])[0]
+    except ServerNotFoundError:
+        raise _not_found() from None
 
 
 @router.post("", response_model=ServerOut, status_code=status.HTTP_201_CREATED)

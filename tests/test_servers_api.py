@@ -15,7 +15,6 @@ from testbed.fleet import generate_fleet
 from testbed.harness import InprocFleet, stdio_command_for_index, stdio_env
 
 from mcprouter.api.app import create_app
-from mcprouter.api.routes_servers import router
 from mcprouter.discovery import DiscoveryService
 from mcprouter.models import ExecutionRecord, PolicyRule
 from mcprouter.settings import Settings
@@ -28,8 +27,7 @@ SF = sessionmaker[Session]
 
 
 def _app(fleet: InprocFleet | None = None) -> FastAPI:
-    app = create_app(Settings(database_url=TEST_DB_URL))
-    app.include_router(router)  # the one include line app.py gets at integration
+    app = create_app(Settings(database_url=TEST_DB_URL), env={})  # includes the router
     if fleet is not None:
         app.state.discovery = DiscoveryService(
             app.state.session_factory, connector_factory=fleet.factory
@@ -258,3 +256,24 @@ def test_delete_refused_with_execution_history(
         s.add(ExecutionRecord(agent_id="a", server_id=sid, outcome="ok"))
     r = client.delete(f"/api/v1/servers/{sid}")
     assert r.status_code == 409 and "execution history" in r.json()["detail"]
+
+
+# ------------------------------------------- integration: UI contract #2/#4
+def test_register_accepts_ui_stdio_command_alias(client: TestClient) -> None:
+    r = client.post(
+        "/api/v1/servers",
+        json={"name": "ui-stdio", "transport": "stdio", "stdioCommand": ["python3", "-V"]},
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_patch_enables_and_disables_a_server(client: TestClient, fleet: InprocFleet) -> None:
+    srv = _create_inproc(client, fleet, "github")
+    r = client.patch(f"/api/v1/servers/{srv['id']}", json={"enabled": False})
+    assert r.status_code == 200 and r.json()["enabled"] is False
+    assert client.post(f"/api/v1/servers/{srv['id']}/refresh").status_code == 409  # never dialled
+    r = client.patch(f"/api/v1/servers/{srv['id']}", json={"enabled": True})
+    assert r.json()["enabled"] is True
+    assert client.patch(f"/api/v1/servers/{srv['id']}", json={"name": "x"}).status_code == 422
+    missing = "00000000-0000-0000-0000-000000000000"
+    assert client.patch(f"/api/v1/servers/{missing}", json={"enabled": True}).status_code == 404

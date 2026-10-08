@@ -37,6 +37,7 @@ MANAGEMENT = [
     ("GET", "/api/v1/servers/00000000-0000-0000-0000-000000000000", None),
     ("POST", "/api/v1/servers/00000000-0000-0000-0000-000000000000/refresh", None),
     ("DELETE", "/api/v1/servers/00000000-0000-0000-0000-000000000000", None),
+    ("PATCH", "/api/v1/servers/00000000-0000-0000-0000-000000000000", {"enabled": False}),
     ("GET", "/api/v1/tools", None),
     ("GET", "/api/v1/dedup/suggestions", None),
     ("GET", "/api/v1/models/health", None),
