@@ -169,13 +169,18 @@ def test_rerun_dedupes_open_and_respects_decided_pairs(factory: sessionmaker[Ses
         assert len(s.scalars(select(DuplicateSuggestion)).all()) == 1
 
 
+@pytest.mark.parametrize("b_enabled", [True, False])
 @requires_db
 def test_accept_records_status_only_and_never_touches_tools(
-    factory: sessionmaker[Session],
+    factory: sessionmaker[Session], b_enabled: bool
 ) -> None:
-    """FR-05 guard: acceptance must never disable/delete either tool."""
+    """FR-05 guard: acceptance must never disable/delete/re-enable either tool.
+
+    b (the NON-preferred tool) is enabled in one case — so a "disable the
+    loser" bug is visible — and admin-disabled in the other, so a "re-enable"
+    bug is visible too."""
     with factory() as s:
-        a_id, b_id = _seed_pair(s, enabled=False)  # b is already disabled by an admin
+        a_id, b_id = _seed_pair(s, enabled=b_enabled)
         run_dedup(s)
         s.commit()
         (sug,) = s.scalars(select(DuplicateSuggestion)).all()
@@ -190,7 +195,8 @@ def test_accept_records_status_only_and_never_touches_tools(
             t.id: (t.enabled, t.available, t.updated_at) for t in s.scalars(select(MCPToolRecord))
         }
         assert after == before
-        assert after[a_id][0] is True and after[b_id][0] is False
+        assert after[a_id][0] is True and after[b_id][0] is b_enabled
+        assert sug.preferred_tool_id == a_id  # b really is the non-preferred one
         got = s.get(DuplicateSuggestion, sug.id)
         assert got is not None and got.status == "accepted"
         assert "Accepted by alice" in got.rationale
