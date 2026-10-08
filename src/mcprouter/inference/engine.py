@@ -61,8 +61,8 @@ log = logging.getLogger(__name__)
 MODE_CONCURRENCY: dict[str, int] = {"performance": 4, "balanced": 2, "battery": 1}
 DEFAULT_IDLE_UNLOAD_S = 300.0
 DEFAULT_EMBED_BATCH = 32
-EMBEDDING_BACKENDS = ("hash", "bge")
-DECISION_BACKENDS = ("deterministic", "laya")
+EMBEDDING_BACKENDS = ("hash", "bge", "aoai")
+DECISION_BACKENDS = ("deterministic", "laya", "remote", "aoai")
 
 EmbeddingLoader = Callable[[Settings, str], EmbeddingBackend]
 DecisionLoader = Callable[[Settings, str, EmbeddingBackend], DecisionModel]
@@ -193,6 +193,62 @@ def _hub_cache(settings: Settings) -> str:
     return os.path.join(settings.models_cache_dir, "hub")
 
 
+def _build_remote_decider(s: Settings) -> DecisionModel:
+    """Config errors become a curated ModelUnavailableError: the class name
+    only, never the endpoint, key or upstream text."""
+    from mcprouter.inference.remote_systemone import RemoteSystemOneModel
+
+    if not s.decision_api_key:
+        raise ModelUnavailableError("remote decision backend: MCPR_DECISION_API_KEY is not set")
+    try:
+        return RemoteSystemOneModel(
+            endpoint=s.decision_endpoint,
+            api_key=s.decision_api_key,
+            model=s.decision_model,
+            timeout_s=s.decision_timeout_s,
+            max_retries=s.decision_max_retries,
+        )
+    except InferenceError as exc:
+        raise ModelUnavailableError(
+            f"remote decision backend misconfigured ({type(exc).__name__})"
+        ) from None
+
+
+def _aoai_settings() -> Any:
+    from mcprouter.settings import AoaiSettings
+
+    try:
+        return AoaiSettings.from_env()
+    except ValueError:
+        raise ModelUnavailableError("aoai backend: MCPR_AOAI_* settings are invalid") from None
+
+
+def _build_aoai_decider(s: Settings) -> DecisionModel:
+    from mcprouter.inference.aoai import build_aoai_decision_model
+
+    try:
+        return build_aoai_decision_model(_aoai_settings(), s.decision_timeout_s)
+    except ModelUnavailableError:
+        raise
+    except InferenceError as exc:
+        raise ModelUnavailableError(
+            f"aoai decision backend misconfigured ({type(exc).__name__})"
+        ) from None
+
+
+def _build_aoai_embedder() -> EmbeddingBackend:
+    from mcprouter.inference.aoai import AoaiEmbeddingBackend
+
+    try:
+        return AoaiEmbeddingBackend(_aoai_settings())
+    except ModelUnavailableError:
+        raise
+    except InferenceError as exc:
+        raise ModelUnavailableError(
+            f"aoai embedding backend misconfigured ({type(exc).__name__})"
+        ) from None
+
+
 def default_embedding_loader(settings: Settings, device: str) -> EmbeddingBackend:
     from mcprouter.inference.bge_backend import BgeEmbeddingBackend
 
@@ -309,21 +365,34 @@ class InferenceEngine:
             t0 = time.perf_counter()
             embedder: EmbeddingBackend = HashEmbeddingBackend()
             emb_reason: str | None = None
-            if s.embedding_backend == "bge":
+            if s.embedding_backend in ("bge", "aoai"):
                 try:
-                    embedder = self._embedding_loader(s, device)
+                    embedder = (
+                        self._embedding_loader(s, device)
+                        if s.embedding_backend == "bge"
+                        else _build_aoai_embedder()
+                    )
                 except ModelUnavailableError as exc:
                     emb_reason = str(exc)  # our own curated message, never upstream text
                     log.warning("embedding backend degraded to hash-v1: %s", emb_reason)
             emb_info = self._describe(embedder, s.embedding_backend, emb_reason, t0)
 
             t0 = time.perf_counter()
-            ml_embedder = None if isinstance(embedder, HashEmbeddingBackend) else embedder
+            # Only a LOCAL model embedder feeds the deterministic decider: a remote
+            # (aoai) embedder would put network calls inside the decision path.
+            ml_embedder = embedder if s.embedding_backend == "bge" else None
+            if isinstance(embedder, HashEmbeddingBackend):
+                ml_embedder = None
             decider: DecisionModel = DeterministicDecisionModel(embedder=ml_embedder)
             dec_reason: str | None = None
-            if s.decision_backend == "laya":
+            if s.decision_backend in ("laya", "remote", "aoai"):
                 try:
-                    decider = self._decision_loader(s, device, embedder)
+                    if s.decision_backend == "laya":
+                        decider = self._decision_loader(s, device, embedder)
+                    elif s.decision_backend == "remote":
+                        decider = _build_remote_decider(s)
+                    else:
+                        decider = _build_aoai_decider(s)
                 except ModelUnavailableError as exc:
                     dec_reason = str(exc)
                     log.warning("decision backend degraded to deterministic-v1: %s", dec_reason)

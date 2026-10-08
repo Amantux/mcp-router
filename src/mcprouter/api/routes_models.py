@@ -12,6 +12,7 @@ error text (fallback reasons are curated InferenceError messages).
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -69,6 +70,8 @@ class ModelsHealth(_Camel):
     memory: dict[str, int | None]
     idle_unload: IdleUnloadHealth
     versions: dict[str, str | None]
+    decision_backend: dict[str, str | None] | None = None
+    embedding_backend: dict[str, str | None] | None = None
 
 
 def get_inference_engine(request: Request) -> InferenceEngine:
@@ -78,6 +81,43 @@ def get_inference_engine(request: Request) -> InferenceEngine:
     return engine
 
 
+def _host(url: str) -> str | None:
+    """Host only: never scheme userinfo, path, query or key."""
+    try:
+        return urlsplit(url).hostname or None
+    except ValueError:
+        return None
+
+
+def backend_summary(settings: Any) -> tuple[dict[str, str | None], dict[str, str | None]]:
+    """Configured (requested) backends; actual/fallback state is in `decision`/`embedding`."""
+    from mcprouter.settings import AoaiSettings
+
+    aoai: AoaiSettings | None = None
+    if "aoai" in (settings.decision_backend, settings.embedding_backend):
+        try:
+            aoai = AoaiSettings.from_env()
+        except ValueError:
+            aoai = None
+    dec: dict[str, str | None] = {"kind": settings.decision_backend, "model": None}
+    if settings.decision_backend == "remote":
+        dec |= {"model": settings.decision_model, "endpointHost": _host(settings.decision_endpoint)}
+    elif settings.decision_backend == "aoai" and aoai is not None:
+        dec |= {"endpointHost": _host(aoai.endpoint), "deployment": aoai.chat_deployment}
+    emb: dict[str, str | None] = {"kind": settings.embedding_backend, "name": None}
+    if settings.embedding_backend == "aoai" and aoai is not None:
+        emb |= {"endpointHost": _host(aoai.endpoint), "deployment": aoai.embedding_deployment}
+    return dec, emb
+
+
 @router.get("/health", response_model=ModelsHealth)
-def models_health(engine: InferenceEngine = Depends(get_inference_engine)) -> Any:
-    return ModelsHealth.model_validate(engine.health())
+def models_health(request: Request, engine: InferenceEngine = Depends(get_inference_engine)) -> Any:
+    health = dict(engine.health())
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        dec, emb = backend_summary(settings)
+        emb["name"] = (health.get("embedding") or {}).get("backend")
+        if dec["model"] is None:
+            dec["model"] = (health.get("decision") or {}).get("backend")
+        health["decisionBackend"], health["embeddingBackend"] = dec, emb
+    return ModelsHealth.model_validate(health)
