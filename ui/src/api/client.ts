@@ -17,6 +17,11 @@ import type {
   ApprovalStatus,
   ClassificationUpdate,
   ExecuteResult,
+  BudgetClamp,
+  FilteredTool,
+  PipelineStage,
+  SimulateRequest,
+  SimulateResponse,
   CreatePrincipalRequest,
   CreateRuleRequest,
   CreatedPrincipal,
@@ -455,4 +460,64 @@ export function approveApproval(id: string): Promise<ApprovalDecision> {
 
 export function denyApproval(id: string): Promise<ApprovalDecision> {
   return request("POST", `${API_BASE}/approvals/${encodeURIComponent(id)}/deny`);
+}
+
+// -------------------------------------------------------------- agent lens
+type Loose = Record<string, unknown>;
+const arr = (v: unknown): Loose[] => (Array.isArray(v) ? (v as Loose[]) : []);
+const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+function normaliseFiltered(raw: Loose): FilteredTool {
+  return {
+    toolId: (raw.toolId as string | undefined) ?? undefined,
+    serverName: String(raw.serverName ?? raw.server ?? ""),
+    toolName: String(raw.toolName ?? raw.tool ?? raw.name ?? ""),
+    reason: String(raw.reason ?? raw.detail ?? "filtered"),
+    stage: (raw.stage as string | undefined) ?? undefined,
+  };
+}
+
+/** Tolerant mapping of the simulate payload (diagnostics may be top-level or nested). */
+export function normaliseSimulation(raw: Loose, agentId: string): SimulateResponse {
+  const diag = (raw.diagnostics ?? {}) as Loose;
+  const pick = (k: string) => (raw[k] !== undefined ? raw[k] : diag[k]);
+  const tools = arr(raw.tools).map(normaliseRoutedTool);
+  const filtered = arr(pick("policyFiltered") ?? pick("filtered")).map(normaliseFiltered);
+  const stages: PipelineStage[] = arr(pick("stages")).map((st) => ({
+    stage: String(st.stage ?? st.name ?? "stage"),
+    before: Number(st.before ?? 0),
+    after: Number(st.after ?? 0),
+  }));
+  const clamps = arr(pick("clamps") ?? pick("budgets")) as unknown as BudgetClamp[];
+  return {
+    requestId: (raw.requestId as string | undefined) ?? undefined,
+    agentId: String(raw.agentId ?? agentId),
+    tools,
+    fallbackUsed: raw.fallbackUsed === true,
+    noMatch: raw.noMatch === true || tools.length === 0,
+    latencyMs: Number(raw.latencyMs ?? 0),
+    maxToolsApplied: numOrNull(raw.maxToolsApplied),
+    maxServersApplied: numOrNull(raw.maxServersApplied),
+    clamps: clamps.map((c) => ({
+      budget: String(c.budget),
+      requested: numOrNull(c.requested),
+      principal: numOrNull(c.principal),
+      globalCap: numOrNull(c.globalCap),
+      applied: numOrNull(c.applied),
+      clampedBy: (c.clampedBy as string | null | undefined) ?? null,
+    })),
+    candidates: numOrNull(pick("candidates") ?? pick("candidateCount")),
+    stages,
+    filtered,
+  };
+}
+
+/**
+ * Admin-only: route `query` under a named agent's scope and budgets without
+ * publishing exposure (the agent's MCP tools/list is untouched).
+ */
+// CONTRACT: POST /api/v1/route/simulate {agentId, query, maxTools?, maxServers?}; see SimulateResponse.
+export async function simulateAgent(body: SimulateRequest, signal?: AbortSignal): Promise<SimulateResponse> {
+  const raw = await request<Loose>("POST", `${API_BASE}/route/simulate`, { body, signal });
+  return normaliseSimulation(raw ?? {}, body.agentId);
 }

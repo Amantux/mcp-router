@@ -4,7 +4,7 @@ import { Layout, NAV } from "./components/Layout";
 import { ServersPage } from "./pages/ServersPage";
 import { ToolsPage } from "./pages/ToolsPage";
 import { DuplicatesPage } from "./pages/DuplicatesPage";
-import { SimulatorPage } from "./pages/SimulatorPage";
+import { LensPage } from "./pages/LensPage";
 import { HealthPage } from "./pages/HealthPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
 import { PolicyPage } from "./pages/PolicyPage";
@@ -15,7 +15,7 @@ const PAGES: Record<string, ReactNode> = {
   "/servers": <ServersPage />,
   "/tools": <ToolsPage />,
   "/duplicates": <DuplicatesPage />,
-  "/simulator": <SimulatorPage />,
+  "/lens": <LensPage />,
   "/health": <HealthPage />,
   "/executions": <ExecutionsPage />,
   "/policy": <PolicyPage />,
@@ -29,6 +29,8 @@ export const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <Navigate to="/servers" replace /> },
+      // The free-text-identity simulator was replaced by the agent lens.
+      { path: "simulator", element: <Navigate to="/lens" replace /> },
       ...NAV.map((n) => ({ path: n.to.slice(1), element: PAGES[n.to] })),
       { path: "*", element: <Navigate to="/servers" replace /> },
     ],

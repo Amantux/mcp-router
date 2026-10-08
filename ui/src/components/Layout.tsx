@@ -22,7 +22,7 @@ export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
   { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
-  { to: "/simulator", label: "Routing simulator", icon: <DirectionsRegular /> },
+  { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
   { to: "/playground", label: "Tool playground", icon: <PlayCircleRegular /> },
   { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
   { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },

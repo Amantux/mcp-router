@@ -301,3 +301,63 @@ export interface ApprovalDecision {
   recordId: string | null;
   resultPreview?: string | null;
 }
+
+// --------------------------------------------------------------- agent lens
+/**
+ * One budget's clamp chain (routing/budgets.py BudgetClamp, A's wave-2 branch):
+ * applied = min(requested ?? principal, principal, globalCap); null = no cap.
+ */
+export interface BudgetClamp {
+  budget: "maxTools" | "maxServers" | string;
+  requested: number | null;
+  principal: number | null;
+  globalCap: number | null;
+  applied: number | null;
+  /** Which ceiling bound the result; null when the request value stood. */
+  clampedBy: "principal" | "global" | null | string;
+}
+
+/** A tool removed before exposure, with the deterministic reason. Admin-only diagnostics. */
+// CONTRACT: diagnostics.policyFiltered[] = {server, tool, reason} (toolId optional).
+export interface FilteredTool {
+  toolId?: string;
+  serverName: string;
+  toolName: string;
+  reason: string;
+  /** Pipeline stage that removed it ("policy", "budget", "maxServers", ...), if given. */
+  stage?: string;
+}
+
+/** Candidate counts through the pipeline. */
+// CONTRACT: diagnostics.stages[] = {stage, before, after}.
+export interface PipelineStage {
+  stage: string;
+  before: number;
+  after: number;
+}
+
+export interface SimulateRequest {
+  agentId: string;
+  query: string;
+  maxTools?: number;
+  maxServers?: number;
+}
+
+// CONTRACT: POST /api/v1/route/simulate (admin) → RouteResponse fields plus
+// {agentId, maxToolsApplied, maxServersApplied (verified on A's branch),
+// clamps[] (BudgetClamp, verified), diagnostics:{candidates, stages[],
+// policyFiltered[]} (guessed)}. client.simulateAgent normalises.
+export interface SimulateResponse {
+  requestId?: string;
+  agentId: string;
+  tools: RoutedTool[];
+  fallbackUsed: boolean;
+  noMatch: boolean;
+  latencyMs: number;
+  maxToolsApplied: number | null;
+  maxServersApplied: number | null;
+  clamps: BudgetClamp[];
+  candidates: number | null;
+  stages: PipelineStage[];
+  filtered: FilteredTool[];
+}
