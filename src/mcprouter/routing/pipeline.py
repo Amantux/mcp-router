@@ -38,6 +38,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import (
@@ -229,6 +230,10 @@ class RoutePipeline:
         latency_ms: float,
     ) -> None:
         with self._factory() as s:
+            # Decision rows are telemetry: don't make the agent wait on the WAL
+            # fsync. Worst case on a DB-server crash is losing the last
+            # ~wal_writer_delay*3 of decision rows — never routing correctness.
+            s.execute(text("SET LOCAL synchronous_commit TO OFF"))
             s.add(
                 RoutingDecisionRecord(
                     id=request_id,
