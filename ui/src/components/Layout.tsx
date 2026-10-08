@@ -12,6 +12,7 @@ import {
   SettingsRegular,
   PlayCircleRegular,
   PersonClockRegular,
+  DataBarVerticalRegular,
 } from "@fluentui/react-icons";
 import type { ReactNode } from "react";
 import { NotificationStack } from "./Notifications";
@@ -23,6 +24,7 @@ export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
   { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
   { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
+  { to: "/analytics", label: "Analytics", icon: <DataBarVerticalRegular /> },
   { to: "/playground", label: "Tool playground", icon: <PlayCircleRegular /> },
   { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
   { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },

@@ -5,6 +5,7 @@ import { ServersPage } from "./pages/ServersPage";
 import { ToolsPage } from "./pages/ToolsPage";
 import { DuplicatesPage } from "./pages/DuplicatesPage";
 import { LensPage } from "./pages/LensPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { HealthPage } from "./pages/HealthPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
 import { PolicyPage } from "./pages/PolicyPage";
@@ -16,6 +17,7 @@ const PAGES: Record<string, ReactNode> = {
   "/tools": <ToolsPage />,
   "/duplicates": <DuplicatesPage />,
   "/lens": <LensPage />,
+  "/analytics": <AnalyticsPage />,
   "/health": <HealthPage />,
   "/executions": <ExecutionsPage />,
   "/policy": <PolicyPage />,

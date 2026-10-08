@@ -1,5 +1,14 @@
+import { useState } from "react";
 import {
   Badge,
+  Tab,
+  TabList,
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableHeaderCell,
+  TableRow,
   Body1,
   Button,
   Caption1,
@@ -13,8 +22,9 @@ import {
 } from "@fluentui/react-components";
 import { DismissRegular, PlayRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { getTool } from "../api/client";
-import type { MCPTool, ToolVersion } from "../api/types";
+import { getTool, getToolAnalytics } from "../api/client";
+import type { AnalyticsWindow, MCPTool, ToolVersion } from "../api/types";
+import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
 import { fmtInt, fmtMs, fmtTime, JsonBlock, LoadingRow, OperationBadge, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { ClassificationEditor } from "./ClassificationEditor";
@@ -76,12 +86,82 @@ export function VersionTimeline({ versions }: { versions: ToolVersion[] }) {
   );
 }
 
+/** Funnel tab: this tool's surfaced → selected → succeeded, its position curve, and what it competes with. */
+export function ToolFunnelPanel({ toolId }: { toolId: string }) {
+  const s = useStyles();
+  const c = useCommonStyles();
+  const [win, setWin] = useState<AnalyticsWindow>("30d");
+  const a = useLoader("Load tool analytics", (sig) => getToolAnalytics(toolId, win, sig), [toolId, win]);
+  const d = a.data;
+  return (
+    <>
+      <section className={s.section}>
+        <WindowPicker value={win} onChange={setWin} />
+      </section>
+      {a.loading && !d ? (
+        <LoadingRow label="Loading funnel…" />
+      ) : !d ? (
+        <Caption1>Funnel data couldn't be loaded.</Caption1>
+      ) : d.tool.surfaced === 0 ? (
+        <Caption1 className={c.muted}>This tool wasn't surfaced to any agent in this window. Analytics accrue once agents start routing.</Caption1>
+      ) : (
+        <>
+          <section className={s.section} aria-label="Tool funnel">
+            <Subtitle2 as="h2">Funnel</Subtitle2>
+            <FunnelBars label={d.tool.toolName ?? toolId} surfaced={d.tool.surfaced} selected={d.tool.selected} succeeded={d.tool.succeeded} />
+            <div className={s.stats}>
+              <StatCard label="Selection rate" value={fmtPct(d.tool.selectionRate)} />
+              <StatCard label="Success rate" value={fmtPct(d.tool.successRate)} />
+              <StatCard label="Avg rank" value={d.tool.avgRank == null ? "—" : d.tool.avgRank.toFixed(1)} />
+              <StatCard label="Context spent" value={fmtInt(d.tool.exposedTokens)} sub="tokens" />
+            </div>
+          </section>
+          {d.positionCurve.length > 0 && (
+            <section className={s.section}>
+              <Subtitle2 as="h2">Selection by rank</Subtitle2>
+              <PositionChart points={d.positionCurve} label={`Position bias for ${d.tool.toolName ?? toolId}`} />
+            </section>
+          )}
+          {d.coSurfaced.length > 0 && (
+            <section className={s.section}>
+              <Subtitle2 as="h2">Shown alongside</Subtitle2>
+              <Table size="small" aria-label="Co-surfaced tools">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Tool</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>Together</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>This picked</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>Other picked</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {d.coSurfaced.map((o) => (
+                    <TableRow key={o.toolId}>
+                      <TableCell>
+                        {o.toolName ?? "deleted tool"} <Caption1 className={c.muted}>{o.serverName ?? ""}</Caption1>
+                      </TableCell>
+                      <TableCell className={c.num}>{fmtInt(o.coSurfaced)}</TableCell>
+                      <TableCell className={c.num}>{fmtInt(o.thisSelected)}</TableCell>
+                      <TableCell className={c.num}>{fmtInt(o.otherSelected)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </section>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 export function ToolDetailDrawer({ toolId, onClose, onChanged }: { toolId: string | null; onClose: () => void; onChanged: (t: MCPTool) => void }) {
   const s = useStyles();
   const c = useCommonStyles();
   const detail = useLoader("Load tool details", (sig) => (toolId ? getTool(toolId, sig) : Promise.resolve(undefined)), [toolId]);
   const t = toolId ? detail.data : undefined;
   const calls = t?.callCount ?? 0;
+  const [tab, setTab] = useState<"details" | "funnel">("details");
   const errRate = calls > 0 ? `${(((t?.errorCount ?? 0) / calls) * 100).toFixed(1)}%` : "—";
 
   return (
@@ -103,12 +183,18 @@ export function ToolDetailDrawer({ toolId, onClose, onChanged }: { toolId: strin
             </Link>
           </div>
         )}
+        <TabList size="small" selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as "details" | "funnel")}>
+          <Tab value="details">Details</Tab>
+          <Tab value="funnel">Funnel</Tab>
+        </TabList>
       </DrawerHeader>
       <DrawerBody>
         {detail.loading && !t ? (
           <LoadingRow label="Loading tool…" />
         ) : !t ? (
           <Caption1>Tool details couldn't be loaded.</Caption1>
+        ) : tab === "funnel" ? (
+          <ToolFunnelPanel toolId={t.id} />
         ) : (
           <>
             <section className={s.section}>

@@ -17,6 +17,13 @@ import type {
   ApprovalStatus,
   ClassificationUpdate,
   ExecuteResult,
+  AgentProfile,
+  AnalyticsOverview,
+  AnalyticsSuggestions,
+  AnalyticsWindow,
+  ToolAnalytics,
+  ToolFunnelPage,
+  ToolFunnelSort,
   BudgetClamp,
   FilteredTool,
   PipelineStage,
@@ -520,4 +527,36 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
 export async function simulateAgent(body: SimulateRequest, signal?: AbortSignal): Promise<SimulateResponse> {
   const raw = await request<Loose>("POST", `${API_BASE}/route/simulate`, { body, signal });
   return normaliseSimulation(raw ?? {}, body.agentId);
+}
+
+// --------------------------------------------------------------- analytics
+// Aligned to B's wave-2 routes_analytics.py: admin-only, ?window=7d|30d|90d.
+const ANALYTICS = `${API_BASE}/analytics`;
+
+export function getAnalyticsOverview(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsOverview> {
+  return request("GET", `${ANALYTICS}/overview`, { signal, query: { window } });
+}
+
+export async function listToolFunnels(
+  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number },
+  signal?: AbortSignal,
+): Promise<ToolFunnelPage> {
+  const raw = await request<ToolFunnelPage>("GET", `${ANALYTICS}/tools`, {
+    signal,
+    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset },
+  });
+  return { ...raw, ...toPage(raw, q.limit, q.offset) };
+}
+
+export function getToolAnalytics(toolId: string, window: AnalyticsWindow, signal?: AbortSignal): Promise<ToolAnalytics> {
+  return request("GET", `${ANALYTICS}/tools/${encodeURIComponent(toolId)}`, { signal, query: { window } });
+}
+
+export async function listAgentProfiles(window: AnalyticsWindow, signal?: AbortSignal): Promise<AgentProfile[]> {
+  return toList<AgentProfile>(await request("GET", `${ANALYTICS}/agents`, { signal, query: { window } }));
+}
+
+/** Wasted exposure + staleness; thresholds left at the backend defaults. */
+export function getAnalyticsSuggestions(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsSuggestions> {
+  return request("GET", `${ANALYTICS}/suggestions`, { signal, query: { window } });
 }

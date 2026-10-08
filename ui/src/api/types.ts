@@ -361,3 +361,182 @@ export interface SimulateResponse {
   stages: PipelineStage[];
   filtered: FilteredTool[];
 }
+
+// --------------------------------------------------------------- analytics
+// Aligned to B's wave-2 analytics/wire.py (read from the in-progress
+// /root/mcpr2-wt-analytics worktree). All rates are fractions 0..1 or null
+// (null = no denominator yet). Every endpoint takes ?window=<n>h|<n>d.
+export type AnalyticsWindow = "7d" | "30d" | "90d";
+
+export interface AnalyticsWindowInfo {
+  label: string;
+  start: string;
+  end: string;
+}
+
+/** "Tokens not sent": exposed vs the agent's authorized catalog (chars/4 estimate). */
+export interface ContextEconomy {
+  servedDecisions: number;
+  unscoredDecisions: number;
+  noMatchDecisions: number;
+  exposedTokens: number;
+  catalogTokens: number;
+  tokensNotSent: number;
+  savings: number | null;
+  catalogTokensPerDecision?: number | null;
+  estimator: string;
+  catalogBasis: string;
+}
+
+export interface FunnelTotals {
+  surfaced: number;
+  selected: number;
+  succeeded: number;
+  failed: number;
+  selectionRate: number | null;
+  successRate: number | null;
+}
+
+export interface RoutingStats {
+  decisions: number;
+  noMatch: number;
+  noMatchRate: number | null;
+  fallback: number;
+  fallbackRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+}
+
+export interface ExecutionStats {
+  attempts: number;
+  denied: number;
+  denialRate: number | null;
+  attributed: number;
+  attributionCoverage: number | null;
+  offFunnelSelections: number;
+}
+
+/** Position bias: how often a tool shown at `rank` was selected. */
+export interface RankPoint {
+  rank: number;
+  shown: number;
+  selected: number;
+  rate: number | null;
+}
+
+export interface AnalyticsOverview {
+  window: AnalyticsWindowInfo;
+  contextEconomy: ContextEconomy;
+  funnel: FunnelTotals;
+  routing: RoutingStats;
+  executions: ExecutionStats;
+  positionCurve: RankPoint[];
+  catalogDrift: Record<string, number>;
+}
+
+export interface ToolFunnel {
+  toolId: string;
+  /** null: the tool is no longer in the catalog. */
+  toolName: string | null;
+  serverName: string | null;
+  enabled: boolean | null;
+  tokens: number | null;
+  surfaced: number;
+  selected: number;
+  succeeded: number;
+  failed: number;
+  selectionRate: number | null;
+  successRate: number | null;
+  avgRank: number | null;
+  exposedTokens: number;
+}
+
+export type ToolFunnelSort =
+  | "surfaced"
+  | "selected"
+  | "succeeded"
+  | "failed"
+  | "selectionRate"
+  | "successRate"
+  | "avgRank"
+  | "exposedTokens"
+  | "toolName";
+
+export interface ToolFunnelPage extends Page<ToolFunnel> {
+  window: AnalyticsWindowInfo;
+}
+
+export interface CoSurfaced {
+  toolId: string;
+  toolName: string | null;
+  serverName: string | null;
+  coSurfaced: number;
+  thisSelected: number;
+  otherSelected: number;
+}
+
+export interface ToolAnalytics {
+  window: AnalyticsWindowInfo;
+  tool: ToolFunnel;
+  positionCurve: RankPoint[];
+  coSurfaced: CoSurfaced[];
+}
+
+export interface AgentProfile {
+  agentId: string;
+  decisions: number;
+  noMatch: number;
+  noMatchRate: number | null;
+  fallback: number;
+  fallbackRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+  attempts: number;
+  denied: number;
+  denialRate: number | null;
+  attributed: number;
+  attributionCoverage: number | null;
+  surfaced: number;
+  selected: number;
+  selectionRate: number | null;
+  avgSurfacedPerDecision: number | null;
+  budgetTools?: number | null;
+  budgetUtilization?: number | null;
+  contextEconomy: ContextEconomy;
+}
+
+export interface WastedTool {
+  toolId: string;
+  toolName: string | null;
+  serverName: string | null;
+  surfaced: number;
+  selected: number;
+  selectionRate: number | null;
+  exposedTokens: number;
+}
+
+export interface StaleTool {
+  toolId: string;
+  toolName: string;
+  serverName: string;
+  createdAt: string;
+  lastSurfacedAt: string | null;
+}
+
+export interface NeverRoutedServer {
+  serverId: string;
+  serverName: string;
+  toolCount: number;
+  createdAt: string;
+}
+
+/** Suggestions only: nothing is disabled automatically. */
+export interface AnalyticsSuggestions {
+  window: AnalyticsWindowInfo;
+  minSurfaced: number;
+  maxSelectionRate: number;
+  staleDays: number;
+  wastedExposure: WastedTool[];
+  staleTools: StaleTool[];
+  neverRoutedServers: NeverRoutedServer[];
+}
