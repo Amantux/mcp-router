@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from mcprouter.analytics.funnel import SURF_CTE, ratio
+from mcprouter.analytics.funnel import LIVE_DECISION_SQL, SURF_CTE, ratio
 from mcprouter.analytics.tokens import ESTIMATOR
 from mcprouter.analytics.window import Window
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
@@ -97,6 +97,9 @@ SELECT d.agent_id,
        ) AS served
 FROM routing_decisions d
 WHERE d.created_at >= :start AND d.created_at < :end
+  AND """
+    + LIVE_DECISION_SQL
+    + """
 GROUP BY d.agent_id
 """
 )

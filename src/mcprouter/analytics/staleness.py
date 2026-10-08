@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from mcprouter.analytics.funnel import LIVE_DECISION_SQL
 from mcprouter.analytics.window import midnight
 from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolStatsDaily
 
@@ -32,6 +33,9 @@ CROSS JOIN LATERAL jsonb_array_elements_text(
     CASE WHEN jsonb_typeof(d.selected_tool_ids::jsonb) = 'array'
          THEN d.selected_tool_ids::jsonb ELSE '[]'::jsonb END
 ) AS e(tool_id)
+WHERE """
+    + LIVE_DECISION_SQL
+    + """
 GROUP BY e.tool_id
 """
 )

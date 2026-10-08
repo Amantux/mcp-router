@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics.economy import Economy
-from mcprouter.analytics.funnel import ATT_CTE, SURF_CTE, ratio
+from mcprouter.analytics.funnel import ATT_CTE, LIVE_DECISION_SQL, SURF_CTE, ratio
 from mcprouter.analytics.window import Window
 
 _DECISIONS_SQL = text(
@@ -38,6 +38,9 @@ SELECT d.agent_id,
        percentile_cont(0.95) WITHIN GROUP (ORDER BY d.latency_ms) AS p95
 FROM routing_decisions d
 WHERE d.created_at >= :start AND d.created_at < :end
+  AND """
+    + LIVE_DECISION_SQL
+    + """
 GROUP BY GROUPING SETS ((d.agent_id), ())
 """
 )
@@ -50,6 +53,9 @@ SELECT x.agent_id,
        count(*) FILTER (WHERE d.id IS NOT NULL) AS attributed
 FROM execution_records x
 LEFT JOIN routing_decisions d ON d.id = x.route_request_id AND d.agent_id = x.agent_id
+     AND """
+    + LIVE_DECISION_SQL
+    + """
 WHERE x.created_at >= :start AND x.created_at < :end AND x.outcome <> 'started'
 GROUP BY GROUPING SETS ((x.agent_id), ())
 """

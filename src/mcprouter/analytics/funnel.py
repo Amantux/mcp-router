@@ -37,9 +37,18 @@ from sqlalchemy.orm import Session
 from mcprouter.analytics.window import Window, live_horizon, midnight
 from mcprouter.models import ToolStatsDaily
 
+# THE one filter for "real traffic" (wave-2 integration). Every query that
+# reads `routing_decisions d` ANDs this in. `simulated/<model>` rows come from
+# admin /route/simulate: nothing was exposed to any agent, so they are excluded
+# everywhere. `cached/<model>` rows (route-cache hits) are NOT excluded: the
+# agent really was shown those tools. The marker literal mirrors
+# routing.pipeline.SIMULATED_MARKER (asserted in tests/test_analytics_markers.py).
+LIVE_DECISION_SQL = "NOT starts_with(coalesce(d.model_version, ''), 'simulated/')"
+
 # Surfaced (decision, tool, rank) rows in [start, end), minus whole UTC days
 # served from rollups. Non-array selected_tool_ids degrade to "nothing shown".
-SURF_CTE = """
+SURF_CTE = (
+    """
 surf AS (
     SELECT d.id AS decision_id, d.agent_id, e.tool_id, e.rank::int AS rank
     FROM routing_decisions d
@@ -49,7 +58,11 @@ surf AS (
     ) WITH ORDINALITY AS e(tool_id, rank)
     WHERE d.created_at >= :start AND d.created_at < :end
       AND NOT ((d.created_at AT TIME ZONE 'UTC')::date = ANY(CAST(:skip_days AS date[])))
+      AND """
+    + LIVE_DECISION_SQL
+    + """
 )"""
+)
 
 # Attributed (decision, tool) pairs for decisions in `surf`.
 ATT_CTE = """

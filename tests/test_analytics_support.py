@@ -46,6 +46,7 @@ def add_decision(
     *,
     fallback: bool = False,
     latency_ms: float = 10.0,
+    model_version: str = "test",
 ) -> str:
     rid = str(uuid.uuid4())
     with factory() as s:
@@ -56,7 +57,7 @@ def add_decision(
                 query="q",
                 selected_tool_ids=tools,
                 scores={t: 1.0 - i / 10 for i, t in enumerate(tools)},
-                model_version="test",
+                model_version=model_version,
                 fallback_used=fallback,
                 latency_ms=latency_ms,
                 created_at=at,
