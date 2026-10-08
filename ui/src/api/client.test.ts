@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, camelizeKeys, describeError, getTool, listServers, listTools, simulateRoute, snakeToCamel } from "./client";
+import {
+  ApiError,
+  camelizeKeys,
+  describeError,
+  getModelsHealth,
+  getTool,
+  listDedupSuggestions,
+  listRules,
+  listServers,
+  listTools,
+  simulateRoute,
+  snakeToCamel,
+} from "./client";
 import { mockFetch } from "../test/render";
 
 describe("snakeToCamel", () => {
@@ -114,5 +126,58 @@ describe("client requests", () => {
     const err = await listServers().catch((e: unknown) => e);
     expect((err as ApiError).status).toBe(0);
     expect(describeError(err).status).toBe("network error");
+  });
+});
+
+describe("integration reconciliation (backend shapes)", () => {
+  it("maps the backend models-health payload onto the UI shape", async () => {
+    mockFetch({
+      "GET /api/v1/models/health": () => ({
+        json: {
+          status: "ok",
+          loaded: true,
+          mode: "balanced",
+          device: "cpu",
+          embedding: { backend: "hash-v1", requested: "hash", model_id: null },
+          decision: { backend: "laya@55cf4c4ebb4e", requested: "laya", model_id: "convaiinnovations/laya", revision: "55cf4c4" },
+          memory: { rss_bytes: 50 * 1024 * 1024 },
+        },
+      }),
+    });
+    const h = await getModelsHealth();
+    expect(h.device).toBe("cpu");
+    expect(h.gpu).toBeNull();
+    expect(h.memory?.rssMb).toBe(50);
+    expect(h.models.map((m) => [m.kind, m.name, m.loaded])).toEqual([
+      ["embedding", "hash-v1", true],
+      ["decision", "convaiinnovations/laya", true],
+    ]);
+  });
+
+  it("flattens nested tool stats", async () => {
+    mockFetch({
+      "GET /api/v1/tools/t1": () => ({
+        json: { id: "t1", name: "x", stats: { call_count: 3, error_count: 1, avg_latency_ms: 12.5 }, versions: [{ version: 2 }] },
+      }),
+    });
+    const t = await getTool("t1");
+    expect([t.callCount, t.errorCount, t.avgLatencyMs]).toEqual([3, 1, 12.5]);
+    expect(t.versions[0].id).toBe("t1@2");
+  });
+
+  it("uses the backend's /policy-rules path", async () => {
+    const { calls } = mockFetch({ "GET /api/v1/policy-rules": () => ({ json: [] }) });
+    expect(await listRules()).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("takes suggestion tool ids from the backend's slim refs and drops the refs", async () => {
+    mockFetch({
+      "GET /api/v1/dedup/suggestions": () => ({
+        json: { items: [{ id: "d1", tool_a: { id: "a", name: "x" }, tool_b: { id: "b", name: "y" }, similarity: 0.9, status: "open" }] },
+      }),
+    });
+    const [s] = await listDedupSuggestions();
+    expect([s.toolAId, s.toolBId, s.toolA, s.toolB]).toEqual(["a", "b", undefined, undefined]);
   });
 });

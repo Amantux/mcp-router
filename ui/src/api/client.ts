@@ -175,6 +175,23 @@ export function setServerEnabled(id: string, enabled: boolean): Promise<MCPServe
 }
 
 // ------------------------------------------------------------------- tools
+/** Reconciled at integration: the backend nests usage under `stats` and has no version `id`. */
+interface BackendToolStats {
+  callCount?: number;
+  errorCount?: number;
+  avgLatencyMs?: number | null;
+}
+
+export function normaliseTool<T extends MCPTool>(raw: T & { stats?: BackendToolStats }): T {
+  const { stats, ...rest } = raw;
+  return {
+    ...(rest as unknown as T),
+    callCount: raw.callCount ?? stats?.callCount,
+    errorCount: raw.errorCount ?? stats?.errorCount,
+    avgLatencyMs: raw.avgLatencyMs ?? stats?.avgLatencyMs,
+  };
+}
+
 // CONTRACT: query params q, domain, operation, serverId, enabled, available, limit, offset.
 export async function listTools(q: ToolQuery, signal?: AbortSignal): Promise<Page<MCPTool>> {
   const raw = await request<unknown>("GET", `${API_BASE}/tools`, {
@@ -190,12 +207,16 @@ export async function listTools(q: ToolQuery, signal?: AbortSignal): Promise<Pag
       offset: q.offset,
     },
   });
-  return toPage<MCPTool>(raw, q.limit, q.offset);
+  const page = toPage<MCPTool>(raw, q.limit, q.offset);
+  return { ...page, items: page.items.map((t) => normaliseTool(t)) };
 }
 
 export async function getTool(id: string, signal?: AbortSignal): Promise<ToolDetail> {
-  const t = await request<ToolDetail>("GET", `${API_BASE}/tools/${encodeURIComponent(id)}`, { signal });
-  return { ...t, versions: t.versions ?? [] };
+  const t = normaliseTool(await request<ToolDetail>("GET", `${API_BASE}/tools/${encodeURIComponent(id)}`, { signal }));
+  return {
+    ...t,
+    versions: (t.versions ?? []).map((v) => ({ ...v, id: v.id ?? `${id}@${v.version}` })),
+  };
 }
 
 export function updateClassification(id: string, body: ClassificationUpdate): Promise<MCPTool> {
@@ -203,8 +224,30 @@ export function updateClassification(id: string, body: ClassificationUpdate): Pr
 }
 
 // ------------------------------------------------------------------- dedup
+/** Backend embeds a small tool ref ({id, name, serverName, enabled}), not a full MCPTool. */
+interface BackendSuggestion extends Omit<DuplicateSuggestion, "toolA" | "toolB" | "toolAId" | "toolBId"> {
+  toolAId?: string;
+  toolBId?: string;
+  toolA?: (Partial<MCPTool> & { id: string }) | null;
+  toolB?: (Partial<MCPTool> & { id: string }) | null;
+}
+
+/** A full embedded tool is kept; the backend's slim ref is dropped so the page fetches by id. */
+function fullTool(t: (Partial<MCPTool> & { id: string }) | null | undefined): MCPTool | undefined {
+  return t && t.operation !== undefined && t.inputSchema !== undefined ? normaliseTool(t as MCPTool) : undefined;
+}
+
 export async function listDedupSuggestions(status: DedupStatus = "open", signal?: AbortSignal): Promise<DuplicateSuggestion[]> {
-  return toList<DuplicateSuggestion>(await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status } }));
+  const raw = toList<BackendSuggestion>(await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status } }));
+  // Reconciled at integration: take ids from the embedded refs; when they are
+  // slim refs (no description/schema) the page fetches the full tools by id.
+  return raw.map(({ toolA, toolB, ...s }) => ({
+    ...s,
+    toolAId: s.toolAId ?? toolA?.id ?? "",
+    toolBId: s.toolBId ?? toolB?.id ?? "",
+    toolA: fullTool(toolA),
+    toolB: fullTool(toolB),
+  }));
 }
 
 // CONTRACT: POST /dedup/suggestions triggers a scan; response body ignored.
@@ -241,8 +284,54 @@ export async function simulateRoute(body: RouteRequest): Promise<RouteResponse> 
 }
 
 // ------------------------------------------------------------ models/health
-export function getModelsHealth(signal?: AbortSignal): Promise<ModelsHealth> {
-  return request("GET", `${API_BASE}/models/health`, { signal });
+/** Backend shape (api/routes_models.py ModelsHealth), camelised. */
+interface BackendHealth {
+  backend: string | null;
+  requested: string;
+  modelId?: string | null;
+  revision?: string | null;
+}
+
+interface BackendModelsHealth {
+  loaded: boolean;
+  mode: string;
+  device: string;
+  embedding: BackendHealth;
+  decision: BackendHealth;
+  memory?: Record<string, number | null>;
+}
+
+const MB = 1024 * 1024;
+
+function toMb(bytes: number | null | undefined): number | undefined {
+  return bytes == null ? undefined : Math.round(bytes / MB);
+}
+
+/** Reconciled at integration: map the backend's health payload onto the UI's ModelsHealth. */
+export function mapModelsHealth(raw: BackendModelsHealth): ModelsHealth {
+  const mem = raw.memory ?? {};
+  const model = (kind: string, b: BackendHealth) => ({
+    name: b.modelId ?? b.backend ?? b.requested,
+    kind,
+    backend: b.backend ?? undefined,
+    device: raw.device,
+    loaded: raw.loaded && b.backend != null,
+    version: b.revision ?? undefined,
+  });
+  return {
+    device: raw.device,
+    mode: raw.mode,
+    gpu:
+      mem.cudaTotalBytes != null
+        ? { memoryUsedMb: toMb(mem.cudaReservedBytes), memoryTotalMb: toMb(mem.cudaTotalBytes) }
+        : null,
+    memory: { rssMb: toMb(mem.rssBytes) },
+    models: [model("embedding", raw.embedding), model("decision", raw.decision)],
+  };
+}
+
+export async function getModelsHealth(signal?: AbortSignal): Promise<ModelsHealth> {
+  return mapModelsHealth(await request<BackendModelsHealth>("GET", `${API_BASE}/models/health`, { signal }));
 }
 
 export function getHealthz(signal?: AbortSignal): Promise<Healthz> {
@@ -267,10 +356,11 @@ export function createPrincipal(body: CreatePrincipalRequest): Promise<CreatedPr
   return request("POST", `${API_BASE}/principals`, { body });
 }
 
+// Reconciled at integration: the backend (routes_policy) serves /policy-rules.
 export async function listRules(signal?: AbortSignal): Promise<PolicyRule[]> {
-  return toList<PolicyRule>(await request("GET", `${API_BASE}/rules`, { signal }));
+  return toList<PolicyRule>(await request("GET", `${API_BASE}/policy-rules`, { signal }));
 }
 
 export function createRule(body: CreateRuleRequest): Promise<PolicyRule> {
-  return request("POST", `${API_BASE}/rules`, { body });
+  return request("POST", `${API_BASE}/policy-rules`, { body });
 }
