@@ -6,7 +6,7 @@ Order for every attempt (each refusal is audited and returns a curated reason):
      caller's possibly-stale records: TOCTOU between routing and execution)
   a. policy.evaluate            -> denied
   b. per-agent rate limit       -> rate_limited
-  c. tool/server availability   -> unavailable
+  c. tool/server availability   -> unavailable (disabled, or server offline)
   d. JSON-Schema validation     -> invalid_args   (field paths only, no values)
   e. approval gate              -> pending_approval (ApprovalRequest row)
   f. invoke via ToolInvoker under a hard timeout -> ok | error | timeout
@@ -282,7 +282,7 @@ class ExecutionManager:
             return ExecutionResult(RATE_LIMITED, detail, rid)
 
         # (c) availability
-        if not (loaded.tool.enabled and loaded.tool.available and loaded.server.enabled):
+        if not _available(loaded):
             detail = "tool unavailable"
             rid = await anyio.to_thread.run_sync(
                 self._refuse, agent_id, loaded, UNAVAILABLE, detail, rrid
@@ -449,7 +449,7 @@ class ExecutionManager:
             return await refuse(f"approval {req.id}: {decision.reason}")
         if loaded.tool.schema_hash != req.schema_hash:
             return await refuse(f"approval {req.id}: tool schema changed since request")
-        if not (loaded.tool.enabled and loaded.tool.available and loaded.server.enabled):
+        if not _available(loaded):
             return await refuse(f"approval {req.id}: tool unavailable")
         try:
             args = validate_arguments(loaded.tool.input_schema, req.arguments or {})
@@ -532,6 +532,22 @@ def _view(row: ApprovalRequest) -> ApprovalView:
         expires_at=row.expires_at,
         decided_at=row.decided_at,
         result_preview=row.result_preview,
+    )
+
+
+# discovery.health.OFFLINE (literal: keep execution free of a discovery import).
+_OFFLINE = "offline"
+
+
+def _available(loaded: _Loaded) -> bool:
+    """Tool enabled + available, server enabled and not offline (integration
+    gap 6: routing and the gateway already hide offline servers; this closes
+    stale exposures and direct REST calls). `degraded` still executes."""
+    return (
+        loaded.tool.enabled
+        and loaded.tool.available
+        and loaded.server.enabled
+        and loaded.server.status != _OFFLINE
     )
 
 

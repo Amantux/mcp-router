@@ -16,7 +16,13 @@ from mcprouter.execution.manager import ApprovalError, ExecutionManager
 from mcprouter.execution.models import ApprovalRequest
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import MASK
-from mcprouter.models import AgentPrincipal, ExecutionRecord, MCPToolRecord, PolicyRule
+from mcprouter.models import (
+    AgentPrincipal,
+    ExecutionRecord,
+    MCPServerRecord,
+    MCPToolRecord,
+    PolicyRule,
+)
 
 from .conftest import requires_db
 from .test_execution_support import (
@@ -633,3 +639,56 @@ async def test_manager_stats_match_the_single_registry_writer(
         assert t is not None
         assert (t.call_count, t.error_count) == (2, 0)
         assert t.avg_latency_ms == pytest.approx((1 - EMA_ALPHA) * l1 + EMA_ALPHA * l2, rel=1e-9)
+
+
+# ------------------------------------------- wave-2 integration: gap 6 rest
+def _set_server_status(factory: sessionmaker[Session], server_id: str, status: str) -> None:
+    with factory() as s:
+        s.get(MCPServerRecord, server_id).status = status  # type: ignore[union-attr]
+        s.commit()
+
+
+async def test_offline_server_tool_is_unavailable_and_audited(
+    sec_db: sessionmaker[Session],
+    cat: Catalog,
+) -> None:
+    """Mutation target: the `server.status != offline` term of the manager's
+    availability check (gateway + routing already hide offline servers; a
+    stale exposure or a direct REST call must not reach a dead upstream)."""
+    add_rule(sec_db, "alice")
+    tool = cat.tools["github.list_issues"]
+    _set_server_status(sec_db, tool.server_id, "offline")
+    inv = FakeInvoker()
+    res = await _mgr(sec_db, inv).execute(cat.principals["alice"], tool, OK_ARGS)
+    assert res.status == "unavailable" and inv.calls == []
+    assert _outcomes(sec_db) == ["unavailable"]
+
+
+async def test_degraded_server_tool_still_executes(
+    sec_db: sessionmaker[Session],
+    cat: Catalog,
+) -> None:
+    add_rule(sec_db, "alice")
+    tool = cat.tools["github.list_issues"]
+    _set_server_status(sec_db, tool.server_id, "degraded")
+    inv = FakeInvoker()
+    res = await _mgr(sec_db, inv).execute(cat.principals["alice"], tool, OK_ARGS)
+    assert res.status == "ok" and len(inv.calls) == 1
+
+
+async def test_server_going_offline_voids_pending_approval(
+    sec_db: sessionmaker[Session],
+    cat: Catalog,
+) -> None:
+    add_rule(sec_db, "alice", requires_approval=True)
+    tool = cat.tools["github.list_issues"]
+    inv = FakeInvoker()
+    mgr = _mgr(sec_db, inv)
+    pending = await mgr.execute(cat.principals["alice"], tool, OK_ARGS)
+    assert pending.approval_id
+    _set_server_status(sec_db, tool.server_id, "offline")
+    done = await mgr.approve(pending.approval_id)
+    assert done.status == "denied" and "unavailable" in done.detail and inv.calls == []
+    with sec_db() as s:
+        row = s.get(ApprovalRequest, pending.approval_id)
+        assert row is not None and row.status == "failed" and row.arguments is None
