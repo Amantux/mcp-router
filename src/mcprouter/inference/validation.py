@@ -1,0 +1,89 @@
+"""Protocol enforcement around ANY DecisionModel.
+
+FR-03 says the decision model must never invent tool names. The protocol makes
+that true by construction only if every implementation obeys it, so this
+wrapper checks rather than trusts: the option must be one of the supplied
+strings verbatim, probabilities must be a distribution over exactly the
+supplied options/levels, `noul` must be a probability. Anything else raises
+DecisionProtocolError and the result is discarded.
+
+The wrapped model receives a COPY of the option list, so a misbehaving model
+cannot mutate the caller's list (and an option it "adds" to its copy is still
+rejected, because membership is checked against the caller's original).
+
+The engine always hands routing a ValidatedDecisionModel — never a raw one.
+"""
+
+from __future__ import annotations
+
+import math
+
+from mcprouter.inference.errors import DecisionProtocolError
+from mcprouter.interfaces import ChoiceResult, DecisionModel, ScoreResult
+
+
+def _sum_tolerance(k: int) -> float:
+    # Laya rounds each probability to 4 dp; allow that rounding residue plus slack.
+    return 1e-3 + 5e-5 * k
+
+
+def _check_distribution(probs: list[float], what: str) -> None:
+    for p in probs:
+        if not math.isfinite(p) or p < 0.0 or p > 1.0:
+            raise DecisionProtocolError(f"{what}: probability outside [0, 1]")
+    if abs(sum(probs) - 1.0) > _sum_tolerance(len(probs)):
+        raise DecisionProtocolError(f"{what}: probabilities do not sum to 1")
+
+
+def _check_labels(labels: list[str], kind: str) -> None:
+    if not labels:
+        raise ValueError(f"at least one {kind} is required")
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"{kind}s must be unique")
+
+
+def validate_choice(result: ChoiceResult, options: list[str]) -> ChoiceResult:
+    if result.option not in options:
+        raise DecisionProtocolError("choice: returned option is not in the supplied list")
+    if set(result.probabilities) != set(options):
+        raise DecisionProtocolError("choice: probabilities are not keyed by exactly the options")
+    _check_distribution(list(result.probabilities.values()), "choice")
+    return result
+
+
+def validate_score(result: ScoreResult, levels: list[str]) -> ScoreResult:
+    if not 0 <= result.level < len(levels):
+        raise DecisionProtocolError("score: level index out of range")
+    if len(result.probabilities) != len(levels):
+        raise DecisionProtocolError("score: one probability per level is required")
+    _check_distribution(list(result.probabilities), "score")
+    return result
+
+
+def validate_noul(p: float) -> float:
+    if not math.isfinite(p) or p < 0.0 or p > 1.0:
+        raise DecisionProtocolError("noul: probability outside [0, 1]")
+    return p
+
+
+class ValidatedDecisionModel:
+    """DecisionModel decorator that enforces the protocol on every answer."""
+
+    def __init__(self, inner: DecisionModel) -> None:
+        self.inner = inner
+        self.name = inner.name
+
+    def choice(self, state: str, question: str, options: list[str]) -> ChoiceResult:
+        _check_labels(options, "option")
+        original = list(options)
+        result = self.inner.choice(state, question, list(original))
+        return validate_choice(result, original)
+
+    def score(self, state: str, question: str, levels: list[str]) -> ScoreResult:
+        _check_labels(levels, "level")
+        original = list(levels)
+        result = self.inner.score(state, question, list(original))
+        return validate_score(result, original)
+
+    def noul(self, state: str, question: str) -> float:
+        return validate_noul(self.inner.noul(state, question))
