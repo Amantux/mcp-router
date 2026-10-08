@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Badge,
   Button,
   Caption1,
   Field,
@@ -112,6 +113,11 @@ export function ExecutionsPage() {
                   <TableCell>{x.serverName ?? (x.serverId ? <span className={c.mono}>{x.serverId.slice(0, 8)}</span> : "—")}</TableCell>
                   <TableCell>
                     <OutcomeBadge outcome={x.outcome} />
+                    {x.initiatedBy === "admin" && (
+                      <Badge size="small" appearance="tint" color="important" title="Admin-initiated run, impersonating this agent">
+                        admin
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell className={c.num}>{fmtMs(x.latencyMs)}</TableCell>
                   <TableCell>

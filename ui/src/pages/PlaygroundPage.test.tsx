@@ -32,6 +32,7 @@ function mockTool(tool: Record<string, unknown>, execute: (body: unknown) => { s
     [`GET /api/v1/tools/${tool.id}`]: () => ({ json: tool }),
     [`POST /api/v1/tools/${tool.id}/execute`]: execute,
     "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
+    "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
   });
 }
 
@@ -79,21 +80,26 @@ describe("PlaygroundPage", () => {
     expect(screen.getByText("Arguments: Contains a field the tool doesn't accept.")).toBeTruthy();
   });
 
-  it("asks for confirmation, naming the tool and identity, before running a write tool", async () => {
+  it("admin-only sessions must pick an agent; the confirmation and POST carry the impersonation", async () => {
     const user = userEvent.setup();
     setCredentials({ adminToken: "adm" });
     const { calls } = mockTool({ ...TOOL, name: "create_issue", operation: "write" }, () => ({ json: { status: "ok", detail: "ok", record_id: "r2", result: { content: [{ type: "text", text: '{"number":7}' }], is_error: false } } }));
     renderWithProviders(<PlaygroundPage />, { route: "/playground?tool=t1" });
     await user.type(await screen.findByRole("textbox", { name: /repo/ }), "a/b");
+    // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
+    expect((screen.getByRole("button", { name: "Run tool" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.selectOptions(await screen.findByTestId("run-as-picker"), "billing-bot");
     await user.click(screen.getByRole("button", { name: "Run tool" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Run create_issue as the admin token?")).toBeTruthy();
+    expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     // Fluent keeps the surface aria-hidden during its open transition; wait it out.
     await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 3000 }));
     const ok = await screen.findByTestId("outcome-ok");
     expect(within(ok).getByText("Ran create_issue")).toBeTruthy();
     expect(within(ok).getByLabelText("Result block 1").textContent).toBe('{\n  "number": 7\n}');
+    const exec = calls.find((c) => c.method === "POST")!;
+    expect((exec.body as Record<string, unknown>).agentId).toBe("billing-bot");
   });
 
   it("raw JSON toggle: form→JSON always works; unrepresentable JSON stays raw with a notice", async () => {

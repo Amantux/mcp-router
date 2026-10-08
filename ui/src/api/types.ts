@@ -203,6 +203,8 @@ export interface ExecutionRecord {
   detail: string;
   latencyMs?: number | null;
   createdAt: string;
+  routeRequestId?: string | null; // attribution to the routing decision; null = unattributed
+  initiatedBy?: string | null; // "admin" = impersonated (admin-initiated) run
 }
 
 export interface ExecutionQuery {

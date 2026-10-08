@@ -26,6 +26,7 @@ class ExecutionRow:
     latency_ms: float | None
     created_at: datetime
     route_request_id: str | None = None  # wave-2 attribution; None = unattributed
+    initiated_by: str | None = None  # 'admin' = impersonated run; None/'agent' = the agent itself
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,7 @@ def list_executions(
             latency_ms=r.latency_ms,
             created_at=r.created_at,
             route_request_id=r.route_request_id,
+            initiated_by=r.initiated_by,
         )
         for r, tool_name, server_name in rows
     ]

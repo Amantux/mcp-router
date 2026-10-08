@@ -37,6 +37,8 @@ class ExecutionOut(_Wire):
     # Wave-2 attribution (read-only): the routing decision this call followed;
     # None = unattributed (legacy rows, approval replays, admin-initiated runs).
     route_request_id: str | None = None
+    # 'admin' marks an impersonated (admin-initiated) run; null/'agent' = the agent itself.
+    initiated_by: str | None = None
 
 
 class ExecutionPageOut(_Wire):

@@ -21,7 +21,7 @@ import {
 } from "@fluentui/react-components";
 import { PlayRegular, WrenchRegular } from "@fluentui/react-icons";
 import { Link, useSearchParams } from "react-router";
-import { ApiError, executeTool, getApproval, getMe, getTool, isAbort, listServers, listTools } from "../api/client";
+import { ApiError, executeTool, getApproval, getMe, getTool, isAbort, listPrincipals, listServers, listTools } from "../api/client";
 import { useAuth } from "../api/auth";
 import type { Approval, ExecuteResult, JsonObject, MCPTool } from "../api/types";
 import { ConfirmDialog, EmptyState, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
@@ -79,12 +79,15 @@ const TERMINAL: Approval["status"][] = ["executed", "failed", "denied", "expired
 export const APPROVAL_POLL_MS = 3000;
 
 /** Who a playground run executes as. Shows only names, never credentials. */
-export function RunAsLine() {
+export function RunAsLine({ impersonating }: { impersonating?: string } = {}) {
   const a = useAuth();
   let who: string;
   if (a.hasAgentKey)
     who = a.agentKeyRejected ? "agent key — refused by the backend; fix it in Connect" : a.agentId ? `agent “${a.agentId}” (agent key)` : "agent key (resolving agent…)";
-  else if (a.hasAdminToken) who = "admin token (no agent key set — add one in Connect to run as an agent)";
+  else if (a.hasAdminToken)
+    who = impersonating
+      ? `agent “${impersonating}” (admin-initiated — runs under that agent's own policy, and is audited as impersonation)`
+      : "admin token — pick an agent below to run as (the backend refuses admin runs with no agent named)";
   else who = "no credential — in dev mode the backend runs this as agent “dev”";
   return (
     <Caption1 data-testid="run-as">
@@ -318,6 +321,21 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
   const [jsonText, setJsonText] = useState(() => JSON.stringify(root ? toArguments(root, initialDraft(root)).value : {}, null, 2));
   const [notice, setNotice] = useState<string | null>(null);
   const [jsonError, setJsonError] = useState<string>();
+  // Admin-only session: the backend requires an agentId to impersonate, so the
+  // run button stays disabled until one is picked (see routes_execute.py).
+  const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
+  const [runAs, setRunAs] = useState("");
+  const [agents, setAgents] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!adminOnly) return;
+    const ctl = new AbortController();
+    listPrincipals(ctl.signal)
+      .then((ps) => setAgents(ps.filter((p) => p.enabled).map((p) => p.agentId)))
+      .catch((e) => {
+        if (!isAbort(e)) setAgents([]);
+      });
+    return () => ctl.abort();
+  }, [adminOnly]);
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [serverErrors, setServerErrors] = useState<FieldErrors>({});
   const [generalErrors, setGeneralErrors] = useState<string[]>([]);
@@ -382,7 +400,7 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
     setServerErrors({});
     setGeneralErrors([]);
     try {
-      const res = await executeTool(tool.id, args);
+      const res = await executeTool(tool.id, args, undefined, adminOnly && runAs ? { agentId: runAs } : {});
       if (res.status === "invalid_args") {
         const mapped = mapServerErrors(res.errors ?? []);
         if (mode === "form") {
@@ -406,7 +424,15 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
   };
 
   const errors = { ...clientErrors, ...serverErrors };
-  const who = auth.hasAgentKey ? (auth.agentId ? `agent “${auth.agentId}”` : "the agent key") : auth.hasAdminToken ? "the admin token" : "dev mode";
+  const who = auth.hasAgentKey
+    ? auth.agentId
+      ? `agent “${auth.agentId}”`
+      : "the agent key"
+    : auth.hasAdminToken
+      ? runAs
+        ? `agent “${runAs}” (admin-initiated)`
+        : "the admin token"
+      : "dev mode";
 
   return (
     <section className={s.runner} aria-label={`Run ${tool.name}`}>
@@ -421,7 +447,19 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
         )}
       </div>
       {tool.description && <Body1>{tool.description}</Body1>}
-      <RunAsLine />
+      <RunAsLine impersonating={adminOnly && runAs ? runAs : undefined} />
+      {adminOnly && (
+        <Field label="Run as agent" hint="Admin-initiated runs execute under the chosen agent's own policy and are audited as impersonation.">
+          <Select data-testid="run-as-picker" value={runAs} onChange={(_, d) => setRunAs(d.value)}>
+            <option value="">Choose an agent…</option>
+            {(agents ?? []).map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
       {!compiled.ok && (
         <MessageBar intent="info" data-testid="schema-raw-only">
           <MessageBarBody>The input schema can't be shown as a form ({compiled.reason}). Edit the arguments as JSON.</MessageBarBody>
@@ -465,7 +503,7 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
         </Field>
       )}
       <div className={s.runRow}>
-        <Button appearance="primary" icon={<PlayRegular />} disabled={running} onClick={submit}>
+        <Button appearance="primary" icon={<PlayRegular />} disabled={running || (adminOnly && !runAs)} onClick={submit}>
           {running ? "Running…" : "Run tool"}
         </Button>
         {tool.operation !== "read" && <Caption1 className={c.muted}>This is a {tool.operation} tool: you'll be asked to confirm.</Caption1>}
