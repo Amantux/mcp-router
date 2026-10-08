@@ -13,17 +13,26 @@ Everything else is skipped without calling the backend at all.
 Canonical text: "name: description [tag1, tag2]" with tags stripped,
 de-duplicated and sorted, so re-ordering tags is not a change.
 
-Transactions: this flushes; the CALLER owns commit/rollback (one commit per
-request/job). Re-embedding does not bump `updated_at` — that column means
-"tool metadata changed", and a new vector is not a metadata change.
+Transactions: the CALLER owns commit/rollback (one commit per request/job).
+Re-embedding does not bump `updated_at` — that column means "tool metadata
+changed", and a new vector is not a metadata change (it is SET to itself, so
+the ORM onupdate hook does not fire).
+
+Concurrency: optimistic. Each row is written only `WHERE id = :id AND
+updated_at = <value read>`. If a catalog sync changed the tool in between
+(the ORM bumps `updated_at`), the write is skipped and counted in
+`conflicts`: the stale vector is never stored and the newer timestamp is
+never reverted; the tool's text hash no longer matches, so the next run
+embeds the new text.
 """
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from typing import cast
 
-from sqlalchemy import select, update
+from sqlalchemy import Table, bindparam, select, update
 from sqlalchemy.orm import Session
 
 from mcprouter.inference.engine import batched
@@ -48,6 +57,7 @@ class EmbedReport:
     embedded: int
     skipped: int
     batches: int
+    conflicts: int = 0  # rows changed concurrently; left for the next run
 
 
 def embed_pending_tools(
@@ -74,32 +84,47 @@ def embed_pending_tools(
         if r.missing or r.embedding_backend != backend.name or r.embedding_text_hash != h:
             pending.append((r.id, text, h, r.updated_at))
 
+    tbl = cast(Table, T.__table__)
+    stmt = (
+        update(tbl)
+        .where(tbl.c.id == bindparam("b_id"), tbl.c.updated_at == bindparam("b_seen"))
+        .values(
+            embedding=bindparam("b_vec", type_=tbl.c.embedding.type),
+            embedding_backend=bindparam("b_backend"),
+            embedding_text_hash=bindparam("b_hash"),
+            updated_at=tbl.c.updated_at,  # explicit self-assignment: no onupdate bump
+        )
+    )
     n_batches = 0
+    conflicts = 0
     for chunk in batched(pending, batch_size):
         vectors = backend.embed([text for _, text, _, _ in chunk])
         if len(vectors) != len(chunk) or any(len(v) != EMBEDDING_DIM for v in vectors):
             raise EmbeddingDimensionError(
                 f"backend {backend.name!r} returned vectors that are not {EMBEDDING_DIM}-dim"
             )
-        session.execute(
-            update(T),
-            [
+        for (tool_id, _, h, seen), vec in zip(chunk, vectors, strict=True):
+            # Per row (not executemany) so the conflict count is exact; refresh
+            # runs are ~1k rows, so the round trips are negligible.
+            result = session.execute(
+                stmt,
                 {
-                    "id": tool_id,
-                    "embedding": vec,
-                    "embedding_backend": backend.name,
-                    "embedding_text_hash": h,
-                    "updated_at": updated_at,  # explicit: suppress the onupdate bump
-                }
-                for (tool_id, _, h, updated_at), vec in zip(chunk, vectors, strict=True)
-            ],
-        )
+                    "b_id": tool_id,
+                    "b_seen": seen,
+                    "b_vec": vec,
+                    "b_backend": backend.name,
+                    "b_hash": h,
+                },
+            )
+            if getattr(result, "rowcount", 1) == 0:
+                conflicts += 1
         n_batches += 1
     session.flush()
     return EmbedReport(
         backend=backend.name,
         considered=len(rows),
-        embedded=len(pending),
+        embedded=len(pending) - conflicts,
         skipped=len(rows) - len(pending),
         batches=n_batches,
+        conflicts=conflicts,
     )

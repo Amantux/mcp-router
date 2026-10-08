@@ -175,3 +175,42 @@ def test_batches_and_rejects_wrong_width(db: sessionmaker[Session]) -> None:
         with pytest.raises(EmbeddingDimensionError):
             embed_pending_tools(s, Wide())
         s.rollback()
+
+
+@requires_db
+def test_concurrent_metadata_change_is_not_clobbered(db: sessionmaker[Session]) -> None:
+    """Review finding: a catalog sync committing between the pipeline's SELECT and
+    UPDATE must keep its new updated_at, and its tool must not get the stale vector."""
+    with db() as s:
+        a_id, _ = _seed(s)
+        a = s.get(MCPToolRecord, a_id)
+        assert a is not None
+        a.updated_at = datetime(2020, 1, 1, tzinfo=UTC)
+        s.commit()
+
+    class RacingSync(Counting):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            with db() as other:  # concurrent catalog sync, own transaction
+                t = other.get(MCPToolRecord, a_id)
+                assert t is not None
+                t.description = "Delete a file"  # ORM onupdate bumps updated_at
+                other.commit()
+            return super().embed(texts)
+
+    with db() as s:
+        rep = embed_pending_tools(s, RacingSync())
+        s.commit()
+    assert rep.conflicts == 1 and rep.embedded == 1
+
+    with db() as s:
+        a = s.get(MCPToolRecord, a_id)
+        assert a is not None
+        assert a.description == "Delete a file"
+        assert a.updated_at > datetime(2020, 1, 2, tzinfo=UTC)  # not reverted
+        assert a.embedding is None  # stale vector for the OLD text was not written
+
+    be = Counting()
+    with db() as s:
+        assert embed_pending_tools(s, be).embedded == 1  # heals on the next run
+        s.commit()
+    assert be.batches == [[canonical_tool_text("read_file", "Delete a file", ["fs"])]]
