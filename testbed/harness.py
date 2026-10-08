@@ -16,6 +16,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from testbed.fleet import ServerSpec
 
@@ -101,3 +102,31 @@ def http_fleet(
         yield urls
     finally:
         _terminate(proc)
+
+
+class InprocFleet:
+    """Connector factory serving registered servers from in-process MCPServers.
+
+    Mutate ``specs[name]`` between syncs to simulate a server changing; put a
+    name in ``down`` to make it unreachable (points at a dead local port).
+    """
+
+    DEAD_URL = "http://127.0.0.1:8619/dead/mcp"  # nothing listens on 8619 in tests
+
+    def __init__(self, specs: list[ServerSpec] | None = None) -> None:
+        self.specs: dict[str, ServerSpec] = {s.name: s for s in specs or []}
+        self.down: set[str] = set()
+
+    def endpoint(self, name: str) -> str:
+        # Placeholder endpoint for the registration row; never dialled.
+        return f"http://inproc.invalid/{name}/mcp"
+
+    def factory(self, server: Any, target: Any) -> Any:
+        from mcprouter.mcpclient import Connector, ServerTarget
+        from testbed.servers import build_server
+
+        del target
+        if server.name in self.down:
+            dead = ServerTarget(transport="streamable-http", endpoint=self.DEAD_URL)
+            return Connector(dead, connect_timeout_s=3)
+        return Connector(build_server(self.specs[server.name]))
