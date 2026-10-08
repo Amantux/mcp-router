@@ -160,3 +160,21 @@ def test_eval_table_created_idempotently(db: sessionmaker[Session]) -> None:
     eng = make_engine(Settings(database_url=TEST_DB_URL))
     ensure_eval_table(eng)
     ensure_eval_table(eng)
+
+
+def test_errored_cases_count_against_rates_not_dropped() -> None:
+    (case,) = parse_jsonl(_case(expected_tools=["s/x"]))
+    m = compute_metrics(
+        [
+            CaseOutcome(
+                case=case,
+                returned=[],
+                no_match=True,
+                fallback_used=False,
+                latency_ms=0.0,
+                error="unknown allowed_servers",
+            ),
+        ]
+    )
+    assert m["positive_cases"] == 1 and m["top1_accuracy"] == 0.0
+    assert m["errored_cases"] == ["c1"]

@@ -95,7 +95,9 @@ def _percentile(values: list[float], pct: float) -> float | None:
 
 def compute_metrics(outcomes: list[CaseOutcome]) -> dict[str, Any]:
     ok = [o for o in outcomes if o.error is None]
-    m = _core(ok)
+    # Errored cases (returned=[]) stay IN every denominator: a case that
+    # cannot run against this catalog is a miss, not a silently smaller test.
+    m = _core(outcomes)
     m["case_count"] = len(outcomes)
     m["errored_cases"] = [o.case.id for o in outcomes if o.error is not None]
     lat = [o.latency_ms for o in ok]
@@ -105,8 +107,8 @@ def compute_metrics(outcomes: list[CaseOutcome]) -> dict[str, Any]:
         "p99": _percentile(lat, 99),
     }
     m["fallback_rate"] = _rate(sum(o.fallback_used for o in ok), len(ok))
-    cats = sorted({o.case.category for o in ok})
-    m["by_category"] = {c: _core([o for o in ok if o.case.category == c]) for c in cats}
+    cats = sorted({o.case.category for o in outcomes})
+    m["by_category"] = {c: _core([o for o in outcomes if o.case.category == c]) for c in cats}
     return m
 
 
