@@ -5,7 +5,8 @@
 * denial rate    = ExecutionRecord outcome 'denied' / attempts, where attempts
   are all execution rows except the transient 'started' (window by the
   execution's created_at; attributed or not)
-* attribution coverage = attempts carrying a route_request_id / attempts
+* attribution coverage = attempts whose route_request_id names an existing
+  decision OF THE SAME AGENT / attempts
 * off-funnel selections = attributed (decision, tool) pairs whose tool the
   decision did NOT surface (e.g. a tool exposed by an earlier route)
 * budget fields are NULL: the per-decision max_tools actually applied is not
@@ -46,8 +47,9 @@ _EXEC_SQL = text(
 SELECT x.agent_id,
        count(*) AS attempts,
        count(*) FILTER (WHERE x.outcome = 'denied') AS denied,
-       count(*) FILTER (WHERE x.route_request_id IS NOT NULL) AS attributed
+       count(*) FILTER (WHERE d.id IS NOT NULL) AS attributed
 FROM execution_records x
+LEFT JOIN routing_decisions d ON d.id = x.route_request_id AND d.agent_id = x.agent_id
 WHERE x.created_at >= :start AND x.created_at < :end AND x.outcome <> 'started'
 GROUP BY GROUPING SETS ((x.agent_id), ())
 """

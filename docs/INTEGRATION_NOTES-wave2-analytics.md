@@ -77,6 +77,9 @@ Two consequences:
 2. **Persist the budget.** Add `max_tools_applied` (int), the clamp actually
    used. The agent profile then fills `budgetTools` and `budgetUtilization`,
    which are always `null` today.
+4. **Persist catalog size at decision time.** Add `catalog_tokens` (or the
+   authorized-tool count) on `RoutingDecisionRecord`. That removes the
+   current-scope approximation and the growth bias in the headline savings.
 3. **Usage prior (optional, later).** `analytics.prior.usage_prior(selected,
    surfaced, enabled=prior_enabled())` returns a value in `[0, cap]`, with
    cap 0.05. It is meant as an additive nudge on the blended score. It is not
@@ -118,13 +121,17 @@ time.
 | succeeded | The pair has at least one `ok`. |
 | failed | The pair has an `error` or `timeout` and no `ok`. |
 
+* An attribution counts only when the executing agent OWNS the decision
+  (`execution.agent_id = decision.agent_id`). An id naming another agent's
+  decision is ignored; the review found this as analytics poisoning, and it
+  is now fixed and mutation-checked.
 * Rates are `null` when the denominator is 0.
 * An attributed call to a tool that the referenced decision did NOT surface
   is an **off-funnel selection**. It is reported in the overview, not in the
   funnel.
 
 **Position bias.** The curve is P(selected | rank), computed only over
-decisions with at least one attributed execution. A decision nobody acted
+decisions with at least one IN-FUNNEL attributed selection. A decision nobody acted
 on, or one whose calls were not attributed, carries no rank-preference
 signal. It is computed from raw tables over the window and is not rolled up.
 
@@ -162,6 +169,15 @@ The raw components are always returned with the ratio.
   principal against its rules.
 * An agent whose current scope is empty has its served decisions counted in
   `unscoredDecisions`, and they are excluded from the ratio.
+* **Deleted tools.** A served decision that surfaced ANY tool no longer in
+  the catalog is excluded from the ratio and counted as `staleRefDecisions`.
+  Before the review fix, deleting a server pushed savings toward 100%.
+* **Bias direction (disclosed).** Pricing the catalog at its CURRENT size
+  means catalog GROWTH since a decision inflates that decision's savings. A
+  discovery catalog mostly grows, so the default bias is FLATTERING. The fix
+  is proposal 4 in §3. The UI should show this caveat next to the headline.
+* The counterfactual is PER DECISION (each `/route` or `find_tools` call),
+  not per agent turn. Eval runs count when their agent has rules (flag 2).
 * No-match decisions are excluded from savings, because a miss is not a
   saving. They are counted in `noMatchDecisions`.
 * The counterfactual is "without the router, this turn's context would carry
@@ -218,7 +234,8 @@ Rules for every endpoint:
 ```jsonc
 // shared
 Window   = {"label": "7d", "start": "2026-10-01T12:00:00Z", "end": "2026-10-08T12:00:00Z"}
-Economy  = {"servedDecisions": int, "unscoredDecisions": int, "noMatchDecisions": int,
+Economy  = {"servedDecisions": int, "unscoredDecisions": int, "staleRefDecisions": int,
+            "noMatchDecisions": int,
             "exposedTokens": int, "catalogTokens": int, "tokensNotSent": int,
             "savings": float|null,
             "catalogTokensPerDecision": int|null,   // per-agent only; null in overview
@@ -318,10 +335,12 @@ Agents are sorted by id.
   keys get 422.
 * `day` is the newest day to recompute. It defaults to the newest eligible
   day, `liveHorizon - 1`. `days` days ending at `day` are recomputed. A day
-  at or after the live horizon gets 400, with `detail` "day is inside the
+  before 2000-01-01 gets 422. A day at or after the live horizon gets 400, with `detail` "day is inside the
   live window (last 48h); only older days are rolled up." Nothing is written
   in that case.
-* Re-running is idempotent.
+* Re-running is idempotent. Concurrent runs serialize on a
+  transaction-scoped advisory lock (`pg_advisory_xact_lock`), so they cannot
+  race into the primary key.
 
 ```jsonc
 {"liveHorizon": "YYYY-MM-DD", "days": [{"day": "YYYY-MM-DD", "toolRows": int}]}  // oldest first
@@ -329,7 +348,9 @@ Agents are sorted by id.
 
 **GET /api/v1/dedup/suggestions** (extended, read-only)
 
-* `usageEvidence` is set only on `open` items.
+* `usageEvidence` is set only on `open` items. It is computed for the
+  involved tools only, inside a SAVEPOINT. Any `SQLAlchemyError` (for example
+  a timeout) degrades it to `null` instead of failing the listing.
 * It is `null` on items that are not open, and on accept/dismiss responses.
 
 ```jsonc
@@ -338,15 +359,21 @@ items[i].usageEvidence = {"window": "30d", "toolASurfaced": int, "toolBSurfaced"
                           "bothSelected": int} | null
 ```
 
-**Prometheus** (`/metrics`). These are all-time counters computed from the
-database (rollups plus raw) at scrape time, with no labels:
+**Prometheus** (`/metrics`). These are all-time counters recomputed from the
+database (rollups plus raw) with no labels. `collect()` never runs SQL:
+prometheus_client's ASGI app collects on the event loop. It serves a
+snapshot and starts one background refresh thread when the snapshot is
+older than 30 s. That thread is single-flight with `statement_timeout` 10s.
+The first scrape after start has no samples. Refresh cost grows with
+UNROLLED history, and nothing schedules rollups yet: run
+`POST /analytics/rollup` periodically (cron). Counters:
 
 * `mcpr_analytics_tools_surfaced_total`
 * `mcpr_analytics_tools_selected_total`
 * `mcpr_analytics_tools_succeeded_total`
 
-A database failure yields no samples (it is logged by exception type); it
-never fails the scrape.
+A refresh failure keeps the last-good snapshot and logs the exception type;
+it never fails the scrape.
 
 ## 8. Mutation evidence
 
@@ -361,6 +388,17 @@ For each guard: break it, confirm the named test fails, then restore it.
 | Prior bounds | Rate clamp AND outer clamp removed | `test_prior_never_exceeds_cap_and_never_negative[*]` FAILED (3) |
 | Prior cold tool | `surfaced <= 0` changed to `< 0` | 4 prior tests FAILED |
 | Admin auth | Router `Depends(require_admin)` stripped | `test_analytics_routes_require_admin[*]` FAILED (6 of 6) |
+
+Review-fix mutants (same method):
+
+| Guard | Mutant | Result |
+|---|---|---|
+| Attribution ownership | `own.agent_id = x.agent_id` removed | `test_cross_agent_attribution_is_ignored` FAILED |
+| Deleted-tool exclusion | `WHERE dec.complete` changed to `WHERE true` | `test_deleting_a_server_does_not_inflate_savings` FAILED |
+| Concurrent rollup | Advisory lock removed | `test_concurrent_rollups_serialize` FAILED (IntegrityError) |
+| Metrics off-loop | Refresh run inline in `collect()` | `test_collect_never_queries_the_db_on_the_calling_thread` FAILED |
+| Dedup degrade | `except SQLAlchemyError` changed to `except ZeroDivisionError` | `test_evidence_failure_degrades_to_null` FAILED |
+| Position `acted` | Off-funnel attributions counted as acted | `test_position_curve_ignores_off_funnel_only_decisions` FAILED |
 
 The prior's rate clamp and outer clamp are redundant defences. Removing
 either one alone keeps the bound, so both had to be removed for the mutant to
@@ -400,6 +438,20 @@ should default to 7d.
   is a one-field follow-up for whoever owns that router.
 
 ## 11. Flags
+
+0. **Adversarial review (reviewer subagent).**
+   * Fixed: the BLOCKER (the metrics query ran on the event loop and was
+     reachable unauthenticated), plus should-fix items 2, 4, 6 and 7, and
+     nits 8–12.
+   * Disclosed, not fixed: item 3 (catalog-growth bias; see proposal 4) and
+     item 5 (eval and per-call counting; see flag 2).
+   * Not fixed: nit 13. `CREATE INDEX` on `execution_records` is not
+     `CONCURRENTLY`, because `init_db` runs the ALTERs in one transaction. It
+     is a one-time build at upgrade that briefly blocks audit writes. Build
+     it out of band on a large existing table.
+   * The `/metrics` mount itself is unauthenticated, which is pre-existing
+     (app.py). It now exposes only three aggregate counters, served from a
+     snapshot.
 
 1. Attribution is only as good as what the gateway passes. Until A wires the
    keyword, `selected` is 0 everywhere and `attributionCoverage` reads 0.

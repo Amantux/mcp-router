@@ -18,6 +18,7 @@ from typing import Any
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -217,8 +218,8 @@ class ToolStatsDaily(Base):
     selected: Mapped[int] = mapped_column(Integer, default=0)
     succeeded: Mapped[int] = mapped_column(Integer, default=0)
     failed: Mapped[int] = mapped_column(Integer, default=0)
-    sum_rank: Mapped[int] = mapped_column(Integer, default=0)  # 1-based ranks summed
-    exposed_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    sum_rank: Mapped[int] = mapped_column(BigInteger, default=0)  # 1-based ranks summed
+    exposed_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

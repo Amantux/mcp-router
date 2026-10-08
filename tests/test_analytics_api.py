@@ -87,6 +87,7 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
     assert set(body["contextEconomy"]) == {
         "servedDecisions",
         "unscoredDecisions",
+        "staleRefDecisions",
         "noMatchDecisions",
         "exposedTokens",
         "catalogTokens",
@@ -263,9 +264,12 @@ def _sample(name: str) -> float:
 def test_prometheus_collector_registers_once_and_reads_db(
     sec_db: sessionmaker[Session],
 ) -> None:
+    from mcprouter.analytics.metrics import install_metrics
+
     build_world(sec_db)
     _app(sec_db)
     _app(sec_db)  # re-created app: must not raise "Duplicated timeseries"
+    install_metrics(sec_db).refresh_now()
     assert _sample("mcpr_analytics_tools_surfaced_total") == 6
     assert _sample("mcpr_analytics_tools_selected_total") == 3
     assert _sample("mcpr_analytics_tools_succeeded_total") == 1
@@ -281,6 +285,7 @@ def test_window_is_echoed(env: tuple[TestClient, World]) -> None:
 def test_install_on_the_real_app_factory(sec_db: sessionmaker[Session]) -> None:
     """The one-line integration (`install_analytics(app)` after create_app's
     session factory exists) works on the real app; admin-gated like the rest."""
+    from mcprouter.analytics.metrics import install_metrics
     from mcprouter.api.app import create_app
 
     app = create_app(Settings(database_url=TEST_DB_URL), env={"MCPR_ADMIN_TOKEN": ADMIN})
@@ -289,4 +294,34 @@ def test_install_on_the_real_app_factory(sec_db: sessionmaker[Session]) -> None:
         assert c.get("/api/v1/analytics/overview").status_code == 401
         r = c.get("/api/v1/analytics/overview?window=24h", headers=H_ADMIN)
         assert r.status_code == 200 and r.json()["routing"]["decisions"] == 0
+        install_metrics(app.state.session_factory).refresh_now()
         assert "mcpr_analytics_tools_surfaced_total" in c.get("/metrics/").text
+
+
+def test_collect_never_queries_the_db_on_the_calling_thread() -> None:
+    """prometheus_client's ASGI app collects ON THE EVENT LOOP; collect() must
+    only read the snapshot and hand the refresh to a background thread."""
+    import threading
+
+    from mcprouter.analytics.metrics import FunnelCollector
+
+    callers: list[int] = []
+    done = threading.Event()
+
+    class _Factory:
+        def __call__(self) -> Session:
+            callers.append(threading.get_ident())
+            done.set()
+            raise RuntimeError("db down")
+
+    col = FunnelCollector()
+    col.bind(_Factory())  # type: ignore[arg-type]
+    assert list(col.collect()) == []  # no snapshot yet, no blocking query
+    assert done.wait(5)
+    assert callers and threading.get_ident() not in callers
+
+
+def test_rollup_rejects_absurd_day(env: tuple[TestClient, World]) -> None:
+    c, _ = env
+    r = c.post("/api/v1/analytics/rollup", headers=H_ADMIN, json={"day": "0001-01-01", "days": 2})
+    assert r.status_code == 422

@@ -22,6 +22,7 @@ class WindowOut(Wire):
 class EconomyOut(Wire):
     served_decisions: int
     unscored_decisions: int
+    stale_ref_decisions: int
     no_match_decisions: int
     exposed_tokens: int
     catalog_tokens: int
@@ -182,7 +183,8 @@ class SuggestionsOut(Wire):
 
 class RollupIn(Wire):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
-    day: date | None = None  # newest day to recompute; default = newest eligible
+    # newest day to recompute; default = newest eligible
+    day: date | None = Field(default=None, ge=date(2000, 1, 1))
     days: int = Field(default=1, ge=1, le=90)
 
 

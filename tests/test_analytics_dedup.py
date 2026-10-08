@@ -57,3 +57,22 @@ def test_evidence_only_on_open_suggestions(db: sessionmaker[Session], world: Wor
         s.commit()
         page = list_suggestions(s, status="accepted")
     assert page.items[0].usage_evidence is None
+
+
+def test_evidence_failure_degrades_to_null(
+    db: sessionmaker[Session], world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    import mcprouter.dedup.review as review
+
+    def boom(*a: object, **k: object) -> object:
+        raise OperationalError("SELECT", {}, Exception("statement timeout"))
+
+    monkeypatch.setattr(review, "pair_evidence", boom)
+    a, b = sorted((world.A, world.B))
+    with db() as s:
+        s.add(DuplicateSuggestion(tool_a_id=a, tool_b_id=b, similarity=0.9, rationale="r"))
+        s.commit()
+        page = list_suggestions(s, status="open")
+    assert page.total == 1 and page.items[0].usage_evidence is None

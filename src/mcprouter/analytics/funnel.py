@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -58,8 +58,11 @@ att AS (
            bool_or(x.outcome = 'ok') AS any_ok,
            bool_or(x.outcome IN ('error', 'timeout')) AS any_fail
     FROM execution_records x
-    WHERE x.route_request_id IN (SELECT decision_id FROM surf)
-      AND x.tool_id IS NOT NULL
+    -- Attribution counts only when the executing agent OWNS the decision:
+    -- an id-shaped string naming another agent's decision is ignored.
+    JOIN (SELECT DISTINCT decision_id, agent_id FROM surf) own
+      ON own.decision_id = x.route_request_id AND own.agent_id = x.agent_id
+    WHERE x.tool_id IS NOT NULL
       AND x.outcome <> 'started'
     GROUP BY x.route_request_id, x.tool_id
 )"""
@@ -78,6 +81,7 @@ SELECT s.tool_id,
        coalesce(sum(s.rank), 0) AS sum_rank
 FROM surf s
 LEFT JOIN att a ON a.decision_id = s.decision_id AND a.tool_id = s.tool_id
+WHERE CAST(:only AS varchar[]) IS NULL OR s.tool_id = ANY(CAST(:only AS varchar[]))
 GROUP BY s.tool_id
 """
 )
@@ -88,7 +92,11 @@ _POSITION_SQL = text(
     + ","
     + ATT_CTE
     + """,
-acted AS (SELECT DISTINCT decision_id FROM att)
+acted AS (
+    SELECT DISTINCT s2.decision_id
+    FROM surf s2
+    JOIN att a2 ON a2.decision_id = s2.decision_id AND a2.tool_id = s2.tool_id
+)
 SELECT s.rank, count(*) AS shown, count(a.decision_id) AS selected
 FROM surf s
 JOIN acted ON acted.decision_id = s.decision_id
@@ -191,13 +199,14 @@ def live_funnel(
     tokens: dict[str, int],
     *,
     skip_days: Iterable[date] = (),
+    only: list[str] | None = None,
 ) -> dict[str, ToolCounts]:
     """Raw-table funnel over [start, end) excluding `skip_days` (UTC days).
     exposed_tokens = surfaced x the tool's CURRENT estimated tokens (0 for a
-    tool no longer in the catalog)."""
+    tool no longer in the catalog). `only` restricts the output tool ids."""
     out: dict[str, ToolCounts] = {}
     for tid, surfaced, selected, succeeded, failed, sum_rank in session.execute(
-        _FUNNEL_SQL, _params(start, end, skip_days)
+        _FUNNEL_SQL, _params(start, end, skip_days) | {"only": only}
     ).all():
         n = int(surfaced)
         out[tid] = ToolCounts(
@@ -217,6 +226,7 @@ def rolled_days(session: Session, start: datetime, now: datetime) -> list[date]:
     A day without rows is computed live — correct whether it had no traffic
     or was simply never rolled up (no marker table needed)."""
     horizon = live_horizon(now)
+    start = start.astimezone(UTC)
     first = start.date() if midnight(start.date()) >= start else start.date() + timedelta(days=1)
     if first >= horizon:
         return []
@@ -228,11 +238,16 @@ def rolled_days(session: Session, start: datetime, now: datetime) -> list[date]:
     )
 
 
-def rollup_funnel(session: Session, days: list[date]) -> dict[str, ToolCounts]:
+def rollup_funnel(
+    session: Session, days: list[date], only: list[str] | None = None
+) -> dict[str, ToolCounts]:
     out: dict[str, ToolCounts] = {}
     if not days:
         return out
-    for r in session.scalars(select(ToolStatsDaily).where(ToolStatsDaily.day.in_(days))).all():
+    q = select(ToolStatsDaily).where(ToolStatsDaily.day.in_(days))
+    if only is not None:
+        q = q.where(ToolStatsDaily.tool_id.in_(only))
+    for r in session.scalars(q).all():
         acc = out.setdefault(r.tool_id, ToolCounts())
         acc.add(
             ToolCounts(
@@ -248,13 +263,13 @@ def rollup_funnel(session: Session, days: list[date]) -> dict[str, ToolCounts]:
 
 
 def merged_funnel(
-    session: Session, window: Window, tokens: dict[str, int]
+    session: Session, window: Window, tokens: dict[str, int], only: list[str] | None = None
 ) -> dict[str, ToolCounts]:
     """Rollups for whole days older than the live horizon, raw for the rest."""
     days = rolled_days(session, window.start, window.end)
-    out = rollup_funnel(session, days)
+    out = rollup_funnel(session, days, only)
     for tid, counts in live_funnel(
-        session, window.start, window.end, tokens, skip_days=days
+        session, window.start, window.end, tokens, skip_days=days, only=only
     ).items():
         out.setdefault(tid, ToolCounts()).add(counts)
     return out

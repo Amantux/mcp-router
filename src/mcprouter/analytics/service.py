@@ -71,6 +71,7 @@ def _economy_out(e: Economy, *, per_agent: bool = False) -> EconomyOut:
     return EconomyOut(
         served_decisions=e.served_decisions,
         unscored_decisions=e.unscored_decisions,
+        stale_ref_decisions=e.stale_ref_decisions,
         no_match_decisions=e.no_match_decisions,
         exposed_tokens=e.exposed_tokens,
         catalog_tokens=e.catalog_tokens,

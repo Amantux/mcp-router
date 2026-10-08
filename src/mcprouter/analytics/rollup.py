@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics.funnel import live_funnel
@@ -27,6 +27,7 @@ from mcprouter.analytics.window import live_horizon, midnight
 from mcprouter.models import ToolStatsDaily
 
 MAX_DAYS_PER_RUN = 90
+ROLLUP_LOCK_KEY = 0x6D637072_726F6C6C  # "mcpr" "roll"; transaction-scoped advisory lock
 
 
 class RollupNotAllowed(ValueError):
@@ -73,6 +74,9 @@ def recompute_range(session: Session, last_day: date, days: int, now: datetime) 
         raise RollupNotAllowed(
             "day is inside the live window (last 48h); only older days are rolled up."
         )
+    # Serialize concurrent runs (cron + manual click): DELETE+INSERT under READ
+    # COMMITTED would otherwise race into the (tool_id, day) primary key.
+    session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": ROLLUP_LOCK_KEY})
     first = last_day - timedelta(days=days - 1)
     return [recompute_day(session, first + timedelta(days=i), now) for i in range(days)]
 

@@ -11,9 +11,11 @@ model has no resolution columns yet (see INTEGRATION_NOTES-registry.md).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics.funnel import merged_funnel, pair_evidence
@@ -32,6 +34,8 @@ from mcprouter.registry.wire import (
 STATUSES = ("open", "accepted", "dismissed")
 MAX_JUSTIFICATION = 2000
 EVIDENCE_WINDOW = "30d"
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,8 +84,17 @@ def _usage_evidence(
     if not rows:
         return {}
     window = parse_window(EVIDENCE_WINDOW, utcnow())
-    funnel = merged_funnel(session, window, {})
-    pairs = pair_evidence(session, window, [(r.tool_a_id, r.tool_b_id) for r in rows])
+    involved = sorted({r.tool_a_id for r in rows} | {r.tool_b_id for r in rows})
+    try:
+        # SAVEPOINT: evidence is optional decoration; an analytics failure
+        # (e.g. statement timeout) degrades to usageEvidence=null instead of
+        # failing the core review listing.
+        with session.begin_nested():
+            funnel = merged_funnel(session, window, {}, only=involved)
+            pairs = pair_evidence(session, window, [(r.tool_a_id, r.tool_b_id) for r in rows])
+    except SQLAlchemyError as exc:
+        log.warning("dedup.usage_evidence_failed exc_type=%s", type(exc).__name__)
+        return {}
     out: dict[str, SuggestionEvidence] = {}
     for r in rows:
         ev = pairs.get((r.tool_a_id, r.tool_b_id))

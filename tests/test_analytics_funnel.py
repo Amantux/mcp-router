@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.analytics import funnel as fn
@@ -295,3 +295,73 @@ def test_partial_first_day_is_computed_live(db: sessionmaker[Session], world: Wo
         w = fn.Window(start=start, end=NOW, label="custom")
         f = fn.merged_funnel(s, w, tool_token_map(s))
     assert f[world.B].surfaced == 2 + 1  # recent 2 + o2 only (o1 is before start)
+
+
+# ----------------------------------------------------------- review fixes
+def test_cross_agent_attribution_is_ignored(db: sessionmaker[Session], world: World) -> None:
+    """bob claims alice's decision id: no credit to the funnel or coverage."""
+    rid = add_decision(db, "alice", NOW - timedelta(minutes=7), [world.D])
+    add_exec(db, "bob", world.D, "ok", rid, NOW - timedelta(minutes=6))
+    with db() as s:
+        f = fn.merged_funnel(s, _w(), tool_token_map(s))
+        _, per = profiles(s, _w())
+    assert _counts(f[world.D]) == (1, 0, 0, 0, 1)
+    assert per["bob"].attempts == 1 and per["bob"].attributed == 0
+
+
+def test_deleting_a_server_does_not_inflate_savings(
+    db: sessionmaker[Session], world: World
+) -> None:
+    with db() as s:
+        before = economy_by_agent(s, _w(), tool_token_map(s))["alice"]
+        s.execute(delete(MCPServerRecord).where(MCPServerRecord.name == "shell"))  # drops C
+        s.commit()
+        tok = tool_token_map(s)
+        after = economy_by_agent(s, _w(), tok)["alice"]
+    assert before.stale_ref_decisions == 0 and before.served_decisions == 3
+    assert after.stale_ref_decisions == 1 and after.served_decisions == 2  # d4 surfaced C
+    # Only d1 + d2 ([A, B] each) are priced; d4 (surfaced the deleted C) is out.
+    assert after.exposed_tokens == 2 * (tok[world.A] + tok[world.B])
+    assert after.catalog_tokens == 2 * (after.catalog_tokens_per_decision or 0)
+    assert after.savings is not None and after.savings < 1.0
+
+
+def test_position_curve_ignores_off_funnel_only_decisions(
+    db: sessionmaker[Session], world: World
+) -> None:
+    with db() as s:
+        base = fn.position_curve(s, _w())
+    rid = add_decision(db, "alice", NOW - timedelta(minutes=8), [world.B])
+    add_exec(db, "alice", world.D, "ok", rid, NOW - timedelta(minutes=7))  # D not surfaced
+    with db() as s:
+        assert fn.position_curve(s, _w()) == base
+
+
+def test_concurrent_rollups_serialize(db: sessionmaker[Session], world: World) -> None:
+    """Two overlapping runs for the same day: the advisory lock makes the
+    second wait for the first instead of hitting the primary key."""
+    import threading
+
+    _, day = _old_world(db, world)
+    errors: list[BaseException] = []
+    s1 = db()
+    recompute_range(s1, day, 1, NOW)  # holds the lock, uncommitted
+
+    def second() -> None:
+        try:
+            with db() as s2:
+                recompute_range(s2, day, 1, NOW)
+                s2.commit()
+        except BaseException as exc:  # noqa: BLE001 — surfaced via the list
+            errors.append(exc)
+
+    t = threading.Thread(target=second)
+    t.start()
+    t.join(0.5)
+    assert t.is_alive()  # blocked on the lock
+    s1.commit()
+    s1.close()
+    t.join(10)
+    assert not t.is_alive() and errors == []
+    with db() as s:
+        assert len(_rows(s)) == 2
