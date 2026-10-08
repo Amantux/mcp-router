@@ -152,12 +152,11 @@ def create_app(
 
     # Routing: policy-backed scope (ONE policy implementation) + model deadline.
     scope_resolver = policy_scope_resolver(factory, security)
-    pipeline = RoutePipeline(
-        factory,
-        HybridRetriever(factory, embedder),
-        DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s),
-        settings,
-    )
+    # ONE deadline model per app: its in-flight cap bounds the worker threads a
+    # wedged backend can strand, across routing AND the decision edge.
+    decision_model = DeadlineDecisionModel.for_engine(inference, settings.decision_timeout_s)
+    app.state.decision_model = decision_model
+    pipeline = RoutePipeline(factory, HybridRetriever(factory, embedder), decision_model, settings)
     install_routing(app, pipeline, scope_resolver=scope_resolver)
 
     def route_fn(request: RouteRequest) -> RouteResult:

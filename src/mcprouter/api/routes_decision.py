@@ -81,9 +81,9 @@ def systemone(
     engine = getattr(request.app.state, "inference_engine", None)
     if engine is None:
         raise HTTPException(503, "inference engine is not configured")
-    model = DeadlineDecisionModel.for_engine(engine, settings.decision_timeout_s)
+    model: DeadlineDecisionModel = request.app.state.decision_model
     try:
-        answers = serve.answer(model, body.state, parsed)
+        answers = serve.answer(model, body.state, parsed, deadline_s=settings.decision_timeout_s)
     except InferenceError as exc:
         log.warning("decision edge failed: %s", type(exc).__name__)
         raise HTTPException(503, "decision backend unavailable; retry later") from None

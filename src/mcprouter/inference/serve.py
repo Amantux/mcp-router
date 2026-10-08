@@ -8,9 +8,10 @@ questions sharing a scale go through one ``score_batch`` call.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
-from mcprouter.inference.adapters import DeadlineDecisionModel
+from mcprouter.inference.adapters import REQUEST_DEADLINE, DeadlineDecisionModel
 
 MAX_STATE_CHARS = 32_768
 MAX_QUESTIONS = 32
@@ -58,6 +59,21 @@ def parse_questions(questions: dict[str, Any]) -> dict[str, tuple[str, str, list
 
 
 def answer(
+    model: DeadlineDecisionModel,
+    state: str,
+    parsed: dict[str, tuple[str, str, list[str]]],
+    *,
+    deadline_s: float | None = None,
+) -> dict[str, Any]:
+    """Answer every question under ONE request deadline (`deadline_s`, if given)."""
+    token = REQUEST_DEADLINE.set(None if deadline_s is None else time.monotonic() + deadline_s)
+    try:
+        return _answer(model, state, parsed)
+    finally:
+        REQUEST_DEADLINE.reset(token)
+
+
+def _answer(
     model: DeadlineDecisionModel, state: str, parsed: dict[str, tuple[str, str, list[str]]]
 ) -> dict[str, Any]:
     answers: dict[str, Any] = {}
