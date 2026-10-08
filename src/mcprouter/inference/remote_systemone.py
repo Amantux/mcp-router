@@ -45,6 +45,7 @@ MAX_JSON_DEPTH = 20
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_BASE_S = 0.25
 _MAX_RETRY_SLEEP_S = 5.0  # a longer Retry-After is not waited out: we fail fast
+_FOREIGN_MASS_TOLERANCE = 1e-6
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 
 
@@ -112,6 +113,14 @@ def _normalize(ps: list[float]) -> list[float]:
     return [p / total for p in ps]
 
 
+def _refuse_foreign_mass(raw: dict[Any, Any], allowed: set[str]) -> None:
+    """Mass on keys we did not offer must not be silently dropped
+    (renormalizing would turn a 2% answer into a 50% one)."""
+    foreign = sum(_prob(v) for k, v in raw.items() if k not in allowed)
+    if foreign > _FOREIGN_MASS_TOLERANCE:
+        raise RemoteResponseError("remote decision response puts probability on unknown options")
+
+
 class RemoteSystemOneModel:
     """DecisionModel + BatchScoringDecisionModel over the remote HTTP API."""
 
@@ -125,6 +134,7 @@ class RemoteSystemOneModel:
         max_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._endpoint = resolve_endpoint(endpoint)
         self.__api_key = api_key
@@ -132,6 +142,8 @@ class RemoteSystemOneModel:
         self.name = f"remote:{model}"
         self._max_retries = max(0, max_retries)
         self._sleep = sleep
+        self._clock = clock
+        self._timeout_s = timeout_s
         self._client = httpx.Client(
             timeout=timeout_s, transport=transport, follow_redirects=False, trust_env=False
         )
@@ -150,6 +162,7 @@ class RemoteSystemOneModel:
         raw = a.get("probabilities")
         if not isinstance(picked, str) or not isinstance(raw, dict):
             raise RemoteResponseError("remote decision response has a malformed choice answer")
+        _refuse_foreign_mass(raw, set(options))
         ps = _normalize([_prob(raw.get(o, 0.0)) for o in options])
         return ChoiceResult(option=picked, probabilities=dict(zip(options, ps, strict=True)))
 
@@ -181,6 +194,7 @@ class RemoteSystemOneModel:
         raw = a.get("probabilities")
         if not isinstance(raw, dict):
             raise RemoteResponseError("remote decision response has a malformed score answer")
+        _refuse_foreign_mass(raw, {str(i) for i in range(n)})
         ps = _normalize([_prob(raw.get(str(i), 0.0)) for i in range(n)])
         level = max(range(n), key=lambda i: ps[i])  # first index wins a tie
         return ScoreResult(level=level, probabilities=ps)
@@ -200,44 +214,75 @@ class RemoteSystemOneModel:
         return out
 
     def _post(self, body: dict[str, Any]) -> Any:
+        """One logical call under a TOTAL deadline of ``timeout_s`` covering
+        every attempt and retry sleep. Each attempt gets the remaining budget
+        as its httpx timeout; the body read re-checks the deadline per chunk.
+
+        Errors are raised OUTSIDE any ``except httpx...`` block, so no raised
+        exception carries an httpx exception (whose ``.request.headers`` holds
+        the Bearer key) as ``__context__``/``__cause__``."""
         url = validate_outbound_url(self._endpoint)  # point of use, every call
         if not self.__api_key:
             raise RemoteAuthError("remote decision backend has no API key configured")
-        headers = {"Authorization": f"Bearer {self.__api_key}", "Accept": "application/json"}
+        deadline = self._clock() + self._timeout_s
         payload = json.dumps(body).encode()
-        for attempt in range(self._max_retries + 1):
-            try:
-                with self._client.stream("POST", url, content=payload, headers=headers) as resp:
-                    status = resp.status_code
-                    rid = resp.headers.get("x-request-id", "")
-                    rid = rid if _REQUEST_ID_RE.fullmatch(rid) else "-"
-                    if status == 200:
-                        raw = self._read_capped(resp)
-                        break
-                    log.warning("remote decision call failed: status=%d request_id=%s", status, rid)
-                    retry_after = resp.headers.get("retry-after", "")
-            except httpx.TimeoutException:
-                raise RemoteTimeoutError("remote decision call timed out") from None
-            except httpx.HTTPError:
-                raise RemoteDecisionError("remote decision service is unreachable") from None
+        attempt = 0
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                raise RemoteTimeoutError("remote decision call timed out")
+            outcome = self._attempt(url, payload, remaining, deadline)
+            if isinstance(outcome, bytes):
+                raw = outcome
+                break
+            status, retry_after = outcome
             if status in (401, 403):
                 raise RemoteAuthError("remote decision service rejected the credentials")
             if status not in _RETRY_STATUSES:
                 raise RemoteDecisionError(f"remote decision service returned HTTP {status}")
             delay = self._retry_delay(attempt, retry_after)
-            if attempt == self._max_retries or delay is None:
+            if attempt >= self._max_retries or delay is None:
                 raise RemoteRateLimitedError(
                     f"remote decision service unavailable (HTTP {status}) after retries"
                 )
+            if self._clock() + delay > deadline:
+                raise RemoteTimeoutError("remote decision call timed out")
             self._sleep(delay)
+            attempt += 1
         _check_depth(raw)
         try:
             return json.loads(raw)
         except (ValueError, RecursionError):
             raise RemoteResponseError("remote decision response is not valid JSON") from None
 
-    @staticmethod
-    def _read_capped(resp: httpx.Response) -> bytes:
+    def _attempt(
+        self, url: str, payload: bytes, remaining: float, deadline: float
+    ) -> bytes | tuple[int, str]:
+        """One HTTP attempt: the 200 body, or (status, retry-after) to classify.
+        An httpx failure only sets a flag inside ``except``; the curated error
+        is raised after the block, so nothing chains the httpx exception."""
+        headers = {"Authorization": f"Bearer {self.__api_key}", "Accept": "application/json"}
+        failure = ""
+        try:
+            with self._client.stream(
+                "POST", url, content=payload, headers=headers, timeout=remaining
+            ) as resp:
+                status = resp.status_code
+                rid = resp.headers.get("x-request-id", "")
+                rid = rid if _REQUEST_ID_RE.fullmatch(rid) else "-"
+                if status == 200:
+                    return self._read_capped(resp, deadline)
+                log.warning("remote decision call failed: status=%d request_id=%s", status, rid)
+                return status, resp.headers.get("retry-after", "")
+        except httpx.TimeoutException:
+            failure = "timeout"
+        except httpx.HTTPError:
+            failure = "unreachable"
+        if failure == "timeout":
+            raise RemoteTimeoutError("remote decision call timed out")
+        raise RemoteDecisionError("remote decision service is unreachable")
+
+    def _read_capped(self, resp: httpx.Response, deadline: float) -> bytes:
         declared = resp.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
             raise RemoteResponseError("remote decision response is too large")
@@ -246,16 +291,20 @@ class RemoteSystemOneModel:
             buf += chunk
             if len(buf) > MAX_RESPONSE_BYTES:
                 raise RemoteResponseError("remote decision response is too large")
+            if self._clock() > deadline:
+                raise RemoteTimeoutError("remote decision call timed out")
         return bytes(buf)
 
     @staticmethod
     def _retry_delay(attempt: int, retry_after: str) -> float | None:
         """Jittered exponential backoff; Retry-After (seconds) honored as a floor.
-        None = the server asked us to wait longer than we are willing to."""
+        The jittered delay is capped at _MAX_RETRY_SLEEP_S. None = the server
+        asked us to wait longer than we are willing to."""
         delay = _BACKOFF_BASE_S * (2**attempt)
         ra = retry_after.strip()
         if ra.isdigit():
             delay = max(delay, float(ra))
         if delay > _MAX_RETRY_SLEEP_S:
             return None
-        return float(delay + random.uniform(0, delay / 2))  # noqa: S311 - jitter, not crypto
+        jittered = delay + random.uniform(0, delay / 2)  # noqa: S311 - jitter, not crypto
+        return float(min(_MAX_RETRY_SLEEP_S, jittered))

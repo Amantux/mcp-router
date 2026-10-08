@@ -237,7 +237,7 @@ def test_timeout_is_typed_and_falls_back() -> None:
     with pytest.raises(RemoteTimeoutError) as ei:
         m.noul("s", "q")
     assert isinstance(ei.value, DecisionRuntimeError) and sleeps == []
-    assert ei.value.__cause__ is None and ei.value.__suppress_context__
+    assert_no_key_in_chain(ei.value)
 
 
 def test_malformed_json_is_typed() -> None:
@@ -378,3 +378,193 @@ def test_oversized_streamed_body_without_content_length_refused() -> None:
     m, _ = make(h)
     with pytest.raises(RemoteResponseError, match="too large"):
         m.noul("s", "q")
+
+
+# ------------------------------------------------- wave-3 review fixes
+def _chain(exc: BaseException) -> list[BaseException]:
+    seen: list[BaseException] = []
+    todo: list[BaseException | None] = [exc]
+    while todo:
+        e = todo.pop()
+        if e is None or any(e is x for x in seen):
+            continue
+        seen.append(e)
+        todo += [e.__cause__, e.__context__]
+    return seen
+
+
+def assert_no_key_in_chain(exc: BaseException) -> None:
+    """R1: no exception reachable via __cause__/__context__ may expose the key
+    (repr/str/args/attributes, including an httpx ``.request.headers``)."""
+    for e in _chain(exc):
+        assert not isinstance(e, httpx.HTTPError), f"httpx error chained: {type(e)}"
+        blob = repr(e) + str(e) + repr(e.args) + repr(vars(e))
+        req = getattr(e, "_request", None) or getattr(e, "request", None)
+        if isinstance(req, httpx.Request):
+            blob += repr(dict(req.headers))
+        assert KEY not in blob
+
+
+@pytest.mark.parametrize(
+    "exc", [httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError]
+)
+def test_transport_errors_do_not_chain_the_key(exc: type[httpx.HTTPError]) -> None:
+    def h(r: httpx.Request) -> httpx.Response:
+        raise exc("boom", request=r)
+
+    m, _ = make(h)
+    with pytest.raises(RemoteDecisionError) as ei:
+        m.noul("s", "q")
+    assert_no_key_in_chain(ei.value)
+
+
+def test_status_errors_do_not_chain_the_key() -> None:
+    for status in (401, 418, 503):
+        m, _ = make(lambda r, s=status: httpx.Response(s), max_retries=0)
+        with pytest.raises(RemoteDecisionError) as ei:
+            m.noul("s", "q")
+        assert_no_key_in_chain(ei.value)
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.t = 100.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_retry_sleep_past_deadline_is_refused() -> None:
+    clock = _FakeClock()
+    m = RemoteSystemOneModel(
+        endpoint=EP,
+        api_key=KEY,
+        timeout_s=1.0,
+        max_retries=5,
+        clock=clock,
+        transport=httpx.MockTransport(lambda r: httpx.Response(503, headers={"retry-after": "2"})),
+        sleep=lambda d: setattr(clock, "t", clock.t + d),
+    )
+    with pytest.raises(RemoteTimeoutError):
+        m.noul("s", "q")
+    assert clock.t <= 101.0
+
+
+def test_slow_drip_body_hits_total_deadline() -> None:
+    clock = _FakeClock()
+
+    class Drip(httpx.SyncByteStream):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            for _ in range(100):
+                clock.t += 0.1  # each chunk arrives 0.1s later; per-chunk timeout never fires
+                yield b" "
+
+    m = RemoteSystemOneModel(
+        endpoint=EP,
+        api_key=KEY,
+        timeout_s=1.0,
+        clock=clock,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=Drip())),
+    )
+    with pytest.raises(RemoteTimeoutError):
+        m.noul("s", "q")
+    assert clock.t <= 101.0 + 0.1 + 1e-9
+
+
+def test_slow_drip_real_time_budget() -> None:
+    import time as _t
+
+    class Drip(httpx.SyncByteStream):
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            for _ in range(40):
+                _t.sleep(0.05)
+                yield b" "
+
+    m = RemoteSystemOneModel(
+        endpoint=EP,
+        api_key=KEY,
+        timeout_s=0.3,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=Drip())),
+    )
+    t0 = _t.monotonic()
+    with pytest.raises(RemoteTimeoutError):
+        m.noul("s", "q")
+    assert _t.monotonic() - t0 <= 0.3 + 0.15
+
+
+def test_unknown_option_mass_refused() -> None:
+    m, _ = make(
+        lambda r: answers(
+            q0={
+                "type": "choice",
+                "choice": "a",
+                "probabilities": {"a": 0.01, "b": 0.01, "EVIL": 0.98},
+            }
+        )
+    )
+    with pytest.raises(RemoteResponseError, match="unknown options"):
+        m.choice("s", "q", ["a", "b"])
+
+
+def test_unknown_level_mass_refused() -> None:
+    m, _ = make(lambda r: answers(q0={"type": "score", "probabilities": {"0": 0.1, "9": 0.9}}))
+    with pytest.raises(RemoteResponseError, match="unknown options"):
+        m.score("s", "q", ["lo", "hi"])
+
+
+def test_jitter_never_exceeds_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    import mcprouter.inference.remote_systemone as rs
+
+    monkeypatch.setattr(rs.random, "uniform", lambda a, b: b)  # worst-case jitter
+    for attempt in range(4):
+        d = RemoteSystemOneModel._retry_delay(attempt, "5")
+        assert d is not None and d <= 5.0
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://exa\x00mple.com/v1",
+        "https://xn--a.example/v1",  # IDNA-invalid A-label
+        "https://[::1/v1",
+        "https://a..b-⒈.com/v1",
+    ],
+)
+def test_malformed_hosts_are_curated(url: str) -> None:
+    with pytest.raises(InvalidEndpointError) as ei:
+        validate_outbound_url(url)
+    msg = str(ei.value)
+    assert "example" not in msg and "::1" not in msg and "⒈" not in msg
+    assert (
+        ei.value.__context__ is None
+        or not isinstance(ei.value.__context__, Exception)
+        or (ei.value.__suppress_context__)
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://169.254.169.254/latest",
+        "http://169.254.0.1/",
+        "https://[fe80::1]/x",
+        "https://100.100.100.200/x",
+        "https://[fd00:ec2::254]/x",
+    ],
+)
+def test_link_local_and_metadata_literals_refused(url: str) -> None:
+    with pytest.raises(InvalidEndpointError, match="link-local or metadata"):
+        validate_outbound_url(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://192.168.1.10/v1",
+        "https://10.0.0.2/v1",
+        "https://[fd12::1]/v1",
+        "https://edge.lan/v1",
+    ],
+)
+def test_private_lan_remote_allowed(url: str) -> None:
+    assert validate_outbound_url(url) == url
