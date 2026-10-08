@@ -260,3 +260,52 @@ async def test_gateway_exposure_excludes_offline_servers(world: dict[str, Any]) 
     world["route"].picks = ["files.read_file", "github.list_issues"]
     await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
     assert await _names(gw, cat, "alice") == ["github.list_issues", META_TOOL]  # routed list
+
+
+# ------------------------------------------- analytics seam (route_request_id)
+def test_accepts_kwarg_feature_detect() -> None:
+    from mcprouter.gateway.server import _accepts_kwarg
+
+    def old(principal: object, tool: object, arguments: object) -> None: ...
+    def new(
+        principal: object, tool: object, arguments: object, *, route_request_id: str | None = None
+    ) -> None: ...
+    def loose(principal: object, **kw: object) -> None: ...
+
+    assert _accepts_kwarg(old, "route_request_id") is False
+    assert _accepts_kwarg(new, "route_request_id") is True
+    assert _accepts_kwarg(loose, "route_request_id") is True
+
+
+@requires_db
+async def test_gateway_passes_last_route_request_id_when_supported(world: dict[str, Any]) -> None:  # noqa: F811
+    import mcp_types as types
+
+    from mcprouter.execution.manager import ExecutionManager, ExecutionResult
+    from mcprouter.execution.ratelimit import SlidingWindowLimiter
+    from mcprouter.gateway.server import ROUTE_REQUEST_ID_KWARG, _accepts_kwarg
+
+    from .test_gateway_mcp import _ctx
+
+    gw, cat, db, route = world["gw"], world["cat"], world["db"], world["route"]
+    add_rule(db, "alice", max_operation="read")
+    seen: list[str | None] = []
+
+    class Recording(ExecutionManager):
+        async def execute(  # type: ignore[override]
+            self, principal: Any, tool: Any, arguments: Any, *, route_request_id: str | None = None
+        ) -> ExecutionResult:
+            seen.append(route_request_id)
+            return await super().execute(principal, tool, arguments)
+
+    base = gw._manager
+    rec = Recording(db, base._invoker, timeout_s=2.0, limiter=SlidingWindowLimiter(1000))
+    gw._manager = rec
+    gw._manager_takes_route_id = _accepts_kwarg(rec.execute, ROUTE_REQUEST_ID_KWARG)
+    params = types.CallToolRequestParams(name="github.list_issues", arguments={})
+    await gw._on_call_tool(_ctx(gw, cat, "alice"), params)
+    assert seen == [None]  # no route yet -> no kwarg passed
+    result = route(RouteRequest("q", "alice", 8))
+    await gw.apply_route("alice", result)
+    await gw._on_call_tool(_ctx(gw, cat, "alice"), params)
+    assert seen[-1] == result.request_id
