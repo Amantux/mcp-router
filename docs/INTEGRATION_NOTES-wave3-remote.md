@@ -26,9 +26,9 @@ Deltas from the earlier brief:
 | `MCPR_DECISION_BACKEND` | `deterministic` | new value `remote` |
 | `MCPR_DECISION_ENDPOINT` | `https://api.aimlapi.com/v1/decisions` | full URL; with no path (or `/`), `/v1/decisions` is appended (`resolve_endpoint`) |
 | `MCPR_DECISION_MODEL` | `typesafe/jev` | backend name is `remote:<model>` |
-| `MCPR_DECISION_API_KEY_FILE` | unset | **wins** over `MCPR_DECISION_API_KEY`; trailing CR/LF stripped; unreadable file fails startup |
+| `MCPR_DECISION_API_KEY_FILE` | unset | **wins** over `MCPR_DECISION_API_KEY`; surrounding whitespace stripped; an unreadable, non-UTF-8 or >64 KiB file fails startup |
 | `MCPR_DECISION_API_KEY` | unset | `repr=False` on the Settings field |
-| `MCPR_DECISION_MAX_RETRIES` | `2` | must be >= 0; applies only to 429/5xx |
+| `MCPR_DECISION_MAX_RETRIES` | `2` | must be in [0, 10]; applies only to 429/5xx |
 
 An empty string counts as unset, the same as for every other setting. The per-attempt
 timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
@@ -50,14 +50,32 @@ timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
 
 - `urlcheck.validate_outbound_url` runs on **every request** (point of use). It requires https,
   allows http only to localhost/127.0.0.1/::1, and rejects userinfo, whitespace, fragments, and URLs with no host.
+  The URL is parsed with `httpx.URL`, so NUL/control bytes, IDNA-invalid hosts and an unbalanced `[::1` are
+  refused with a curated message that never echoes the host.
+- **Network posture (owner decision).** Link-local and metadata IP literals are always refused, for any
+  scheme: `169.254.0.0/16`, `fe80::/10`, `100.100.100.200`, `fd00:ec2::254` (IPv4-mapped forms too).
+  RFC 1918 / ULA private ranges are **allowed**, because a LAN edge router is the intended remote.
+  DNS names are **not resolved** at validation time. Residual risk: a DNS name that resolves to a
+  link-local or metadata address is not caught here.
 - Retries happen only on 429/500/502/503/504. The backoff is jittered exponential (0.25s·2^n) with
-  Retry-After (seconds) as a floor. A wait longer than 5s fails fast instead of being slept through. Other 4xx
-  responses are never retried, and 401/403 raise `RemoteAuthError`. Timeouts are not retried, which keeps the call
-  inside the decision deadline.
+  Retry-After (seconds) as a floor. The jittered sleep is capped at 5s, and a Retry-After over 5s fails fast.
+  Other 4xx responses are never retried, and 401/403 raise `RemoteAuthError`. Timeouts are not retried.
+- **Deadline semantics.** `timeout_s` (`MCPR_DECISION_TIMEOUT_S`) is a **total** budget for one logical call:
+  `deadline = monotonic() + timeout_s` is fixed at the start. Each attempt gets the remaining budget as its
+  httpx timeout. A retry whose planned sleep would end past the deadline is refused, and the deadline is
+  re-checked after every response-body chunk. Any overrun raises `RemoteTimeoutError`.
+  Bound: httpx applies the read timeout per read and fixes it when the attempt starts, so one stalled read
+  that straddles the deadline can overrun by up to that attempt's remaining budget. The worst case is under
+  2×`timeout_s`. A drip-feeding server is cut off within one chunk interval of the deadline.
+- A probability on a key we did not offer (a choice option or score level) that totals more than 1e-6 is
+  refused with `RemoteResponseError`. It is not dropped and renormalized away.
 - Response bodies over 1 MiB are refused (both a Content-Length pre-check and a streamed cap), as is
   JSON nesting deeper than 20 (a pre-scan before `json.loads`).
 - Every error is a `RemoteDecisionError(DecisionRuntimeError)` subclass with a curated
-  message, raised `from None` so the httpx exception (and its request headers) isn't chained.
+  message. Transport errors are mapped to a flag inside the `except httpx...` block, and the curated error
+  is raised **after** that block. As a result, the raised exception has neither `__cause__` nor `__context__`
+  pointing at the httpx exception, whose `.request.headers` holds the Bearer key. A `raise ... from None`
+  inside the except block would only hide the context and would still keep it reachable. Tests walk the full chain.
   Upstream bodies are never read into messages. Logs record only the status and a sanitized `x-request-id`.
 - The key lives in a name-mangled attribute, `__repr__` omits it, and redirects are
   not followed. `trust_env=False` means env proxies and netrc are ignored.
@@ -68,7 +86,7 @@ timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
 from mcprouter.inference.remote_systemone import RemoteSystemOneModel, resolve_endpoint
 m = RemoteSystemOneModel(endpoint=s.decision_endpoint, api_key=s.decision_api_key,
                          model=s.decision_model, timeout_s=s.decision_timeout_s,
-                         max_retries=s.decision_max_retries)   # + transport=, sleep= for tests
+                         max_retries=s.decision_max_retries)   # + transport=, sleep=, clock= for tests
 ValidatedDecisionModel(m)   # always wrap
 from mcprouter.inference.urlcheck import validate_outbound_url, InvalidEndpointError
 ```
