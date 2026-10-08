@@ -12,6 +12,13 @@ One real process stack, no fakes on the request path:
      ExecutionManager -> ConnectorToolInvoker -> Connector; audit row written
   -> a server-2 tool and a server-1 write tool are refused AND audited
   -> management API without the admin token is refused.
+
+Wave 2 (integration) extends the story with the efficiency loop: the MCP
+tools/call is attributed to agent1's live route (the gateway seam), the
+analytics overview/tools show the selection, REST execute works as the agent
+(attributed) and as an admin impersonating it (audited, never attributed,
+never wider), a /route/simulate is recorded but invisible to analytics, and a
+route-cache hit counts as real traffic.
 """
 
 from __future__ import annotations
@@ -215,3 +222,107 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         outcomes = sorted(i["outcome"] for i in r.json()["items"])
         assert outcomes == ["denied", "denied", "ok"], outcomes
         assert (await http.get("/api/v1/executions", headers=AGENT_H)).status_code == 401
+
+    # =================== wave 2: the efficiency loop lights up ===================
+    # The gateway passed the agent's live route request_id on tools/call (the
+    # cross-branch seam, feature-detected in GatewayServer) — verified on the
+    # real audit row, not assumed.
+    rid = routed["request_id"]
+    search_id = _tool_id(db, ids[server1], "search_issues")
+    with db() as s:
+        attributed = s.scalars(
+            select(ExecutionRecord.route_request_id).where(
+                ExecutionRecord.agent_id == "agent1", ExecutionRecord.tool_id == search_id
+            )
+        ).all()
+    assert attributed == [rid], attributed
+
+    async with httpx.AsyncClient(base_url=BASE, timeout=30) as http:
+        overview = (await http.get("/api/v1/analytics/overview", headers=ADMIN_H)).json()
+        assert overview["executions"]["attributionCoverage"] > 0, overview["executions"]
+        assert overview["funnel"]["surfaced"] >= len(routed["tools"])
+        assert overview["funnel"]["selected"] >= 1 and overview["funnel"]["succeeded"] >= 1
+        assert overview["routing"]["decisions"] >= 1
+        tools = (await http.get("/api/v1/analytics/tools", headers=ADMIN_H)).json()["items"]
+        row = next(t for t in tools if t["toolId"] == search_id)
+        assert row["selected"] >= 1 and row["surfaced"] >= 1 and row["toolName"] == "search_issues"
+
+        # -- REST execute (playground) as agent1, attributed -------------------
+        r = await http.post(
+            f"/api/v1/tools/{search_id}/execute",
+            json={"arguments": {"query": "login bug"}, "routeRequestId": rid},
+            headers=AGENT_H,
+        )
+        assert r.status_code == 200, r.text
+        rest = r.json()
+        assert rest["status"] == "ok" and rest["result"]["isError"] is False, rest
+        assert json.loads(rest["result"]["content"][0]["text"])["tool"] == "search_issues"
+        assert isinstance(rest["latencyMs"], float)
+
+        # -- the same endpoint, admin impersonating agent1 ---------------------
+        assert (
+            await http.post(
+                f"/api/v1/tools/{search_id}/execute",
+                json={"arguments": {"query": "login bug"}},
+                headers=ADMIN_H,
+            )
+        ).status_code == 400
+        r = await http.post(
+            f"/api/v1/tools/{search_id}/execute",
+            params={"agentId": "agent1"},
+            json={"arguments": {"query": "login bug"}},
+            headers=ADMIN_H,
+        )
+        assert r.status_code == 200 and r.json()["status"] == "ok", r.text
+        imp = r.json()
+        # ... and impersonation never widens: a server-2 tool stays denied.
+        r = await http.post(
+            f"/api/v1/tools/{_tool_id(db, ids[server2], 'list_pipelines')}/execute",
+            params={"agentId": "agent1"},
+            json={"arguments": {"project": "web"}},
+            headers=ADMIN_H,
+        )
+        assert r.status_code == 200 and r.json()["status"] == "denied", r.text
+
+        execs = (
+            await http.get("/api/v1/executions", params={"agentId": "agent1"}, headers=ADMIN_H)
+        ).json()["items"]
+        by_id = {e["id"]: e for e in execs}
+        assert by_id[rest["recordId"]]["routeRequestId"] == rid  # attributed
+        assert by_id[imp["recordId"]]["routeRequestId"] is None  # never attributed
+        assert by_id[imp["recordId"]]["detail"].startswith(
+            "[admin-initiated via REST, impersonating 'agent1']"
+        )
+
+        # -- a simulation is recorded but INVISIBLE to analytics ---------------
+        before = (await http.get("/api/v1/analytics/overview", headers=ADMIN_H)).json()
+        agents_before = (await http.get("/api/v1/analytics/agents", headers=ADMIN_H)).json()
+        r = await http.post(
+            "/api/v1/route/simulate",
+            json={"agentId": "agent1", "query": "search issues about the login bug"},
+            headers=ADMIN_H,
+        )
+        assert r.status_code == 200, r.text
+        sim = r.json()
+        assert sim["simulated"] is True and sim["tools"]
+        with db() as s:
+            from mcprouter.models import RoutingDecisionRecord
+
+            sim_row = s.get(RoutingDecisionRecord, sim["requestId"])
+            assert sim_row is not None and sim_row.model_version.startswith("simulated/")
+        after = (await http.get("/api/v1/analytics/overview", headers=ADMIN_H)).json()
+        agents_after = (await http.get("/api/v1/analytics/agents", headers=ADMIN_H)).json()
+        for key in ("funnel", "routing", "contextEconomy", "positionCurve"):
+            assert after[key] == before[key], key
+        assert agents_after["items"] == agents_before["items"]
+
+        # -- a cache hit IS real traffic ---------------------------------------
+        r = await http.post(
+            "/api/v1/route",
+            json={"query": "search issues about the login bug", "maxTools": 5},
+            headers=AGENT_H,
+        )
+        assert r.status_code == 200 and r.json()["cached"] is True, r.text
+        cached = (await http.get("/api/v1/analytics/overview", headers=ADMIN_H)).json()
+        assert cached["routing"]["decisions"] == before["routing"]["decisions"] + 1
+        assert cached["funnel"]["surfaced"] == before["funnel"]["surfaced"] + len(r.json()["tools"])
