@@ -109,7 +109,12 @@ def test_resolve_device_on_cpu_box() -> None:
     assert resolve_device("cpu") == ("cpu", None)
     assert resolve_device("auto") == ("cpu", None)
     dev, note = resolve_device("cuda")
-    assert dev == "cpu" and note == "cuda requested but unavailable; using cpu"
+    # Which curated note depends on whether the optional [inference] extra
+    # (torch) is installed; CI runs the zero-ML path without it.
+    assert dev == "cpu" and note in (
+        "cuda requested but unavailable; using cpu",
+        "cuda requested but torch is not installed",
+    )
 
 
 def test_resolve_device_prefers_cuda_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
