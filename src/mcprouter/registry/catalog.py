@@ -129,7 +129,7 @@ def _load(session: Session, tool_id: str) -> MCPToolRecord:
     return tool
 
 
-def _server_name(session: Session, server_id: str) -> str:
+def server_name_of(session: Session, server_id: str) -> str:
     return session.execute(
         select(MCPServerRecord.name).where(MCPServerRecord.id == server_id)
     ).scalar_one()
@@ -145,7 +145,7 @@ def get_tool_detail(session: Session, tool_id: str) -> ToolDetail:
         )
     )
     return ToolDetail(
-        tool=tool, server_name=_server_name(session, tool.server_id), versions=versions
+        tool=tool, server_name=server_name_of(session, tool.server_id), versions=versions
     )
 
 

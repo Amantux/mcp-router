@@ -55,8 +55,15 @@ def list_suggestions(
             .offset(offset)
         )
     )
+    refs = _tool_refs(session, rows)
+    return SuggestionPage(
+        items=[suggestion_out(r, refs) for r in rows], total=int(total), limit=limit, offset=offset
+    )
+
+
+def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, SuggestionToolRef]:
     tool_ids = {r.tool_a_id for r in rows} | {r.tool_b_id for r in rows}
-    refs = {
+    return {
         tid: SuggestionToolRef(id=tid, name=name, server_name=srv, enabled=enabled)
         for tid, name, srv, enabled in session.execute(
             select(
@@ -66,9 +73,10 @@ def list_suggestions(
             .where(MCPToolRecord.id.in_(tool_ids))
         ).all()
     }
-    return SuggestionPage(
-        items=[suggestion_out(r, refs) for r in rows], total=int(total), limit=limit, offset=offset
-    )
+
+
+def to_out(session: Session, sug: DuplicateSuggestion) -> SuggestionOut:
+    return suggestion_out(sug, _tool_refs(session, [sug]))
 
 
 def _load_open(session: Session, suggestion_id: str) -> DuplicateSuggestion:
