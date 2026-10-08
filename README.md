@@ -45,6 +45,17 @@ and key. See [Backends](#backends).
 Target hardware: a single laptop GPU (RTX 4060 Laptop, 8GB) with full CPU
 fallback. Runs entirely offline; no external inference services.
 
+## Backends
+
+The decision model is pluggable via `MCPR_DECISION_BACKEND`:
+
+- `laya` (default) — local model, GPU if available.
+- `deterministic` — no model; also the automatic fallback on any backend error.
+- `remote` — hosted Jev (AIML API) or **another MCP Router's** `POST /api/v1/decision/systemone` edge endpoint.
+- `aoai` — Azure OpenAI v1 (decision), plus `MCPR_EMBEDDING_BACKEND=aoai` for embeddings.
+
+Outbound endpoints are https-only (http only to localhost), link-local/metadata targets are refused, keys are never logged, and every call has a total deadline. Full matrix, env examples, wire shapes and the edge topology: [docs/backends.md](docs/backends.md).
+
 ## Architecture
 
 ```mermaid
