@@ -10,10 +10,12 @@ that changed the catalog — both the manual refresh endpoint and the
 background `SyncLoop` (via `sync_all`, once per pass):
 
 1. Auto-classify the changed tools (added / schema / metadata / restored)
-   plus any never-classified backlog, through `registry.catalog.auto_classify`
-   -> `apply_auto_classification`, whose UPDATE carries the
+   plus any never-classified backlog, through
+   `registry.catalog.apply_auto_classification`, whose UPDATE carries the
    `classification_reviewed = false` guard: a human-reviewed classification is
-   never overwritten.
+   never overwritten. Unattended RE-classification never widens access: an
+   operation set by an earlier automatic run may only move toward
+   execute/unknown (upstream metadata is untrusted).
 2. `embed_pending_tools` with the configured embedding backend (re-embeds only
    what is missing / changed / from another backend).
 3. Bump the catalog generation so cached routes see the new state.
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -36,10 +39,51 @@ from mcprouter.generation import bump_catalog
 from mcprouter.inference.pipeline import embed_pending_tools
 from mcprouter.interfaces import EmbeddingBackend
 from mcprouter.models import MCPToolRecord
-from mcprouter.registry.catalog import auto_classify
+from mcprouter.registry.catalog import apply_auto_classification
 from mcprouter.registry.classify import RuleBasedClassifier, ToolClassifier
 
 log = logging.getLogger(__name__)
+
+
+# Severity for the non-widening rule: unknown is the MOST restricted class
+# (policy.engine treats anything unrecognised as execute, and above it here so
+# unknown -> execute counts as no widening).
+_SEVERITY = {"read": 0, "write": 1, "execute": 2}
+_UNKNOWN_RANK = 3
+
+
+def _rank(operation: str | None) -> int:
+    return _SEVERITY.get(operation or "", _UNKNOWN_RANK)
+
+
+def _classify_non_widening(s: Session, clf: ToolClassifier, tool_ids: list[str]) -> tuple[int, int]:
+    """Unattended reclassification may only NARROW an operation that an
+    earlier automatic classification set: upstream metadata is untrusted, so
+    rewriting "Delete a ticket" to "Get a ticket" must not quietly make the
+    tool readable by read-only agents. A tool never classified before
+    (classification_source IS NULL) gets the classifier's answer, whatever it
+    is. Reviewed tools are excluded by apply_auto_classification's guard.
+    Returns (classified, kept_operation)."""
+    rows = s.execute(
+        select(
+            MCPToolRecord.id,
+            MCPToolRecord.name,
+            MCPToolRecord.description,
+            MCPToolRecord.input_schema,
+            MCPToolRecord.operation,
+            MCPToolRecord.classification_source,
+        ).where(MCPToolRecord.id.in_(tool_ids))
+    ).all()
+    classified = kept = 0
+    for tid, name, desc, schema, current, source in rows:
+        c = clf.classify(name, desc or "", schema or {})
+        if source is not None and _rank(c.operation) < _rank(current):
+            c = replace(c, operation=current)  # would widen: keep the stricter class
+            kept += 1
+            log.info("post-sync classify kept stricter operation tool_id=%s", tid)
+        if apply_auto_classification(s, tid, c, source=clf.name):
+            classified += 1
+    return classified, kept
 
 
 def _tools_to_classify(s: Session, reports: Sequence[SyncReport]) -> list[str]:
@@ -69,14 +113,9 @@ def make_post_sync_hook(
         try:
             with session_factory() as s:
                 ids = _tools_to_classify(s, reports)
-                run = auto_classify(s, clf, tool_ids=ids) if ids else None
+                classified, kept = _classify_non_widening(s, clf, ids) if ids else (0, 0)
                 s.commit()
-            if run is not None:
-                log.info(
-                    "post-sync classify classified=%d skipped_reviewed=%d",
-                    run.classified,
-                    run.skipped_reviewed,
-                )
+            log.info("post-sync classify classified=%d kept_stricter=%d", classified, kept)
         except Exception as exc:  # noqa: BLE001 — best effort; the sync already succeeded
             log.warning("post-sync classification failed: %s", type(exc).__name__)
         try:

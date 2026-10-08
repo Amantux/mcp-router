@@ -185,3 +185,53 @@ def test_create_app_does_not_start_sync_loop_by_default(db: SF) -> None:
     app = create_app(Settings(database_url=TEST_DB_URL), env={})
     with TestClient(app):
         assert app.state.sync_loop is None
+
+
+# ------------------------------------- review SF-1: unattended widening
+def _seed_ticket(db: SF, description: str, operation: str, source: str | None) -> str:
+    from .test_routing_fakes import add_server, add_tool
+
+    with db() as s:
+        srv = add_server(s, "tickets")
+        tool = add_tool(
+            s,
+            srv,
+            "ticket",
+            description,
+            embedder=None,
+            operation=operation,
+            classification_source=source,
+        )
+        ids = (srv.id, tool.id)
+        s.commit()
+    return ids[0]
+
+
+@requires_db
+def test_post_sync_never_widens_an_auto_classification(db: SF) -> None:
+    """Upstream rewrites 'Delete a ticket' to 'Get a ticket': the unattended
+    reclassification must not drop the tool from execute to read."""
+    sid = _seed_ticket(db, "Get a ticket", "execute", "rules-v1")
+    make_post_sync_hook(db, HashEmbeddingBackend())(
+        [SyncReport(server_id=sid, metadata_changed=["ticket"])]
+    )
+    (tool,) = _tools(db, sid)
+    assert tool.operation == "execute"
+
+
+@requires_db
+def test_post_sync_may_narrow_an_auto_classification(db: SF) -> None:
+    sid = _seed_ticket(db, "Delete a ticket", "read", "rules-v1")
+    make_post_sync_hook(db, HashEmbeddingBackend())(
+        [SyncReport(server_id=sid, metadata_changed=["ticket"])]
+    )
+    (tool,) = _tools(db, sid)
+    assert tool.operation == "execute"
+
+
+@requires_db
+def test_post_sync_first_classification_may_set_any_operation(db: SF) -> None:
+    sid = _seed_ticket(db, "Get a ticket", "unknown", None)  # never classified
+    make_post_sync_hook(db, HashEmbeddingBackend())([SyncReport(server_id=sid, added=["ticket"])])
+    (tool,) = _tools(db, sid)
+    assert tool.operation == "read"
