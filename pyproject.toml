@@ -32,7 +32,7 @@ dev = [
   "ruff==0.15.22",
   "mypy==2.3.0",
   "types-requests",
-  "types-jsonschema==4.26.0.20260408",
+  "types-jsonschema==4.26.0.20261006",
   "types-PyYAML==6.0.12.20260906",
 ]
 # Inference extra: heavy, optional — the app must run (deterministic fallback)
