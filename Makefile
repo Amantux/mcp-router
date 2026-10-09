@@ -10,7 +10,7 @@ COMPOSE_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 SMOKE_PORT  ?= 8450
 SMOKE       := docker compose -p mcprsmoke
 
-.PHONY: help setup setup-check db-up check lint type test-fast test-full ui smoke docs-gen
+.PHONY: help setup setup-check db-up check lint type docs-check test-fast test-full ui smoke docs-gen
 
 help:  ## list targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
@@ -39,7 +39,10 @@ test-fast: setup-check  ## the CI unit lane (needs db-up): no e2e/slow/scale, pa
 test-full: setup-check  ## everything incl. e2e + scale; slow ones need MCPR_RUN_SLOW=1
 	MCPR_REQUIRE_DB=1 MCPR_ENFORCE_ROUTE_COVERAGE=1 $(BIN)/pytest tests/ -q -n auto --dist loadgroup
 
-check: lint type test-full ui  ## every gate CI runs except compose smoke
+docs-check: setup-check  ## every generated doc is current (gen_*.py --check)
+	@set -e; for g in scripts/gen_*.py; do echo "$(PY) $$g --check"; $(PY) "$$g" --check; done
+
+check: lint type docs-check test-full ui  ## every gate CI runs except compose smoke
 
 ui:  ## build + lint + vitest (mirrors the ui job)
 	cd ui && npm ci && npm run build && npm run check:bundle && npm run lint && npm test

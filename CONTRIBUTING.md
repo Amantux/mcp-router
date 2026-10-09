@@ -17,15 +17,19 @@ working in this repository; both apply.
 From the repository root:
 
 ```bash
-make setup     # .venv with the [dev] extra + ui/node_modules
+make setup     # .venv with the [dev] extra (from uv.lock) + ui/node_modules
 make db-up     # Postgres + pgvector on 127.0.0.1:5434 (dev override)
 make check     # every gate below
 ```
 
+`make db-up` uses `POSTGRES_PASSWORD` from your shell if set, else the dev
+password `mcprouter` (the one `MCPR_DATABASE_URL` and the tests default to).
+The dev override publishes the database on 127.0.0.1 only.
+
 Without make:
 
 ```bash
-uv venv --python 3.12 .venv && uv pip install -e '.[dev]'
+uv sync --locked --extra dev --python 3.12
 POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db
 cd ui && npm ci && cd ..
 ```
@@ -41,7 +45,7 @@ All of these must pass before a change is done. CI runs the same commands.
 | Types | `.venv/bin/mypy` (strict) |
 | Backend tests | `MCPR_REQUIRE_DB=1 .venv/bin/pytest tests/ -q` |
 | UI | `cd ui && npm run lint && npx tsc --noEmit && npx vitest run && npm run build` |
-| Generated docs | `.venv/bin/python scripts/gen_config_docs.py --check` |
+| Generated docs | `for g in scripts/gen_*.py; do .venv/bin/python "$g" --check; done` (`make docs-check`) |
 | Compose smoke | `make smoke` |
 
 `make check` runs the first six; `make smoke` builds the image and runs
@@ -56,7 +60,7 @@ database from `make db-up` (port 5434). CI uses its own Postgres service on
 **When the database is down, those tests are skipped, not failed.** A run can
 look green with hundreds of tests skipped. Guard against it:
 
-- set `MCPR_REQUIRE_DB=1` (from v0.6) so a missing database fails the run;
+- set `MCPR_REQUIRE_DB=1` so a missing database fails the run;
 - read the skip reasons with `pytest -rs`.
 
 ## 5. Faster loops
@@ -68,14 +72,14 @@ make test-fast                                              # unit lane
 make test-full                                              # DB + slow lane (what nightly runs)
 ```
 
-The `e2e`, `slow` and `scale` markers (from v0.6) are registered with
+The `e2e`, `slow` and `scale` markers are registered with
 `--strict-markers`, so a typo in a marker name is a collection error.
 `MCPR_RUN_SLOW=1` enables the slow and live-model tests.
 
 ## 6. Optional ML lane
 
 ```bash
-uv pip install -e '.[dev,inference]'
+uv sync --locked --extra dev --extra inference
 MCPR_RUN_SLOW=1 HF_HUB_OFFLINE=1 .venv/bin/pytest tests/test_inference_bge.py -q
 ```
 
@@ -131,14 +135,15 @@ default differs from the code, or a documented CLI flag is gone.
    `ui/package.json` (`tests/test_version_lockstep.py` holds them, the
    package metadata, `/openapi.json` and the MCP server equal) and move the
    `## [Unreleased]` entries under `## [X.Y.Z] - <date>` in `CHANGELOG.md`.
-2. Merge it; wait for the `CI` push run on `master` to go green.
+2. Merge it; wait for the `CI` push run on the default branch (`main`) to go green.
 3. Tag that commit `vX.Y.Z` and push the tag.
 
-From v0.6 `.github/workflows/release.yml` publishes nothing unless its
+`.github/workflows/release.yml` publishes nothing unless its
 `verify` job passes: the tag is `v` + the `pyproject.toml` version, the top
 versioned `CHANGELOG.md` heading is that version
 (`.github/scripts/release_verify.py`), a green `CI` push run exists for the
-exact SHA on `master`, and the SHA is an ancestor of `origin/master`. Only
+exact SHA on the default branch (`main`), and the SHA is an ancestor of
+`origin/main`. Only
 then do both images build and push, with provenance and an SBOM. `:latest`
 and `:latest-inference` move only for a plain `vX.Y.Z` tag that is the
 highest one; a pre-release tag (`v0.7.0rc1`, with the same pyproject
