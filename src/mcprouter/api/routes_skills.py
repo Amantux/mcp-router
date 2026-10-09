@@ -166,15 +166,13 @@ agent_router = APIRouter(prefix="/api/v1")
 # server-side (`routed_skill_ids`), never taken from the client.
 
 import functools  # noqa: E402
-from typing import Annotated, Any  # noqa: E402
+from typing import Annotated  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
 import anyio.to_thread  # noqa: E402
-from fastapi import HTTPException, Path, Query, Request, Response  # noqa: E402
+from fastapi import Path, Query, Response  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 from pydantic.alias_generators import to_camel  # noqa: E402
-from sqlalchemy import select  # noqa: E402
-from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 
 from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of  # noqa: E402
 from mcprouter.api.routes_execute import AGENT_ID_PATTERN, _principal_row  # noqa: E402
