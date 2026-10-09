@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+import pytest
 from sqlalchemy import Engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -130,3 +131,108 @@ def test_dedup_statement_count_does_not_grow_with_pairs(db: sessionmaker[Session
             s.execute(text("DELETE FROM duplicate_suggestions"))
             s.commit()
     assert counts[0] == counts[1], counts
+
+
+# ------------------------------------------------------------------ P-605
+def _skills(n: int) -> list[tuple[Any, Any]]:
+    from mcprouter.models import SkillRecord, SkillSourceRecord
+
+    src = SkillSourceRecord(id="src-1", name="src", kind="directory", location="/x")
+    return [
+        (SkillRecord(id=f"sk{i}", source_id="src-1", name=f"skill-{i}", operation="read"), src)
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize("n", [3, 10])
+def test_skill_policy_check_many_is_two_queries(db: sessionmaker[Session], n: int) -> None:
+    from mcprouter.models import AgentPrincipal, PolicyRule
+    from mcprouter.policy.skill_bridge import EngineSkillPolicy
+
+    with db() as s:
+        s.add(AgentPrincipal(agent_id="alice", key_hash="h"))
+        s.add(
+            PolicyRule(
+                agent_id="alice",
+                resource_kind="skill",
+                server_id="src-1",
+                tool_name="skill-*",
+                max_operation="read",
+            )
+        )
+        s.commit()
+    policy = EngineSkillPolicy(db)
+    with count_statements(
+        db.kw["bind"], lambda st: st.lstrip().upper().startswith("SELECT")
+    ) as seen:
+        verdicts = policy.check_many("alice", _skills(n))
+    assert [ok for ok, _ in verdicts] == [True] * n
+    assert len(seen) == 2, seen
+    assert (
+        policy.check_many("nobody", _skills(2))
+        == [(False, "skill not permitted for this agent")] * 2
+    )
+
+
+def test_latest_decision_lookup_uses_the_composite_index(db: sessionmaker[Session]) -> None:
+    with db() as s:
+        s.execute(
+            text(
+                "INSERT INTO routing_decisions (id, agent_id, query, selected_tool_ids,"
+                " scores, model_version, fallback_used, created_at, latency_ms)"
+                " SELECT 'rd-' || g, 'agent-' || (g % 50), 'q', '[]', '{}', 'm', false,"
+                " now() - (g || ' seconds')::interval, 1.0 FROM generate_series(1, 5000) g"
+            )
+        )
+        s.execute(text("ANALYZE routing_decisions"))
+        plan = _plan(
+            s,
+            "SELECT selected_tool_ids FROM routing_decisions WHERE agent_id = 'agent-7'"
+            " AND NOT model_version LIKE 'simulated/%'"
+            " ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        s.rollback()
+    assert "ix_routing_decisions_agent_latest" in plan, plan
+    assert "Sort" not in plan, plan
+
+
+def test_staleness_scan_timeout_is_curated_and_contained(
+    db: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcprouter.analytics import staleness
+
+    monkeypatch.setattr(staleness, "STATEMENT_TIMEOUT", "50ms")
+    monkeypatch.setattr(staleness, "_LAST_SURFACED_SQL", text("SELECT 'x', now() FROM pg_sleep(2)"))
+    with db() as s:
+        before = s.execute(text("SELECT current_setting('statement_timeout')")).scalar()
+        with pytest.raises(staleness.StalenessTimeout) as info:
+            staleness.last_surfaced(s)
+        assert "timed out" in str(info.value)
+        # The caller's transaction survives and keeps its own timeout.
+        assert s.execute(text("SELECT current_setting('statement_timeout')")).scalar() == before
+        s.rollback()
+
+
+def test_skill_ingest_refreshes_planner_statistics(
+    db: sessionmaker[Session], tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcprouter.models import SkillSourceRecord
+    from mcprouter.settings import Settings
+    from mcprouter.skills import ingest
+
+    calls: list[object] = []
+    real = ingest.analyze_skills
+    monkeypatch.setattr(ingest, "analyze_skills", lambda s: (calls.append(s), real(s)))
+    d = tmp_path / "alpha"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: alpha\ndescription: Alpha skill\n---\nbody\n")
+    with db() as s:
+        src = SkillSourceRecord(name="stats-src", kind="directory", location=str(tmp_path))
+        s.add(src)
+        s.flush()
+        rep = ingest.sync_source(s, src, tmp_path, Settings())
+        assert rep["added"] == 1
+        assert len(calls) == 1
+        ingest.sync_source(s, src, tmp_path, Settings())  # no change -> no ANALYZE
+        assert len(calls) == 1
+        s.rollback()
