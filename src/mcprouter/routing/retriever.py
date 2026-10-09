@@ -36,12 +36,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import ColumnElement, Engine, and_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import EmbeddingBackend, ToolCandidate
-from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
 from mcprouter.routing.cache import QueryEmbeddingCache
 
 RRF_K = 60
@@ -89,6 +90,68 @@ _KEYWORD_SQL = text(
 
 KEYWORD_INDEX = "ix_tools_routing_fts"
 
+# Skills: name (A, hyphens -> spaces) > tags (B) > description (C) > the first
+# 2KB of the body (D). Un-embedded skills stay reachable through this leg.
+_SKILL_DOC_TEMPLATE = (
+    "setweight(to_tsvector('english', replace({p}name, '-', ' ')), 'A') || "
+    "setweight(to_tsvector('english', coalesce({p}tags::text, '')), 'B') || "
+    "setweight(to_tsvector('english', coalesce({p}description, '')), 'C') || "
+    "setweight(to_tsvector('english', left(coalesce({p}body, ''), 2048)), 'D')"
+)
+_SKILL_DOC_SQL = _SKILL_DOC_TEMPLATE.format(p="k.")
+
+_SKILL_KEYWORD_SQL = text(
+    f"""
+    WITH words AS MATERIALIZED (
+      SELECT w, plainto_tsquery('english', w) AS q
+      FROM unnest(CAST(:words AS text[])) AS w
+    ),
+    tsq AS MATERIALIZED (
+      SELECT CAST(string_agg('(' || q::text || ')', ' | ') AS tsquery) AS q
+      FROM words WHERE q::text <> ''
+    ),
+    hits AS MATERIALIZED (
+      SELECT k.id, k.source_id, k.name, src.name AS source_name, k.description,
+             k.domain, k.operation, k.body_tokens_est, {_SKILL_DOC_SQL} AS doc
+      FROM skills k JOIN skill_sources src ON src.id = k.source_id
+      WHERE ({_SKILL_DOC_SQL}) @@ (SELECT q FROM tsq)
+        AND (NOT :enabled_only OR (k.enabled AND k.available AND src.enabled
+                                   AND src.status <> 'offline'))
+    )
+    SELECT h.id, h.source_id, h.name, h.source_name, h.description, h.domain,
+           h.operation, h.body_tokens_est,
+           ARRAY(SELECT words.w FROM words
+                 WHERE words.q::text <> '' AND h.doc @@ words.q) AS matched
+    FROM hits h
+    ORDER BY ts_rank_cd(h.doc, (SELECT q FROM tsq)) DESC, h.source_name, h.name
+    LIMIT :lim
+    """
+)
+
+SKILL_KEYWORD_INDEX = "ix_skills_routing_fts"
+
+
+def ensure_skill_keyword_index(engine: Engine) -> None:
+    """Skills twin of ensure_keyword_index — call it at app init next to it.
+    Constant DDL; expression must stay byte-identical to _SKILL_DOC_TEMPLATE."""
+    ddl = (
+        f"CREATE INDEX IF NOT EXISTS {SKILL_KEYWORD_INDEX} ON skills "
+        f"USING GIN (({_SKILL_DOC_TEMPLATE.format(p='')}))"
+    )
+    with engine.begin() as conn:
+        conn.execute(text(ddl))
+
+
+def skill_eligibility_filters() -> list[ColumnElement[bool]]:
+    """Skill routing eligibility: skill enabled + available, source enabled
+    and not offline. Shared by both skill legs and the route-cache re-check."""
+    return [
+        SkillRecord.enabled.is_(True),
+        SkillRecord.available.is_(True),
+        SkillSourceRecord.enabled.is_(True),
+        SkillSourceRecord.status != "offline",
+    ]
+
 
 def ensure_keyword_index(engine: Engine) -> None:
     """Idempotently create the GIN expression index the keyword leg relies on.
@@ -125,6 +188,13 @@ class _Row:
     description: str
     domain: str | None
     operation: str
+    kind: str = "tool"
+    body_tokens_est: int = 0
+
+    @property
+    def key(self) -> str:
+        """Fusion key: tools bare, skills "skill:<id>" (no cross-kind collision)."""
+        return self.tool_id if self.kind == "tool" else f"skill:{self.tool_id}"
 
 
 class HybridRetriever:
@@ -149,27 +219,43 @@ class HybridRetriever:
         limit: int,
         server_ids: list[str] | None = None,
         enabled_only: bool = True,
+        kinds: tuple[str, ...] = ("tool",),
     ) -> list[ToolCandidate]:
-        if limit <= 0 or server_ids == []:
+        """`server_ids` scopes MCP tools only; skills are scoped by policy
+        downstream (PolicyScope.permits dispatches on kind)."""
+        want_tools = "tool" in kinds and server_ids != []
+        want_skills = "skill" in kinds
+        if limit <= 0 or not (want_tools or want_skills):
             return []
         leg_limit = max(limit * self._leg_multiplier, limit)
         qvec = self._query_vectors.get_or_compute(
             query, self._embedder.name, lambda q: self._embedder.embed([q])[0]
         )
+        # One RRF over up to four ranked lists (tool/skill x vector/keyword):
+        # native scores are per-table, so each kind's legs rank independently.
+        vec_lists: list[list[_Row]] = []
+        kw_lists: list[list[tuple[_Row, list[str]]]] = []
         with self._factory() as s:
-            vector_rows = self._vector_leg(s, qvec, leg_limit, server_ids, enabled_only)
-            keyword_rows = self._keyword_leg(s, query, leg_limit, server_ids, enabled_only)
+            if want_tools:
+                vec_lists.append(self._vector_leg(s, qvec, leg_limit, server_ids, enabled_only))
+                kw_lists.append(self._keyword_leg(s, query, leg_limit, server_ids, enabled_only))
+            if want_skills:
+                vec_lists.append(self._skill_vector_leg(s, qvec, leg_limit, enabled_only))
+                kw_lists.append(self._skill_keyword_leg(s, query, leg_limit, enabled_only))
+        vector_rows = [r for lst in vec_lists for r in lst]
 
         rows: dict[str, _Row] = {}
         fused: dict[str, float] = {}
-        for rank, row in enumerate(vector_rows, start=1):
-            rows[row.tool_id] = row
-            fused[row.tool_id] = fused.get(row.tool_id, 0.0) + 1.0 / (RRF_K + rank)
+        for vlist in vec_lists:
+            for rank, row in enumerate(vlist, start=1):
+                rows[row.key] = row
+                fused[row.key] = fused.get(row.key, 0.0) + 1.0 / (RRF_K + rank)
         kw_terms: dict[str, list[str]] = {}
-        for rank, (row, words) in enumerate(keyword_rows, start=1):
-            rows[row.tool_id] = row
-            kw_terms[row.tool_id] = words
-            fused[row.tool_id] = fused.get(row.tool_id, 0.0) + 1.0 / (RRF_K + rank)
+        for klist in kw_lists:
+            for rank, (row, words) in enumerate(klist, start=1):
+                rows[row.key] = row
+                kw_terms[row.key] = words
+                fused[row.key] = fused.get(row.key, 0.0) + 1.0 / (RRF_K + rank)
         best = 2.0 / (RRF_K + 1)
         # Deterministic, catalog-stable order: score desc, then server/tool
         # NAME (ids are random per catalog, so an id tie-break is not reproducible).
@@ -178,7 +264,7 @@ class HybridRetriever:
             key=lambda kv: (-kv[1], rows[kv[0]].server_name, rows[kv[0]].tool_name),
         )[:limit]
 
-        vector_set = {r.tool_id for r in vector_rows}
+        vector_set = {r.key for r in vector_rows}
         out: list[ToolCandidate] = []
         for tid, score in top:
             row = rows[tid]
@@ -197,6 +283,8 @@ class HybridRetriever:
                     operation=row.operation,
                     retrieval_score=score / best,
                     matched_on=matched,
+                    kind=row.kind,
+                    body_tokens_est=row.body_tokens_est,
                 )
             )
         return out
@@ -265,3 +353,52 @@ class HybridRetriever:
             },
         )
         return [(_Row(*r[:7]), list(r[7] or [])) for r in res]
+
+    def _skill_vector_leg(
+        self, s: Session, qvec: list[float], lim: int, enabled_only: bool
+    ) -> list[_Row]:
+        dist = SkillRecord.embedding.cosine_distance(qvec)
+        filters = skill_eligibility_filters() if enabled_only else []
+        stmt = (
+            select(
+                SkillRecord.id,
+                SkillRecord.source_id,
+                SkillRecord.name,
+                SkillSourceRecord.name,
+                SkillRecord.description,
+                SkillRecord.domain,
+                SkillRecord.operation,
+                SkillRecord.body_tokens_est,
+            )
+            .join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+            .where(
+                and_(
+                    SkillRecord.embedding.is_not(None),
+                    SkillRecord.embedding_backend == self._embedder.name,
+                    *filters,
+                )
+            )
+            .order_by(dist, SkillSourceRecord.name, SkillRecord.name)
+            .limit(lim)
+        )
+        return [_skill_row(r) for r in s.execute(stmt)]
+
+    def _skill_keyword_leg(
+        self, s: Session, query: str, lim: int, enabled_only: bool
+    ) -> list[tuple[_Row, list[str]]]:
+        words = list(dict.fromkeys(_WORD.findall(query.lower())))[:_MAX_QUERY_WORDS]
+        if not words:
+            return []
+        res = s.execute(
+            _SKILL_KEYWORD_SQL, {"words": words, "enabled_only": enabled_only, "lim": lim}
+        )
+        return [(_skill_row(r), list(r[8] or [])) for r in res]
+
+
+def _skill_row(r: Any) -> _Row:
+    """(id, source_id, name, source_name, description, domain, operation, tokens, ...)"""
+    return _Row(
+        tool_id=r[0], server_id=r[1], tool_name=r[2], server_name=r[3],
+        description=r[4], domain=r[5], operation=r[6],
+        kind="skill", body_tokens_est=int(r[7] or 0),
+    )  # fmt: skip

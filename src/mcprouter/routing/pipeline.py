@@ -339,7 +339,10 @@ class RoutePipeline:
         kept = [
             c
             for c in raw
-            if (permitted_ids is None or c.server_id in permitted_ids) and scope.permits(c)
+            # Interim (S2b item 2 pending): skills are not budgeted yet.
+            if c.kind == "tool"
+            and (permitted_ids is None or c.server_id in permitted_ids)
+            and scope.permits(c)
         ]
         out = kept[:limit]
         if trace is not None:
@@ -380,7 +383,7 @@ class RoutePipeline:
             server_ids=request.allowed_servers,
         )
         for c in [*raw, *extra]:
-            if c.tool_id in kept_ids or c.tool_id in seen:
+            if c.kind != "tool" or c.tool_id in kept_ids or c.tool_id in seen:
                 continue
             seen.add(c.tool_id)
             denied.append(c)

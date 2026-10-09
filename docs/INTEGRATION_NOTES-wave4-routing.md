@@ -50,3 +50,38 @@ Conventions fixed by the plan for that work (unchanged): `RoutingDecisionRecord.
 selected_tool_ids` carries skills as `"skill:<id>"` (tool ids bare); cross-kind
 DuplicateSuggestion uses `tool_b_id = "skill:<id>"`, rationale "cross-kind", never
 auto-applied; maxServers counts MCP servers only.
+
+## S2b — skills in the routing pipeline (partial: items 1 + 4 landed)
+
+**Retriever (`routing/retriever.py`)**
+- `HybridRetriever.retrieve(..., kinds=("tool",))` — default is TOOLS ONLY until item 2 (the pipeline would otherwise fetch skills only to drop them, starving tools; reviewer finding). Item 2 must pass `kinds` explicitly (Retriever Protocol in interfaces.py needs the param too). Skill legs: vector
+  (`SkillRecord.embedding`, `embedding_backend == embedder.name`) + keyword
+  (weighted tsvector: name A with `-`→space, tags B, description C,
+  `left(body, 2048)` D). Un-embedded skills are reachable by keyword only.
+- Eligibility (`skill_eligibility_filters()`): skill enabled AND available AND
+  source enabled AND source status != 'offline' (both legs; mutation-checked).
+- Fusion: one RRF over up to four ranked lists (tool vec, tool kw, skill vec,
+  skill kw); fusion key is `tool_id` for tools and `"skill:<id>"` for skills.
+- Skill `ToolCandidate`: `kind="skill"`, `tool_id=skill.id`,
+  `server_id=source.id`, `server_name=source.name`, `tool_name=skill.name`,
+  `body_tokens_est`.
+- `server_ids` scopes MCP tools only; skills are scoped by `PolicyScope.permits`.
+- **App init:** call `ensure_skill_keyword_index(engine)` next to
+  `ensure_keyword_index(engine)` (GIN index `ix_skills_routing_fts`; belongs in
+  an Alembic revision at integration).
+
+**Interim gate in `routing/pipeline.py`:** retrieval results are filtered to
+`kind == "tool"` (both the main and the "extra" retrieval loops) until per-kind
+budgets (item 2) land. Remove that gate as part of item 2.
+
+**`registry/classify.py`:** `apply_skill_classification(session, id, c, *,
+content_changed=False)`. With `content_changed=True` a reviewed row may move
+toward execute/unknown only, gets `classification_reviewed=False` and
+`"review_stale"` appended to `ingest_flags` (no duplicates; PG jsonb, one
+UPDATE). Unchanged content: reviewed guard absolute. Callers (skill sync) must
+pass `content_changed` when content_hash/manifest_hash moved.
+
+**Not done (items 2, 3):** per-kind budgets/max_skills clamp, `skill:<id>`
+decision-row prefix, cache key (max_skills + kinds) and cache-hit skill
+re-filter, `/route` `skills`/`max_skills_applied`, simulate `kind` fields and
+maxSkills clamp. The response shapes for S4b are therefore NOT yet fixed here.
