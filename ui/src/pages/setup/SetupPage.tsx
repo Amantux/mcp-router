@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import {
   Button,
   Checkbox,
+  Field,
   Input,
   Radio,
   RadioGroup,
@@ -90,6 +91,23 @@ export function describeFailure(what: string, e: unknown): string {
   return `${what} failed${status ? ` (${status})` : ""}. ${advice}`;
 }
 
+const AGENT_EXISTS = "agentId already exists"; // routes_policy.py create_principal's other 409
+
+/**
+ * Why Create agent failed. A 409 is one of two backend refusals: the curated detail
+ * says which; without it, the setup status decides; with neither, both are named
+ * rather than guessing (HS-U-019).
+ */
+export function createAgentFailure(agentId: string, e: unknown, status: SetupStatus | null): string {
+  if (!(e instanceof ApiError) || e.status !== 409) return describeFailure("Create agent", e);
+  const exists = `An agent “${agentId}” already exists. Choose another id.`;
+  if (e.conflict === FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN) return FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN;
+  if (e.conflict === AGENT_EXISTS) return exists;
+  if (e.conflict) return describeFailure("Create agent", e);
+  if (status) return status.hasAdminToken ? exists : FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN;
+  return `Create agent failed (HTTP 409). Either an agent “${agentId}” already exists (choose another id), or this is dev mode: ${FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN}`;
+}
+
 export function SetupPage() {
   const [step, setStepRaw] = useState(loadStep);
   const [status, setStatus] = useState<SetupStatus | null>(null);
@@ -123,7 +141,7 @@ export function SetupPage() {
 
   const recheck = () =>
     getSetupStatus().then(setStatus, () =>
-      setMsg("Status needs the admin token. Paste it in Connect (gear icon, top right)."),
+      setMsg("Status needs the admin token. Paste it in Connect (bottom of the left menu)."),
     );
   useEffect(() => {
     void recheck();
@@ -166,8 +184,8 @@ export function SetupPage() {
       </Button>{" "}
       <Button onClick={() => void recheck()}>I've set it, re-check</Button>
       <Text block>
-        Admin token configured:{" "}
-        {status ? String(status.hasAdminToken) : "unknown"}
+        Admin token:{" "}
+        {status ? (status.hasAdminToken ? "configured" : "not configured") : "unknown (status not loaded)"}
       </Text>
     </div>,
     <div key="b">
@@ -185,11 +203,12 @@ export function SetupPage() {
       <Text block>
         Paste a Claude Desktop config (the object with "mcpServers"):
       </Text>
-      <Textarea
-        aria-label="mcpServers JSON"
-        value={serversJson}
-        onChange={(_, d) => setServersJson(d.value)}
-      />
+      <Field label="mcpServers JSON">
+        <Textarea
+          value={serversJson}
+          onChange={(_, d) => setServersJson(d.value)}
+        />
+      </Field>
       <Button
         onClick={() => {
           try {
@@ -214,12 +233,13 @@ export function SetupPage() {
       />
     </div>,
     <div key="d">
-      <Input
-        aria-label="Git URL"
-        placeholder="https://github.com/org/skills.git"
-        value={gitUrl}
-        onChange={(_, d) => setGitUrl(d.value)}
-      />
+      <Field label="Git URL" hint="https:// only">
+        <Input
+          placeholder="https://github.com/org/skills.git"
+          value={gitUrl}
+          onChange={(_, d) => setGitUrl(d.value)}
+        />
+      </Field>
       <Button
         onClick={() => {
           if (!isHttpsGitUrl(gitUrl))
@@ -237,12 +257,13 @@ export function SetupPage() {
       >
         Add skill source
       </Button>
-      <Input
-        aria-label="Directory path"
-        placeholder="/srv/skills"
-        value={dirPath}
-        onChange={(_, d) => setDirPath(d.value)}
-      />
+      <Field label="Directory path" hint="An absolute path on the router host">
+        <Input
+          placeholder="/srv/skills"
+          value={dirPath}
+          onChange={(_, d) => setDirPath(d.value)}
+        />
+      </Field>
       <Button
         onClick={() => {
           const loc = dirPath.trim();
@@ -263,12 +284,13 @@ export function SetupPage() {
       </Button>
     </div>,
     <div key="e">
-      <Input
-        aria-label="Agent id"
-        disabled={apiKey !== null}
-        value={agentId}
-        onChange={(_, d) => setAgentId(d.value)}
-      />
+      <Field label="Agent id">
+        <Input
+          disabled={apiKey !== null}
+          value={agentId}
+          onChange={(_, d) => setAgentId(d.value)}
+        />
+      </Field>
       <Button
         disabled={apiKey !== null}
         onClick={() =>
@@ -277,14 +299,7 @@ export function SetupPage() {
               setCreatedAgent(p.agentId);
               setApiKey(p.apiKey);
             },
-            (e: unknown) =>
-              setMsg(
-                e instanceof ApiError && e.status === 409
-                  ? status && !status.hasAdminToken
-                    ? FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
-                    : `An agent “${agentId}” already exists. Choose another id.`
-                  : describeFailure("Create agent", e),
-              ),
+            (e: unknown) => setMsg(createAgentFailure(agentId, e, status)),
           )
         }
       >
@@ -412,7 +427,8 @@ export function SetupPage() {
     <section aria-label="Setup wizard">
       <Link to="/" onClick={skipSetup}>
         Skip setup
-      </Link>
+      </Link>{" "}
+      <Text size={200}>(reopen it any time from “Setup wizard” in the left menu)</Text>
       <TabList
         selectedValue={step}
         onTabSelect={(_, d) => setStep(d.value as number)}
@@ -430,7 +446,7 @@ export function SetupPage() {
           disabled={step === STEPS.length - 1}
           onClick={() => setStep(step + 1)}
         >
-          Next (or skip)
+          Next
         </Button>
       </div>
       {msg && (

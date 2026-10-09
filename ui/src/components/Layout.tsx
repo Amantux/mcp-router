@@ -17,6 +17,7 @@ import {
   PlayCircleRegular,
   PersonClockRegular,
   DataBarVerticalRegular,
+  RocketRegular,
 } from "@fluentui/react-icons";
 import type { ReactNode } from "react";
 import { NotificationStack } from "./Notifications";
@@ -109,6 +110,11 @@ export function Layout() {
           </NavLink>
         ))}
         <div className={s.spacer} />
+        {/* The setup wizard is not a daily page, but it must stay reachable after "Skip setup" (HS-U-001). */}
+        <NavLink to="/setup" className={({ isActive }) => mergeClasses(s.link, isActive && s.active)}>
+          <RocketRegular />
+          Setup wizard
+        </NavLink>
         {appVersion() && (
           <Text size={200} className={s.version} data-testid="app-version">
             v{appVersion()}

@@ -56,6 +56,20 @@ describe("Layout first-run redirect", () => {
   });
 });
 
+describe("Layout setup link (HS-U-001)", () => {
+  beforeEach(() => sessionStorage.clear());
+  afterEach(() => clearCredentials());
+  it("after Skip setup, the wizard is still one click away in the left menu", async () => {
+    const { calls } = mockFetch({});
+    sessionStorage.setItem(REDIRECT_KEY, "skipped");
+    mount();
+    await screen.findByText("servers page");
+    fireEvent.click(screen.getByRole("link", { name: "Setup wizard" }));
+    expect(await screen.findByText("setup page")).toBeTruthy();
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("Layout Connect panel on the setup wizard", () => {
   afterEach(() => clearCredentials());
   it("warns that saving credentials restarts the wizard step only while on /setup", async () => {
