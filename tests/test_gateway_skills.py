@@ -86,6 +86,8 @@ async def test_prompts_and_resources_only_for_routed_agent(gw: Any, world: Any) 
         "skill://local/pdf/ref.md",
         "skill://local/pdf/img.png",
     ]
+    # list MIME comes from the SAME function serve.py uses for reads
+    assert [r.mime_type for r in rl.resources] == ["text/markdown", "application/octet-stream"]
     assert (await gw._on_list_resources(_ctx(gw, cat, "bob"), None)).resources == []
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -14,6 +15,15 @@ from mcprouter.models import SkillRecord
 from mcprouter.skills.bundle import MARKER, BundleError, build_bundle
 from mcprouter.skills.serve import SkillFiles, SkillServeError, normalize_relpath, read_body
 
+_SHA = {
+    p: hashlib.sha256(b).hexdigest()
+    for p, b in {
+        "references/guide.md": b"# Guide",
+        "references/bin.dat": b"\x00\x01\xff",
+        "big.txt": b"x" * 200,
+    }.items()
+}
+
 
 def _skill(rel: str, manifest: list[str], name: str = "pdf-tools") -> SkillRecord:
     return SkillRecord(
@@ -23,7 +33,9 @@ def _skill(rel: str, manifest: list[str], name: str = "pdf-tools") -> SkillRecor
         description="Work with PDFs",
         body="Do the thing.",
         relative_path=rel,
-        resource_manifest=[{"path": p, "size": 1, "kind": "reference"} for p in manifest],
+        resource_manifest=[
+            {"path": p, "size": 1, "kind": "reference", "sha256": _SHA.get(p, "")} for p in manifest
+        ],
         license=None,
         compatibility=None,
         skill_metadata={},

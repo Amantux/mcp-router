@@ -10,13 +10,17 @@ paths ingest recorded in ``resource_manifest``, and size-capped.
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import logging
 import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from mcprouter.models import SkillRecord, SkillSourceRecord
+
+log = logging.getLogger(__name__)
 
 
 class SkillServeError(Exception):
@@ -41,8 +45,14 @@ class ResourceContent:
 
 
 # Markup a browser would execute: never served as text (mime-XSS posture);
-# always an application/octet-stream blob.
-_ACTIVE_CONTENT_EXT = frozenset({".html", ".htm", ".xhtml", ".svg", ".svgz", ".xml"})
+# always an application/octet-stream blob. Scripts are included: a .js served
+# as text/javascript is executable if a client ever renders it. .ts/.tsx stay
+# text/plain: no browser executes TypeScript, and text/plain is never sniffed
+# into script by a nosniff-respecting client.
+_ACTIVE_CONTENT_EXT = frozenset(
+    {".html", ".htm", ".xhtml", ".svg", ".svgz", ".xml", ".js", ".mjs", ".cjs", ".jsx"}
+)
+_BLOB_MIME = "application/octet-stream"
 
 _TEXT_MIME = {
     ".md": "text/markdown",
@@ -53,10 +63,32 @@ _TEXT_MIME = {
     ".yaml": "application/yaml",
     ".yml": "application/yaml",
     ".csv": "text/csv",
-    ".html": "text/html",
-    ".js": "text/javascript",
     ".ts": "text/plain",
+    ".tsx": "text/plain",
 }
+
+
+def resource_mime(path: str, is_text: bool) -> str:
+    """THE mime decision, shared by resources/read (serve) and resources/list
+    (gateway). Active content and non-text are always an octet-stream blob."""
+    ext = PurePosixPath(path).suffix.lower()
+    if not is_text or ext in _ACTIVE_CONTENT_EXT:
+        return _BLOB_MIME
+    return _TEXT_MIME.get(ext, "text/plain")
+
+
+def manifest_entries(skill: SkillRecord) -> dict[str, dict[str, object]]:
+    """Normalized path -> manifest entry. A malformed entry is logged and
+    skipped: one bad entry must not make the whole skill unservable."""
+    out: dict[str, dict[str, object]] = {}
+    for e in skill.resource_manifest or []:
+        try:
+            if not isinstance(e, dict) or not isinstance(e.get("path"), str):
+                raise SkillServeError("invalid_path", "malformed entry")
+            out[normalize_relpath(e["path"])] = e
+        except SkillServeError:
+            log.warning("skill %s: skipping malformed manifest entry", skill.id)
+    return out
 
 
 def normalize_relpath(path: str) -> str:
@@ -100,11 +132,7 @@ class SkillFiles:
 
     def read_resource(self, skill: SkillRecord, resource_path: str) -> ResourceContent:
         rel = normalize_relpath(resource_path)
-        entries = {
-            normalize_relpath(str(e["path"])): e
-            for e in skill.resource_manifest or []
-            if isinstance(e, dict) and isinstance(e.get("path"), str)
-        }
+        entries = manifest_entries(skill)
         if rel not in entries:
             raise SkillServeError("not_in_manifest", "Resource is not part of this skill.")
         sdir = self.skill_dir(skill.relative_path)
@@ -123,10 +151,12 @@ class SkillFiles:
             fd = os.open(real, flags)
         except FileNotFoundError:
             raise SkillServeError("not_found", "Resource not found.") from None
-        except OSError:  # ELOOP: swapped to a symlink after the escape check
-            raise SkillServeError(
-                "invalid_path", "Resource path escapes the skill directory."
-            ) from None
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:  # swapped to a symlink after the escape check
+                raise SkillServeError(
+                    "invalid_path", "Resource path escapes the skill directory."
+                ) from None
+            raise SkillServeError("unreadable", "Resource could not be read.") from None
         try:
             st = os.fstat(fd)  # before fdopen: it refuses directories itself
             if not stat.S_ISREG(st.st_mode):
@@ -141,17 +171,20 @@ class SkillFiles:
             raise SkillServeError("unreadable", "Resource could not be read.") from None
         if len(data) > self._max:  # grew between fstat and read
             raise SkillServeError("too_large", "Resource exceeds the size cap.")
+        # sha256 is REQUIRED: the content check is what closes the dir-swap race
+        # (a swapped directory serves different bytes). No hash => refuse as stale.
         want = entries[rel].get("sha256")
-        if isinstance(want, str) and want and hashlib.sha256(data).hexdigest() != want.lower():
+        if not isinstance(want, str) or not want:
             raise SkillServeError("stale", "Resource changed since the skill was indexed.")
-        ext = PurePosixPath(rel).suffix.lower()
-        if ext not in _ACTIVE_CONTENT_EXT and b"\x00" not in data:
+        if hashlib.sha256(data).hexdigest() != want.lower():
+            raise SkillServeError("stale", "Resource changed since the skill was indexed.")
+        if resource_mime(rel, True) != _BLOB_MIME and b"\x00" not in data:
             try:
                 text = data.decode("utf-8")
-                return ResourceContent(rel, _TEXT_MIME.get(ext, "text/plain"), text=text)
+                return ResourceContent(rel, resource_mime(rel, True), text=text)
             except UnicodeDecodeError:
                 pass
-        return ResourceContent(rel, "application/octet-stream", blob=data)
+        return ResourceContent(rel, _BLOB_MIME, blob=data)
 
 
 def read_body(skill: SkillRecord, max_bytes: int) -> str:

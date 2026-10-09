@@ -88,7 +88,7 @@ from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, Pol
 from mcprouter.policy.engine import evaluate
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.settings import Settings
-from mcprouter.skills.serve import ResourceContent
+from mcprouter.skills.serve import ResourceContent, manifest_entries, resource_mime
 
 log = logging.getLogger(__name__)
 
@@ -626,18 +626,14 @@ class GatewayServer:
         if self._skills is not None:
             ids, _ = self._routed_skills(principal.agent_id)
             for sk, src in await anyio.to_thread.run_sync(self._skills.load_routed, ids):
-                for e in sk.resource_manifest or []:
-                    path = e.get("path") if isinstance(e, dict) else None
-                    if not isinstance(path, str) or not path:
-                        continue  # malformed manifest entry: skip, never crash the list
+                # Malformed entries are skipped (logged) by the shared helper.
+                for path, e in manifest_entries(sk).items():
                     size = e.get("size")
                     out.append(
                         types.Resource(
                             name=f"{prompt_name(src.name, sk.name)}/{path}",
                             uri=resource_uri(src.name, sk.name, path),
-                            mime_type="text/plain"
-                            if e.get("kind") == "text"
-                            else "application/octet-stream",
+                            mime_type=resource_mime(path, e.get("kind") == "text"),
                             size=size if isinstance(size, int) else None,
                         )
                     )

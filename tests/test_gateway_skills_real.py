@@ -3,6 +3,7 @@ traversal/escape attempts, untyped failures, clear(), "/"-ambiguous names."""
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,9 @@ pytestmark = pytest.mark.anyio
 SECRET = "/etc/very-secret-path"
 
 
+_GUIDE_SHA = hashlib.sha256(b"# Guide").hexdigest()
+
+
 @pytest.fixture()
 def real(world: dict[str, Any], tmp_path: Path) -> dict[str, Any]:  # noqa: F811
     db = world["db"]
@@ -40,7 +44,7 @@ def real(world: dict[str, Any], tmp_path: Path) -> dict[str, Any]:  # noqa: F811
             .where(SkillRecord.id == a)
             .values(
                 resource_manifest=[
-                    {"path": "guide.md", "size": 7, "kind": "text"},
+                    {"path": "guide.md", "size": 7, "kind": "text", "sha256": _GUIDE_SHA},
                     {"path": "escape.md", "size": 10, "kind": "text"},
                     {"path": "big.md", "size": 2000, "kind": "text"},
                 ]

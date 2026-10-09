@@ -3,6 +3,7 @@ policy re-check, audit-before-return, rate limit."""
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -48,7 +49,13 @@ def _seed(factory: sessionmaker[Session], root: Path) -> tuple[str, str]:
                 description=f"{n} desc",
                 body=f"BODY {n}",
                 relative_path=n,
-                resource_manifest=[{"path": "guide.md", "size": 7}],
+                resource_manifest=[
+                    {
+                        "path": "guide.md",
+                        "size": 7,
+                        "sha256": hashlib.sha256(b"# Guide").hexdigest(),
+                    }
+                ],
                 content_hash="0" * 64,
                 manifest_hash="0" * 64,
             )
