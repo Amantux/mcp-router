@@ -46,6 +46,7 @@ def normalize_query(query: str) -> str:
 class CachedTool:
     tool_id: str
     score: float
+    kind: str = "tool"
 
 
 @dataclass(frozen=True)

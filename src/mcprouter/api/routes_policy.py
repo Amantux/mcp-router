@@ -30,12 +30,13 @@ from mcprouter.api.deps_auth import (
 )
 from mcprouter.execution.manager import ApprovalError, ApprovalView, ExecutionManager
 from mcprouter.generation import bump_policy
-from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule
+from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule, SkillSourceRecord
 
 router = APIRouter(prefix="/api/v1", tags=["policy"])
 
 AgentId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-]{1,120}$")]
 Operation = Literal["read", "write", "execute"]
+_DEFAULT_MAX_SKILLS = 3  # mirrors AgentPrincipal.max_skills column default
 
 
 class _Wire(BaseModel):
@@ -48,6 +49,7 @@ class PrincipalOut(_Wire):
     enabled: bool
     max_tools: int
     max_servers: int | None  # distinct-server exposure cap; None = unlimited
+    max_skills: int  # Wave 4: routed-skill exposure cap (separate from maxTools)
     created_at: datetime | None  # None only for the synthetic dev principal
 
 
@@ -65,6 +67,7 @@ class PrincipalIn(_Wire):
     agent_id: AgentId
     max_tools: int = Field(default=8, ge=1, le=64)
     max_servers: int | None = Field(default=None, ge=1, le=1000)
+    max_skills: int = Field(default=3, ge=0, le=64)
     enabled: bool = True
 
 
@@ -72,12 +75,16 @@ class PrincipalPatch(_Wire):
     max_tools: int | None = Field(default=None, ge=1, le=64)
     # Explicit null clears the cap (unlimited); omitted leaves it unchanged.
     max_servers: int | None = Field(default=None, ge=1, le=1000)
+    max_skills: int | None = Field(default=None, ge=0, le=64)
     enabled: bool | None = None
 
 
 class RuleOut(_Wire):
     id: str
     agent_id: str
+    resource_kind: (
+        str  # tool | skill (skill: serverId = skill source id, toolName = skill-name glob)
+    )
     server_id: str | None
     tool_name: str | None
     max_operation: str
@@ -87,6 +94,9 @@ class RuleOut(_Wire):
 
 class RuleIn(_Wire):
     agent_id: AgentId
+    # Immutable after create (no RulePatch field): flipping kind would silently
+    # re-target serverId from a server to a skill source.
+    resource_kind: Literal["tool", "skill"] = "tool"
     server_id: str | None = None
     tool_name: str | None = Field(default=None, min_length=1, max_length=200)
     max_operation: Operation = "read"
@@ -140,6 +150,8 @@ def _p_out(p: AgentPrincipal) -> PrincipalOut:
         enabled=p.enabled,
         max_tools=p.max_tools,
         max_servers=p.max_servers,
+        # Synthetic dev principal is transient: fall back to the column default.
+        max_skills=p.max_skills if p.max_skills is not None else _DEFAULT_MAX_SKILLS,
         created_at=p.created_at,
     )
 
@@ -148,6 +160,7 @@ def _r_out(r: PolicyRule) -> RuleOut:
     return RuleOut(
         id=r.id,
         agent_id=r.agent_id,
+        resource_kind=r.resource_kind or "tool",
         server_id=r.server_id,
         tool_name=r.tool_name,
         max_operation=r.max_operation,
@@ -177,12 +190,18 @@ def _approval_http(exc: ApprovalError) -> HTTPException:
     return HTTPException(status_code=_APPROVAL_HTTP.get(exc.code, 409), detail=exc.message)
 
 
-def _validate_rule_refs(s: Session, agent_id: str, server_id: str | None) -> None:
+def _validate_rule_refs(
+    s: Session, agent_id: str, server_id: str | None, kind: str = "tool"
+) -> None:
     if agent_id != DEV_AGENT_ID and (
         s.scalars(select(AgentPrincipal.id).where(AgentPrincipal.agent_id == agent_id)).first()
         is None
     ):
         raise HTTPException(status_code=422, detail="agentId does not name a principal")
+    if kind == "skill":
+        if server_id is not None and s.get(SkillSourceRecord, server_id) is None:
+            raise HTTPException(status_code=422, detail="serverId does not name a skill source")
+        return
     if server_id is not None and s.get(MCPServerRecord, server_id) is None:
         raise HTTPException(status_code=422, detail="serverId does not name a server")
 
@@ -208,6 +227,7 @@ def create_principal(body: PrincipalIn, request: Request) -> PrincipalCreated:
             enabled=body.enabled,
             max_tools=body.max_tools,
             max_servers=body.max_servers,
+            max_skills=body.max_skills,
         )
         s.add(p)
         try:
@@ -241,6 +261,8 @@ def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -
             p.max_tools = body.max_tools
         if "max_servers" in body.model_fields_set:
             p.max_servers = body.max_servers
+        if body.max_skills is not None:
+            p.max_skills = body.max_skills
         s.commit()
         bump_policy()  # route cache (wave 2)
         return _p_out(p)
@@ -286,9 +308,10 @@ def list_rules(
 @router.post("/policy-rules", status_code=201, response_model=RuleOut, dependencies=[Admin])
 def create_rule(body: RuleIn, request: Request) -> RuleOut:
     with _session(request) as s:
-        _validate_rule_refs(s, body.agent_id, body.server_id)
+        _validate_rule_refs(s, body.agent_id, body.server_id, body.resource_kind)
         r = PolicyRule(
             agent_id=body.agent_id,
+            resource_kind=body.resource_kind,
             server_id=body.server_id,
             tool_name=body.tool_name,
             max_operation=body.max_operation,
@@ -313,7 +336,7 @@ def patch_rule(rule_id: str, body: RulePatch, request: Request) -> RuleOut:
         r = _get_rule_row(s, rule_id)
         fields = body.model_fields_set
         if "server_id" in fields:
-            _validate_rule_refs(s, r.agent_id, body.server_id)
+            _validate_rule_refs(s, r.agent_id, body.server_id, r.resource_kind or "tool")
             r.server_id = body.server_id
         if "tool_name" in fields:
             r.tool_name = body.tool_name

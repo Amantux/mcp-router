@@ -250,7 +250,9 @@ class _IgnoresServerIds:
     def __init__(self, inner: HybridRetriever) -> None:
         self._inner = inner
 
-    def retrieve(self, query: str, *, limit: int, server_ids=None, enabled_only=True):  # noqa: ANN001,ANN201
+    def retrieve(
+        self, query: str, *, limit: int, server_ids=None, enabled_only=True, kinds=("tool",)
+    ):  # noqa: ANN001,ANN201
         return self._inner.retrieve(query, limit=limit, server_ids=None)
 
 

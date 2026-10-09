@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -63,11 +63,11 @@ from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
 from mcprouter.execution.redaction import redact
-from mcprouter.interfaces import RouteRequest, ScopeFilter, ToolCandidate
-from mcprouter.models import AgentPrincipal
+from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult, ScopeFilter, ToolCandidate
+from mcprouter.models import AgentPrincipal, SkillRecord
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.routing.pipeline import RoutePipeline
-from mcprouter.routing.retriever import ensure_keyword_index
+from mcprouter.routing.retriever import ensure_keyword_index, ensure_skill_keyword_index
 from mcprouter.routing.scope import AllowAllScope, UncachedScope
 from mcprouter.routing.servers import resolve_server_names
 from mcprouter.routing.trace import RouteTrace
@@ -100,6 +100,10 @@ class RouteBody(_Body):
     # Distinct-server budget; may only LOWER the principal/global caps.
     max_servers: int | None = Field(default=None, ge=1, le=1000)
     allowed_servers: list[ServerName] | None = Field(default=None, max_length=500)
+    # Wave 4 (S2d): skills budget (may only LOWER principal/global) and an
+    # optional NARROWING kind filter (absent = tools + skills).
+    max_skills: int | None = Field(default=None, ge=1, le=1000)
+    kinds: list[Literal["tool", "skill"]] | None = Field(default=None, min_length=1, max_length=2)
 
     @field_validator("query")
     @classmethod
@@ -126,6 +130,10 @@ class RouteBody(_Body):
         return v
 
 
+class _Wire(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+
 async def _curated_validation_error(request: Request, exc: Exception) -> Response:
     """Routing paths: 422 WITHOUT echoing input (the query may carry secrets).
     Every other path keeps FastAPI's default behaviour unchanged."""
@@ -146,9 +154,18 @@ class RoutedToolOut(BaseModel):
     score: float
 
 
+class RoutedSkillOut(_Wire):
+    # camelCase per S2d spec (bodyTokensEst), even inside the snake_case §9 body.
+    source: str
+    skill: str
+    score: float
+    body_tokens_est: int
+
+
 class RouteResponse(BaseModel):
     request_id: str
-    tools: list[RoutedToolOut]
+    tools: list[RoutedToolOut]  # MCP tools only — skills are in `skills`
+    skills: list[RoutedSkillOut]
     fallback_used: bool
     latency_ms: float
     no_match: bool
@@ -156,14 +173,51 @@ class RouteResponse(BaseModel):
     # max_servers_applied = no distinct-server cap anywhere.
     max_tools_applied: int
     max_servers_applied: int | None
+    max_skills_applied: int | None
     # Served from the route cache (authorization was re-checked on the hit).
     cached: bool
+
+
+def _route_request(
+    body: RouteBody, agent_id: str, max_tools: int, max_servers: int | None, allowed: Any
+) -> RouteRequest:
+    return RouteRequest(
+        query=redact(body.query),  # model input AND the persisted decision row
+        agent_id=agent_id,
+        max_tools=max_tools,
+        allowed_servers=allowed,
+        max_servers=max_servers,
+        max_skills=body.max_skills,
+        kinds=tuple(dict.fromkeys(body.kinds)) if body.kinds is not None else None,
+    )
+
+
+def _split(result: RouteResult) -> tuple[list[RoutedTool], list[RoutedTool]]:
+    """RouteResult.tools is one mixed rank-ordered list; split on kind."""
+    tools = [t for t in result.tools if t.kind != "skill"]
+    skills = [t for t in result.tools if t.kind == "skill"]
+    return tools, skills
+
+
+def _skill_tokens(request: Request, skills: list[RoutedTool]) -> dict[str, int]:
+    """skill id -> SkillRecord.body_tokens_est, one query (RoutedTool and the
+    route cache don't carry it)."""
+    if not skills:
+        return {}
+    with request.app.state.session_factory() as s:
+        rows = s.execute(
+            select(SkillRecord.id, SkillRecord.body_tokens_est).where(
+                SkillRecord.id.in_([t.tool_id for t in skills])
+            )
+        ).all()
+    return {sid: int(n or 0) for sid, n in rows}
 
 
 def install_routing(
     app: FastAPI, pipeline: RoutePipeline, scope_resolver: ScopeResolver | None = None
 ) -> None:
     ensure_keyword_index(app.state.engine)  # keyword-leg GIN index (idempotent)
+    ensure_skill_keyword_index(app.state.engine)  # skills twin (idempotent)
     app.state.route_pipeline = pipeline
     app.state.route_scope_resolver = scope_resolver
     if scope_resolver is None:
@@ -244,16 +298,8 @@ def route(
         requested_tools=body.max_tools,
         requested_servers=body.max_servers,
     )
-    result = pipeline.route(
-        RouteRequest(
-            query=redact(body.query),  # model input AND the persisted decision row
-            agent_id=agent_id,
-            max_tools=budgets.max_tools,
-            allowed_servers=allowed_ids,
-            max_servers=budgets.max_servers,
-        ),
-        scope,
-    )
+    route_req = _route_request(body, agent_id, budgets.max_tools, budgets.max_servers, allowed_ids)
+    result = pipeline.route(route_req, scope)
     gateway = getattr(request.app.state, "gateway", None)
     if gateway is not None:
         # Publish to the agent's MCP sessions (tools/list_changed). Sync
@@ -266,17 +312,26 @@ def route(
                 result.request_id,
                 type(exc).__name__,
             )
+    tools, skills = _split(result)
+    tokens = _skill_tokens(request, skills)
     return RouteResponse(
         request_id=result.request_id,
-        tools=[
-            RoutedToolOut(server=t.server_name, tool=t.tool_name, score=t.score)
-            for t in result.tools
+        tools=[RoutedToolOut(server=t.server_name, tool=t.tool_name, score=t.score) for t in tools],
+        skills=[
+            RoutedSkillOut(
+                source=t.server_name,
+                skill=t.tool_name,
+                score=t.score,
+                body_tokens_est=tokens.get(t.tool_id, 0),
+            )
+            for t in skills
         ],
         fallback_used=result.fallback_used,
         latency_ms=round(result.latency_ms, 3),
         no_match=result.no_match,
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
+        max_skills_applied=pipeline.skills_budget(route_req, scope).applied,
         cached=result.cached,
     )
 
@@ -285,10 +340,6 @@ def route(
 # Admin-only. camelCase on the wire (management/UI convention), unlike the
 # SPEC §9 /route response. Shape is a contract with the UI simulator:
 # docs/INTEGRATION_NOTES-wave2-budgets.md §4 — add fields, never rename.
-class _Wire(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
-
 class SimulateBody(RouteBody):
     # Required here: the admin names the agent whose scope + budgets to use.
     agent_id: str = Field(min_length=1, max_length=120)
@@ -298,10 +349,23 @@ class ToolRefOut(_Wire):
     tool_id: str
     server: str
     tool: str
+    # Wave 4: "tool" | "skill" (for a skill: toolId = skill id, server = source, tool = name).
+    kind: str = "tool"
 
 
-class SimulatedToolOut(ToolRefOut):
+class SimulatedToolOut(_Wire):
+    tool_id: str
+    server: str
+    tool: str
     score: float
+
+
+class SimulatedSkillOut(_Wire):
+    skill_id: str
+    source: str
+    skill: str
+    score: float
+    body_tokens_est: int
 
 
 class CandidateOut(ToolRefOut):
@@ -345,17 +409,19 @@ class SimulateResponse(_Wire):
     agent_id: str
     simulated: bool
     tools: list[SimulatedToolOut]
+    skills: list[SimulatedSkillOut]
     no_match: bool
     fallback_used: bool
     latency_ms: float
     model_version: str
     max_tools_applied: int
     max_servers_applied: int | None
+    max_skills_applied: int | None
     diagnostics: DiagnosticsOut
 
 
 def _ref(c: ToolCandidate) -> ToolRefOut:
-    return ToolRefOut(tool_id=c.tool_id, server=c.server_name, tool=c.tool_name)
+    return ToolRefOut(tool_id=c.tool_id, server=c.server_name, tool=c.tool_name, kind=c.kind)
 
 
 def _simulation_principal(request: Request, agent_id: str) -> AgentPrincipal:
@@ -397,17 +463,15 @@ def simulate(
         requested_servers=body.max_servers,
     )
     trace = RouteTrace()
-    result = pipeline.route(
-        RouteRequest(
-            query=redact(body.query),
-            agent_id=principal.agent_id,
-            max_tools=budgets.max_tools,
-            allowed_servers=allowed_ids,
-            max_servers=budgets.max_servers,
-        ),
-        scope,
-        trace=trace,
+    route_req = _route_request(
+        body, principal.agent_id, budgets.max_tools, budgets.max_servers, allowed_ids
     )
+    result = pipeline.route(route_req, scope, trace=trace)
+    tools, skills = _split(result)
+    tokens = _skill_tokens(request, skills)
+    # Trace carries the skills clamp when the pipeline ran the budget stage;
+    # otherwise (e.g. no candidates) compute the same clamp directly.
+    skill_clamp = trace.skill_budget or pipeline.skills_budget(route_req, scope)
     return SimulateResponse(
         request_id=result.request_id,
         agent_id=principal.agent_id,
@@ -416,7 +480,17 @@ def simulate(
             SimulatedToolOut(
                 tool_id=t.tool_id, server=t.server_name, tool=t.tool_name, score=t.score
             )
-            for t in result.tools
+            for t in tools
+        ],
+        skills=[
+            SimulatedSkillOut(
+                skill_id=t.tool_id,
+                source=t.server_name,
+                skill=t.tool_name,
+                score=t.score,
+                body_tokens_est=tokens.get(t.tool_id, 0),
+            )
+            for t in skills
         ],
         no_match=result.no_match,
         fallback_used=result.fallback_used,
@@ -424,6 +498,7 @@ def simulate(
         model_version=result.model_version,
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
+        max_skills_applied=skill_clamp.applied,
         diagnostics=DiagnosticsOut(
             candidates_considered=[
                 CandidateOut(
@@ -434,6 +509,7 @@ def simulate(
                     operation=c.operation,
                     retrieval_score=round(c.retrieval_score, 6),
                     matched_on=list(c.matched_on),
+                    kind=c.kind,
                 )
                 for c in trace.candidates
             ],
@@ -454,6 +530,7 @@ def simulate(
                     tool=pf.candidate.tool_name,
                     operation=pf.candidate.operation,
                     reason=pf.reason,
+                    kind=pf.candidate.kind,
                 )
                 for pf in trace.policy_filtered
             ],
@@ -466,7 +543,7 @@ def simulate(
                     applied=c.applied,
                     clamped_by=c.clamped_by,
                 )
-                for c in budgets.clamps
+                for c in (*budgets.clamps, skill_clamp)
             ],
         ),
     )

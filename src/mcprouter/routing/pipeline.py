@@ -68,10 +68,17 @@ from mcprouter.interfaces import (
     ScopeFilter,
     ToolCandidate,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord, RoutingDecisionRecord
-from mcprouter.routing.budgets import cap_servers
+from mcprouter.models import (
+    MCPServerRecord,
+    MCPToolRecord,
+    RoutingDecisionRecord,
+    SkillRecord,
+    SkillSourceRecord,
+)
+from mcprouter.routing.budgets import BudgetClamp, cap_servers, clamp_budget
 from mcprouter.routing.cache import CachedRoute, CachedTool, RouteCache, normalize_query
-from mcprouter.routing.retriever import eligibility_filters
+from mcprouter.routing.retriever import eligibility_filters, skill_eligibility_filters
+from mcprouter.routing.scope import principal_skill_cap
 from mcprouter.routing.trace import PolicyFiltered, RouteTrace
 from mcprouter.settings import Settings
 
@@ -92,6 +99,7 @@ NOUL_QUESTION = "Does any of these tools fit the task?"
 DOMAIN_KEEP_RATIO = 0.5
 OPERATION_MISMATCH_WEIGHT = 0.5
 MODEL_WEIGHT = 0.7  # final = MODEL_WEIGHT*relevance + (1-MODEL_WEIGHT)*retrieval
+ROUTABLE_KINDS = ("tool", "skill")
 SCOPE_OVERFETCH = 3  # retrieve extra so per-tool scope drops don't starve stage b
 _KNOWN_OPS = ("read", "write", "execute")
 _DESC_MAX = 400  # bound model input per candidate
@@ -147,11 +155,22 @@ class RoutePipeline:
         # Same clamp chain as the API (routing.budgets): the global cap still
         # applies to a RouteRequest built by any other caller.
         max_servers = _min_set(request.max_servers, self._settings.max_exposed_servers)
+        skill_clamp = self.skills_budget(request, scope)
+        max_skills = skill_clamp.applied or 0
+        kinds = _route_kinds(request)
+        if max_skills == 0:
+            # A zero skills budget retrieves no skills: no candidate slots or
+            # model questions spent on items that could never be routed.
+            kinds = tuple(k for k in kinds if k != "skill")
+        if trace is not None:
+            trace.skill_budget = skill_clamp
 
         # Route cache: may skip retrieval + model calls, NEVER authorization —
         # `_revalidate` re-runs eligibility and scope.permits on every hit.
         base_key = (
-            None if trace is not None else self._cache_key(request, scope, max_tools, max_servers)
+            None
+            if trace is not None
+            else self._cache_key(request, scope, max_tools, max_servers, max_skills, kinds)
         )
         if base_key is not None and self._cache is not None:
             # The model name is read at lookup AND at store time: an engine
@@ -178,7 +197,7 @@ class RoutePipeline:
                 # Something it held is no longer eligible/permitted: recompute.
                 self._cache.discard(key)
 
-        candidates = self._scoped_candidates(request, scope, trace)
+        candidates = self._scoped_candidates(request, scope, kinds, trace)
         fallback = False
         no_match = False
         model_version = self._model.name[:80]  # RoutingDecisionRecord.model_version
@@ -188,7 +207,7 @@ class RoutePipeline:
         else:
             try:
                 ranked, no_match = self._decide(
-                    request.query, candidates, max_tools, max_servers, trace
+                    request.query, candidates, max_tools, max_servers, max_skills, trace
                 )
             except Exception as exc:  # noqa: BLE001 — FR-06: ANY model failure => fallback
                 log.warning(
@@ -208,14 +227,14 @@ class RoutePipeline:
                         len(candidates),
                         len(ranked),
                         error=type(exc).__name__,
-                        scores={r.cand.tool_id: round(r.score, 6) for r in ranked},
+                        scores={_ckey(r.cand): round(r.score, 6) for r in ranked},
                     )
 
         # Budgets: cap DISTINCT servers in rank order first (slots freed by a
         # skipped server are back-filled from deeper ranks), then the count.
-        selected = [] if no_match else _cap(ranked, max_tools, max_servers)
+        selected = [] if no_match else _cap(ranked, max_tools, max_servers, max_skills)
         if trace is not None and not no_match:
-            _trace_budgets(trace, ranked, max_tools, max_servers)
+            _trace_budgets(trace, ranked, max_tools, max_servers, max_skills)
         # Defence in depth: re-assert scope on what is actually exposed.
         selected = [r for r in selected if scope.permits(r.cand)]
         tools = [
@@ -224,6 +243,7 @@ class RoutePipeline:
                 server_name=r.cand.server_name,
                 tool_name=r.cand.tool_name,
                 score=round(r.score, 6),
+                kind=r.cand.kind,
             )
             for r in selected
         ]
@@ -233,7 +253,7 @@ class RoutePipeline:
             self._cache.put(
                 (*base_key, self._model.name),
                 CachedRoute(
-                    tools=tuple(CachedTool(t.tool_id, t.score) for t in tools),
+                    tools=tuple(CachedTool(t.tool_id, t.score, t.kind) for t in tools),
                     no_match=no_match or not tools,
                     model_version=model_version,
                 ),
@@ -252,8 +272,24 @@ class RoutePipeline:
         )
 
     # ------------------------------------------------------------- cache
+    def skills_budget(self, request: RouteRequest, scope: ScopeFilter) -> BudgetClamp:
+        """Applied skills budget: min(request, principal, global) — a request
+        may lower, never raise. `.applied` is item 2's max_skills_applied."""
+        return clamp_budget(
+            "maxSkills",
+            request.max_skills,
+            _principal_max_skills(scope),
+            self._settings.max_exposed_skills,
+        )
+
     def _cache_key(
-        self, request: RouteRequest, scope: ScopeFilter, max_tools: int, max_servers: int | None
+        self,
+        request: RouteRequest,
+        scope: ScopeFilter,
+        max_tools: int,
+        max_servers: int | None,
+        max_skills: int,
+        kinds: tuple[str, ...],
     ) -> tuple[object, ...] | None:
         if self._cache is None:
             return None
@@ -273,6 +309,8 @@ class RoutePipeline:
             max_tools,
             max_servers,
             allowed,
+            max_skills,
+            kinds,
         )
 
     def _revalidate(
@@ -284,8 +322,22 @@ class RoutePipeline:
         operation). Returns None if any cached tool no longer passes."""
         if not hit.tools:
             return []
-        ids = [t.tool_id for t in hit.tools]
+        ids = [t.tool_id for t in hit.tools if t.kind == "tool"]
+        skill_ids = [t.tool_id for t in hit.tools if t.kind == "skill"]
         with self._factory() as s:
+            skill_rows = s.execute(
+                select(
+                    SkillRecord.id,
+                    SkillRecord.source_id,
+                    SkillRecord.name,
+                    SkillSourceRecord.name,
+                    SkillRecord.description,
+                    SkillRecord.domain,
+                    SkillRecord.operation,
+                )
+                .join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+                .where(SkillRecord.id.in_(skill_ids), *skill_eligibility_filters())
+            ).all()
             rows = s.execute(
                 select(
                     MCPToolRecord.id,
@@ -299,12 +351,13 @@ class RoutePipeline:
                 .join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
                 .where(MCPToolRecord.id.in_(ids), *eligibility_filters())
             ).all()
-        by_id = {r[0]: r for r in rows}
+        by_id = {("tool", r[0]): r for r in rows}
+        by_id.update({("skill", r[0]): r for r in skill_rows})
         server_ids = _permitted_server_ids(request, scope)
         permitted = None if server_ids is None else set(server_ids)
         out: list[RoutedTool] = []
         for ct in hit.tools:
-            row = by_id.get(ct.tool_id)
+            row = by_id.get((ct.kind, ct.tool_id))
             if row is None:
                 return None
             cand = ToolCandidate(
@@ -316,22 +369,29 @@ class RoutePipeline:
                 domain=row[5],
                 operation=row[6],
                 retrieval_score=0.0,
+                kind=ct.kind,
             )
-            if permitted is not None and cand.server_id not in permitted:
+            if ct.kind == "tool" and permitted is not None and cand.server_id not in permitted:
                 return None
             if not scope.permits(cand):
                 return None
-            out.append(RoutedTool(cand.tool_id, cand.server_name, cand.tool_name, ct.score))
+            out.append(
+                RoutedTool(cand.tool_id, cand.server_name, cand.tool_name, ct.score, ct.kind)
+            )
         return out
 
     # ----------------------------------------------------------- stage a
     def _scoped_candidates(
-        self, request: RouteRequest, scope: ScopeFilter, trace: RouteTrace | None = None
+        self,
+        request: RouteRequest,
+        scope: ScopeFilter,
+        kinds: tuple[str, ...] = ("tool",),
+        trace: RouteTrace | None = None,
     ) -> list[ToolCandidate]:
         server_ids = _permitted_server_ids(request, scope)
         limit = self._settings.retrieval_candidates
         raw = self._retriever.retrieve(
-            request.query, limit=limit * SCOPE_OVERFETCH, server_ids=server_ids
+            request.query, limit=limit * SCOPE_OVERFETCH, server_ids=server_ids, kinds=kinds
         )
         # Enforce server scope HERE too: never trust an injected Retriever to
         # honour server_ids (e.g. `if server_ids:` would read [] as "all").
@@ -339,11 +399,14 @@ class RoutePipeline:
         kept = [
             c
             for c in raw
-            if (permitted_ids is None or c.server_id in permitted_ids) and scope.permits(c)
+            if c.kind in kinds
+            # Server scope is MCP-only: a skill's server_id is its source id.
+            and (c.kind != "tool" or permitted_ids is None or c.server_id in permitted_ids)
+            and scope.permits(c)
         ]
         out = kept[:limit]
         if trace is not None:
-            self._trace_retrieval(trace, request, scope, raw, kept, out, permitted_ids)
+            self._trace_retrieval(trace, request, scope, raw, kept, out, permitted_ids, kinds)
         return out
 
     def _trace_retrieval(
@@ -355,6 +418,7 @@ class RoutePipeline:
         kept: list[ToolCandidate],
         out: list[ToolCandidate],
         permitted_ids: set[str] | None,
+        kinds: tuple[str, ...] = ("tool",),
     ) -> None:
         """Simulation only. Server-level scope is pushed into SQL, so tools on
         out-of-scope servers never reach `raw`; one extra retrieval WITHOUT
@@ -367,22 +431,23 @@ class RoutePipeline:
                 text = explain(c)
                 if isinstance(text, str) and text:
                     return text
-            if permitted_ids is not None and c.server_id not in permitted_ids:
+            if c.kind == "tool" and permitted_ids is not None and c.server_id not in permitted_ids:
                 return "server not in scope"
             return "denied by scope"
 
-        kept_ids = {c.tool_id for c in kept}
         seen: set[str] = set()
         denied: list[ToolCandidate] = []
         extra = self._retriever.retrieve(
             request.query,
             limit=self._settings.retrieval_candidates * SCOPE_OVERFETCH,
             server_ids=request.allowed_servers,
+            kinds=kinds,
         )
+        kept_ids = {_ckey(c) for c in kept}
         for c in [*raw, *extra]:
-            if c.tool_id in kept_ids or c.tool_id in seen:
+            if c.kind not in kinds or _ckey(c) in kept_ids or _ckey(c) in seen:
                 continue
-            seen.add(c.tool_id)
+            seen.add(_ckey(c))
             denied.append(c)
             trace.policy_filtered.append(PolicyFiltered(c, reason(c)))
         trace.candidates = list(out)
@@ -390,9 +455,10 @@ class RoutePipeline:
             "retrieval",
             len(raw),
             len(out),
-            [c for c in raw if c.tool_id not in kept_ids] + kept[len(out) :],
+            [c for c in raw if _ckey(c) not in kept_ids] + kept[len(out) :],
             limit=self._settings.retrieval_candidates,
             policyFiltered=len(denied),
+            **_kind_counts(raw, out),
         )
 
     # -------------------------------------------------------- stages b-e
@@ -402,6 +468,7 @@ class RoutePipeline:
         cands: list[ToolCandidate],
         max_tools: int,
         max_servers: int | None = None,
+        max_skills: int = 0,
         trace: RouteTrace | None = None,
     ) -> tuple[list[_Scored], bool]:
         m = self._model
@@ -431,14 +498,14 @@ class RoutePipeline:
                 )
 
         # c. operation (soft)
-        weights = dict.fromkeys((c.tool_id for c in cands), 1.0)
+        weights = dict.fromkeys((_ckey(c) for c in cands), 1.0)
         ops = sorted({c.operation for c in cands if c.operation in _KNOWN_OPS})
         if len(ops) > 1:
             res = m.choice(query, OPERATION_QUESTION, list(ops))
             _check_choice(res.option, res.probabilities, ops)
             for c in cands:
                 if c.operation in _KNOWN_OPS and c.operation != res.option:
-                    weights[c.tool_id] *= OPERATION_MISMATCH_WEIGHT
+                    weights[_ckey(c)] *= OPERATION_MISMATCH_WEIGHT
             if trace is not None:
                 trace.stage(
                     "operation",
@@ -469,20 +536,20 @@ class RoutePipeline:
             total = sum(probs) or 1.0
             relevance = sum(i * p for i, p in enumerate(probs)) / (top_level * total)
             blended = MODEL_WEIGHT * relevance + (1.0 - MODEL_WEIGHT) * c.retrieval_score
-            scored.append(_Scored(c, blended * weights[c.tool_id]))
+            scored.append(_Scored(c, blended * weights[_ckey(c)]))
         scored.sort(key=_rank_key)
         if trace is not None:
             trace.stage(
                 "score",
                 len(cands),
                 len(scored),
-                scores={r.cand.tool_id: round(r.score, 6) for r in scored},
+                scores={_ckey(r.cand): round(r.score, 6) for r in scored},
             )
 
         # e. no-match detection over what would actually be exposed
         shown = "\n".join(
             f"- {r.cand.server_name}/{r.cand.tool_name}: {r.cand.description[:_NOUL_DESC_MAX]}"
-            for r in _cap(scored, max_tools, max_servers)
+            for r in _cap(scored, max_tools, max_servers, max_skills)
         )
         p_yes = m.noul(query, f"{NOUL_QUESTION}\n{shown}")
         if not _is_prob(p_yes):
@@ -519,8 +586,8 @@ class RoutePipeline:
                     id=request_id,
                     agent_id=request.agent_id,
                     query=request.query,
-                    selected_tool_ids=[t.tool_id for t in tools],
-                    scores={t.tool_id: t.score for t in tools},
+                    selected_tool_ids=[_decision_id(t) for t in tools],
+                    scores={_decision_id(t): t.score for t in tools},
                     model_version=model_version,
                     fallback_used=fallback,
                     latency_ms=latency_ms,
@@ -542,8 +609,14 @@ def _permitted_server_ids(request: RouteRequest, scope: ScopeFilter) -> list[str
 
 
 def _trace_budgets(
-    trace: RouteTrace, ranked: list[_Scored], max_tools: int, max_servers: int | None
+    trace: RouteTrace,
+    ranked: list[_Scored],
+    max_tools: int,
+    max_servers: int | None,
+    max_skills: int = 0,
 ) -> None:
+    skills = [r for r in ranked if r.cand.kind == "skill"]
+    ranked = [r for r in ranked if r.cand.kind != "skill"]
     capped = cap_servers(ranked, lambda r: r.cand.server_id, max_servers)
     kept = {id(r) for r in capped}
     trace.stage(
@@ -560,10 +633,50 @@ def _trace_budgets(
         [r.cand for r in capped[max_tools:]],
         limit=max_tools,
     )
+    trace.stage(
+        "maxSkills",
+        len(skills),
+        min(len(skills), max_skills),
+        [r.cand for r in skills[max_skills:]],
+        limit=max_skills,
+    )
 
 
-def _cap(ranked: list[_Scored], max_tools: int, max_servers: int | None) -> list[_Scored]:
-    return cap_servers(ranked, lambda r: r.cand.server_id, max_servers)[:max_tools]
+def _cap(
+    ranked: list[_Scored], max_tools: int, max_servers: int | None, max_skills: int = 0
+) -> list[_Scored]:
+    """Per-kind budgets in rank order: tools via maxServers -> maxTools (MCP
+    servers only), skills via maxSkills alone; merged back in rank order."""
+    tools = [r for r in ranked if r.cand.kind != "skill"]
+    keep = {id(r) for r in cap_servers(tools, lambda r: r.cand.server_id, max_servers)[:max_tools]}
+    keep |= {id(r) for r in [r for r in ranked if r.cand.kind == "skill"][:max_skills]}
+    return [r for r in ranked if id(r) in keep]
+
+
+def _route_kinds(request: RouteRequest) -> tuple[str, ...]:
+    """Tools + skills always (settings-independent); request.kinds may narrow."""
+    want = request.kinds
+    return tuple(k for k in ROUTABLE_KINDS if want is None or k in want)
+
+
+def _principal_max_skills(scope: ScopeFilter) -> int | None:
+    return principal_skill_cap(scope)  # fail-closed resolver (routing.scope)
+
+
+def _kind_counts(raw: list[ToolCandidate], out: list[ToolCandidate]) -> dict[str, int]:
+    return {
+        f"{side}{kind.capitalize()}s": sum(1 for c in cs if c.kind == kind)
+        for side, cs in (("before", raw), ("after", out))
+        for kind in ROUTABLE_KINDS
+    }
+
+
+def _ckey(c: ToolCandidate) -> str:
+    return c.tool_id if c.kind == "tool" else f"skill:{c.tool_id}"
+
+
+def _decision_id(t: RoutedTool) -> str:
+    return t.tool_id if t.kind == "tool" else f"skill:{t.tool_id}"
 
 
 def _min_set(*values: int | None) -> int | None:
@@ -578,6 +691,10 @@ def _rank_key(r: _Scored) -> tuple[float, str, str]:
 
 def _tool_question(c: ToolCandidate) -> str:
     desc = c.description[:_DESC_MAX]
+    if c.kind == "skill":
+        return (
+            f"[skill] {SCORE_QUESTION}\nSkill: {c.server_name}/{c.tool_name}\nDescription: {desc}"
+        )
     return f"{SCORE_QUESTION}\nTool: {c.server_name}/{c.tool_name}\nDescription: {desc}"
 
 
