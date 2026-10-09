@@ -1,9 +1,14 @@
 name: release
-# On a v* tag: build and push ghcr.io/amantux/mcp-router:<tag> and :latest,
-# plus the -inference flavor (allowed to fail independently: CPU torch is large).
+# On a vX.Y.Z[suffix] tag: `verify` proves the tag is shippable (D7), then both
+# images build and push. Nothing publishes unless verify succeeds:
+#   - tag == "v" + pyproject version, top CHANGELOG heading == that version
+#   - a successful `CI` push run exists for this exact SHA on master
+#   - the SHA is an ancestor of origin/master (no releasing side branches)
+# `:latest` / `:latest-inference` move only for a plain vX.Y.Z tag.
+# Tag protection (who may push v* tags) is a repo ruleset, not this file.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 
 # Nothing at workflow level; each job declares exactly what it needs.
 permissions: {}
@@ -16,8 +21,42 @@ env:
   IMAGE: ghcr.io/amantux/mcp-router
 
 jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read  # read CI runs for this SHA
+    outputs:
+      is_release: ${{ steps.local.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag matches pyproject version and CHANGELOG
+        id: local
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          out=$(python3 .github/scripts/release_verify.py "$TAG") || { echo "$out"; exit 1; }
+          echo "$out" | tee -a "$GITHUB_OUTPUT"
+      - name: SHA is an ancestor of origin/master
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master \
+            || { echo "::error::$GITHUB_SHA is not on origin/master"; exit 1; }
+      - name: A green CI push run exists for this SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&branch=master&status=success" --jq .total_count)
+          echo "successful CI push runs for $GITHUB_SHA on master: $n"
+          test "$n" -ge 1 || { echo "::error::no green CI run on master for $GITHUB_SHA"; exit 1; }
+
   image:
     name: image
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -41,12 +80,13 @@ jobs:
           sbom: true
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
+            ${{ needs.verify.outputs.is_release == 'true' && format('{0}:latest', env.IMAGE) || '' }}
 
+  # Fails visibly (no continue-on-error): a release whose inference flavour did
+  # not ship is not a complete release.
   image-inference:
     name: image-inference
-    needs: image
-    continue-on-error: true
+    needs: [verify, image]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -67,8 +107,10 @@ jobs:
           context: .
           file: Dockerfile.inference
           push: true
+          provenance: mode=max
+          sbom: true
           build-args: |
             BASE_IMAGE=${{ env.IMAGE }}:${{ github.ref_name }}
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}-inference
-            ${{ !contains(github.ref_name, '-') && format('{0}:latest-inference', env.IMAGE) || '' }}
+            ${{ needs.verify.outputs.is_release == 'true' && format('{0}:latest-inference', env.IMAGE) || '' }}
