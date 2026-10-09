@@ -38,6 +38,7 @@ import time
 import warnings
 from typing import Any
 
+from mcprouter.execution.redaction import scrub_log
 from mcprouter.inference.errors import DecisionRuntimeError, ModelUnavailableError
 from mcprouter.interfaces import ChoiceResult, ScoreResult
 
@@ -53,8 +54,8 @@ _PARSE_ERRORS = (KeyError, TypeError, ValueError, AttributeError, IndexError)
 
 
 def _scrub(text: str) -> str:
-    """CR/LF-scrub library-supplied text before logging (log forging)."""
-    return text.replace("\r", " ").replace("\n", " ")
+    """Library-supplied text before logging: the one strong sanitiser (P-610)."""
+    return scrub_log(text)
 
 
 def _renormalise(probs: list[float]) -> list[float]:

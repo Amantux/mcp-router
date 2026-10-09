@@ -70,7 +70,7 @@ from mcprouter.registry.schema import init_registry
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever, ensure_skill_keyword_index
 from mcprouter.settings import Settings
-from mcprouter.singleton import claim_loop_owner
+from mcprouter.singleton import claim_loop_owner, release_loop_owner
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +138,7 @@ def create_app(
                 await rollups.stop()
             if loop is not None:
                 await loop.stop()
+            release_loop_owner(_app.state.engine)  # E6 P-602: next process may own
             await anyio.to_thread.run_sync(inference.unload)
 
     app = FastAPI(title="MCP Router", version=__version__, docs_url="/docs", lifespan=lifespan)

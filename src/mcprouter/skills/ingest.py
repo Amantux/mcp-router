@@ -10,6 +10,7 @@ skipped), offline (root unreadable).
 
 from __future__ import annotations
 
+import logging
 import math
 import uuid
 from datetime import UTC, datetime
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from mcprouter import generation
@@ -31,6 +33,8 @@ from mcprouter.skills.validate import (
     parse_skill_md,
 )
 from mcprouter.skills.walker import FoundSkill, walk_source
+
+log = logging.getLogger(__name__)
 
 
 def _flags(parsed: ParsedSkill, found: FoundSkill) -> list[str]:
@@ -166,4 +170,17 @@ def sync_source(
     session.flush()
     if report["added"] or report["changed"] or report["removed"]:
         generation.bump_catalog()
+        analyze_skills(session)
     return report
+
+
+def analyze_skills(session: Session) -> None:
+    """Refresh planner statistics after a bulk skill change (the skills twin of
+    discovery's ANALYZE after a catalog sync). Runs in a SAVEPOINT inside the
+    caller's transaction (ANALYZE is allowed there and counts its own
+    uncommitted rows); best effort, a failure never fails the sync."""
+    try:
+        with session.begin_nested():
+            session.execute(sa_text("ANALYZE skills, skill_versions"))
+    except Exception as exc:  # noqa: BLE001 — statistics are an optimisation only
+        log.warning("skills.analyze_failed: %s", type(exc).__name__)

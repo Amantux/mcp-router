@@ -3,8 +3,8 @@
 `~/.claude/skills`. All entry names are normalized relative paths (no zip-slip);
 hard caps on skill count, per-file size and total size.
 
-``_build_bundle`` is PRIVATE: it performs no visibility, rate-limit, policy or
-audit step. Routes must call ``SkillExposure.bundle`` (gateway/skills.py), which
+``build_bundle`` (old name ``_build_bundle`` kept as an alias) performs no
+visibility, rate-limit, policy or audit step. Routes must call ``SkillExposure.bundle`` (gateway/skills.py), which
 wraps it behind visibility -> limiter -> policy -> audit."""
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def render_skill_md(skill: SkillRecord) -> str:
     return f"---\n{head}\n---\n{skill.body or ''}"
 
 
-def _build_bundle(
+def build_bundle(
     items: Sequence[tuple[SkillRecord, SkillFiles]],
     *,
     max_skills: int = MAX_BUNDLE_SKILLS,
@@ -100,3 +100,6 @@ def _build_bundle(
                 add(zf, f"{top}/{rc.path}", data)
         add(zf, MARKER, json.dumps({"skills": names}, indent=2).encode("utf-8"))
     return buf.getvalue(), skipped
+
+
+_build_bundle = build_bundle  # old private name (gateway/skills.py)

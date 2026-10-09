@@ -13,6 +13,13 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from typing import Protocol
+
+
+class KeyedLimiter(Protocol):
+    """What consumers need: SlidingWindowLimiter and limits.SurfaceLimiter."""
+
+    def try_acquire(self, key: str) -> bool: ...
 
 
 class SlidingWindowLimiter:
@@ -39,3 +46,11 @@ class SlidingWindowLimiter:
                 return False
             q.append(now)
             return True
+
+    def is_idle(self) -> bool:
+        """True when no key has a hit inside the window (prunes expired keys)."""
+        cutoff = self._clock() - self.window_s
+        with self._lock:
+            for key in [k for k, q in self._hits.items() if not q or q[-1] <= cutoff]:
+                del self._hits[key]
+            return not self._hits

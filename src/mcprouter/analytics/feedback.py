@@ -1,7 +1,7 @@
 """Route feedback: was a surfaced tool/skill helpful? (docs/analytics.md)
 
-THE one implementation: REST (api/routes_feedback.py) calls `record_feedback`.
-The MCP meta-tool `router.feedback` is NOT wired yet; it must call this too.
+THE one implementation: REST (api/routes_feedback.py) and the MCP meta-tool
+`router.feedback` (gateway/server.py) both call `record_feedback`.
 
 Trust rules:
 * source=agent: the decision must be the caller's OWN live (non-simulated)
@@ -14,9 +14,6 @@ Trust rules:
 from __future__ import annotations
 
 import re
-import threading
-import time
-from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
@@ -24,7 +21,10 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from mcprouter.analytics._common import meta
+from mcprouter.execution.ratelimit import KeyedLimiter, SlidingWindowLimiter
 from mcprouter.execution.redaction import scrub_log
+from mcprouter.limits import FEEDBACK_LIMIT_PER_MIN
 from mcprouter.models import RouteFeedback, RoutingDecisionRecord
 
 NOTE_MAX = 500
@@ -68,26 +68,12 @@ def clean_note(note: str | None) -> str | None:
     return _BIDI.sub("", scrub_log(note.strip()))[:NOTE_MAX]
 
 
-class RateLimiter:
-    """Per-principal sliding window (in-process)."""
-
-    def __init__(self, limit: int = 30, window_s: float = 60.0) -> None:
-        self.limit, self.window_s = limit, window_s
-        self._hits: dict[str, deque[float]] = {}
-        self._lock = threading.Lock()
-
-    def check(self, principal: str) -> None:
-        now = time.monotonic()
-        with self._lock:
-            q = self._hits.setdefault(principal, deque())
-            while q and now - q[0] > self.window_s:
-                q.popleft()
-            if len(q) >= self.limit:
-                raise FeedbackRateLimited("too many feedback posts; retry in a minute")
-            q.append(now)
-
-
-LIMITER = RateLimiter()
+# The second limiter implementation is gone (P-606): feedback uses the app's
+# registry surface ``app.state.limiters.surface("feedback")`` (30/min per
+# principal), passed in by the callers. LIMITER is only the fallback for a
+# caller that passes none yet (routes_feedback / gateway until E2/E3 adopt
+# the registry); it is a plain SlidingWindowLimiter with the same budget.
+LIMITER = SlidingWindowLimiter(FEEDBACK_LIMIT_PER_MIN, 60.0)
 
 
 def _resolve(item: FeedbackItem, surfaced: list[str], names: dict[str, str]) -> str:
@@ -116,13 +102,15 @@ def record_feedback(
     source: Literal["agent", "human"],
     agent_id: str | None,
     principal: str,
-    limiter: RateLimiter = LIMITER,
+    limiter: KeyedLimiter | None = None,
 ) -> int:
     """Validate + upsert; returns rows written. agent_id is required for
     source=agent (the ownership check) and ignored for human."""
     if not items or len(items) > MAX_ITEMS:
         raise FeedbackInvalid(f"items must contain 1..{MAX_ITEMS} entries")
-    limiter.check(principal)  # before any lookup: 404 probing is rate-limited too
+    # Before any lookup: 404 probing is rate-limited too.
+    if not (LIMITER if limiter is None else limiter).try_acquire(principal):
+        raise FeedbackRateLimited("too many feedback posts; retry in a minute")
     if len(request_id) > 36:
         raise FeedbackNotFound("decision not found")
     q = select(RoutingDecisionRecord).where(
@@ -137,9 +125,8 @@ def record_feedback(
     if d is None:
         raise FeedbackNotFound("decision not found")
     surfaced = [t for t in (d.selected_tool_ids or []) if isinstance(t, str)]
-    from mcprouter.analytics.service import _meta  # local: service imports analytics
 
-    names = {t: m.name for t, m in _meta(session).items() if t in surfaced and m.name}
+    names = {t: m.name for t, m in meta(session).items() if t in surfaced and m.name}
     rows = {}
     for it in items:
         tid = _resolve(it, surfaced, names)

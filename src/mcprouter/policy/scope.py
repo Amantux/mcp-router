@@ -16,10 +16,10 @@ from collections.abc import Callable, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.api.deps_auth import (
+from mcprouter.auth.config import (
     DEV_AGENT_ID,
     SecurityConfig,
-    _dev_mode_active,
+    dev_mode_active,
     dev_principal,
 )
 from mcprouter.interfaces import ScopeFilter, ToolCandidate
@@ -130,7 +130,7 @@ def policy_scope_resolver(
                 select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
             ).one_or_none()
             if principal is None:
-                if agent_id != DEV_AGENT_ID or not _dev_mode_active(s, security):
+                if agent_id != DEV_AGENT_ID or not dev_mode_active(s, security):
                     return DenyAllScope()
                 # The synthetic dev principal has no row (dev mode only); it is
                 # still subject to deny-by-default rules.

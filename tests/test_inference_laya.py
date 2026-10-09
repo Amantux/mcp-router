@@ -230,4 +230,5 @@ def test_malformed_answers_become_curated_runtime_errors(payload: Any, call: str
 def test_load_warning_log_is_crlf_scrubbed(caplog: pytest.LogCaptureFixture) -> None:
     from mcprouter.inference.laya import _scrub
 
-    assert _scrub("a\r\nforged line\rb\n") == "a  forged line b "
+    out = _scrub("a\r\nforged line\rb\n")
+    assert "\r" not in out and "\n" not in out and "forged line" in out

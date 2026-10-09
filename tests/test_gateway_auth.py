@@ -170,9 +170,11 @@ def test_disabled_principal_cannot_authenticate(
     assert c.get("/whoami", headers={"Authorization": f"Bearer {KEY_A}"}).status_code == 401
 
 
-def test_compare_runs_over_every_principal_without_early_exit(
+def test_lookup_is_indexed_and_the_hit_is_confirmed_with_compare_digest(
     make_client: Callable[..., TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """P-607 (E6): the key hash is looked up by index (no full-table scan per
+    request) and the hit is still confirmed with compare_digest."""
     c = make_client(agent_keys=f"alice:{KEY_A},bob:{KEY_B},carol:k_{'c' * 40}")
     calls: list[int] = []
     real = hmac.compare_digest
@@ -185,7 +187,7 @@ def test_compare_runs_over_every_principal_without_early_exit(
     for key in (KEY_A, KEY_B):
         calls.clear()
         assert c.get("/whoami", headers={"Authorization": f"Bearer {key}"}).status_code == 200
-        assert len(calls) == 3
+        assert len(calls) == 1  # one hit, compared once; never one compare per principal
 
 
 # ---------------------------------------------------------------- dev mode
