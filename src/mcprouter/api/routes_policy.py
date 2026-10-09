@@ -27,6 +27,7 @@ from mcprouter.api.deps_auth import (
     get_principal,
     hash_key,
     require_admin,
+    security_of,
 )
 from mcprouter.execution.manager import ApprovalError, ApprovalView, ExecutionManager
 from mcprouter.generation import bump_policy
@@ -217,8 +218,26 @@ def list_principals(request: Request) -> list[PrincipalOut]:
         return [_p_out(p) for p in rows]
 
 
-@router.post("/principals", status_code=201, response_model=PrincipalCreated, dependencies=[Admin])
+# D11 (A1-008): in dev mode the admin API is open only while zero principals
+# exist, so creating the first one with no admin token would 403 every admin
+# route forever. Refuse instead; the setup wizard shows this message.
+FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = (
+    "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode."
+)
+
+
+@router.post(
+    "/principals",
+    status_code=201,
+    response_model=PrincipalCreated,
+    dependencies=[Admin],
+    responses={409: {"description": "agentId exists, or dev mode without MCPR_ADMIN_TOKEN"}},
+)
 def create_principal(body: PrincipalIn, request: Request) -> PrincipalCreated:
+    config, _ = security_of(request)
+    if config.admin_token_hash is None:
+        # require_admin let us through without a token => dev mode is active.
+        raise HTTPException(status_code=409, detail=FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN)
     key = generate_key()
     with _session(request) as s:
         p = AgentPrincipal(
