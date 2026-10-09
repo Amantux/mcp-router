@@ -93,13 +93,10 @@ FIXED_PORT_ALLOWLIST: dict[tuple[str, str], str] = {
     ("tests/test_backends_remote.py", "localhost:8765/v1"): "URL validation input, never dialled",
     ("tests/test_discovery_connector.py", "127.0.0.1:8600/x/mcp"): "URL parse input, never dialled",
     ("tests/test_discovery_import.py", "127.0.0.1:8600/{n}"): "registration refused first",
-    # TODO(integrator): E3 migrates these (test_gateway_*/test_edge_* fence);
-    # delete the four rows once that lands. Until then they run as e2e
-    # modules pinned to one xdist worker each (xdist_group, --dist loadgroup).
-    ("tests/test_gateway_mcp.py", "127.0.0.1:8641"): "E3 fence (docstring)",
-    ("tests/test_gateway_mcp.py", "PORT = 8641"): "E3 fence",
-    ("tests/test_gateway_skills_e2e.py", "PORT = 8803"): "E3 fence",
-    ("tests/test_edge_roundtrip.py", "PORT_A, PORT_LOOP = 8761, 8762"): "E3 fence",
+    (
+        "tests/test_host_guard.py",
+        '"127.0.0.1:8400", "[::1]:9"',
+    ): "Host header values, nothing binds",
 }
 
 

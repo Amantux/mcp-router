@@ -14,7 +14,7 @@ from mcprouter import settings as settings_mod
 from mcprouter.inference.engine import DECISION_BACKENDS, EMBEDDING_BACKENDS, MODE_CONCURRENCY
 from mcprouter.inference.laya import NOUL_MODES
 from mcprouter.settings import ENV_ONLY_SPEC, SETTINGS_SPEC, Settings
-from tests.test_compose_contract import COMPOSE_FILES, NON_ROUTER_COMPOSE, registry_vars
+from tests.support.compose import COMPOSE_FILES, NON_ROUTER_COMPOSE, registry_vars
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / ".env.example"
