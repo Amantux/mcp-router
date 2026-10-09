@@ -63,12 +63,17 @@ def list_skills(
     domain: str | None = None,
     operation: str | None = None,
     source: str | None = None,
+    source_id: str | None = Query(default=None, alias="sourceId"),  # D13: the UI's name
+    has_scripts: bool | None = Query(default=None, alias="hasScripts"),  # D13
     enabled: bool | None = None,
     available: bool | None = None,
     reviewed: bool | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
+    if source is not None and source_id is not None and source != source_id:
+        raise HTTPException(422, "source and sourceId disagree; pass one of them")
+    source = source if source is not None else source_id
     stmt = select(SkillRecord)
     if q:
         like = "%" + q.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"
@@ -80,6 +85,7 @@ def list_skills(
         (SkillRecord.enabled, enabled),
         (SkillRecord.available, available),
         (SkillRecord.classification_reviewed, reviewed),
+        (SkillRecord.has_scripts, has_scripts),
     ):
         if val is not None:
             stmt = stmt.where(col == val)
