@@ -72,9 +72,15 @@ def test_max_skills_lowers_but_cannot_raise(env: dict[str, Any]) -> None:
     low = _route(env, max_skills=1).json()
     assert low["max_skills_applied"] == 1
     assert len(low["skills"]) == 1
-    high = _route(env, maxSkills=50).json()  # camelCase alias; principal/global cap is 3
-    assert high["max_skills_applied"] == 3
-    assert len(high["skills"]) == 2
+    # Principal cap (1) below the global cap (3): a request of 50 must land on
+    # the principal's 1, so neither ceiling can be the one silently skipped.
+    principals = env["admin"].get("/api/v1/principals").json()
+    pid = next(p["id"] for p in principals if p["agentId"] == "sk")
+    r = env["admin"].patch(f"/api/v1/principals/{pid}", json={"maxSkills": 1})
+    assert r.status_code == 200, r.text
+    high = _route(env, maxSkills=50).json()  # camelCase alias
+    assert high["max_skills_applied"] == 1
+    assert len(high["skills"]) == 1
 
 
 def test_kinds_narrow(env: dict[str, Any]) -> None:

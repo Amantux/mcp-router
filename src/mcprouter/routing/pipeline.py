@@ -158,6 +158,10 @@ class RoutePipeline:
         skill_clamp = self.skills_budget(request, scope)
         max_skills = skill_clamp.applied or 0
         kinds = _route_kinds(request)
+        if max_skills == 0:
+            # A zero skills budget retrieves no skills: no candidate slots or
+            # model questions spent on items that could never be routed.
+            kinds = tuple(k for k in kinds if k != "skill")
         if trace is not None:
             trace.skill_budget = skill_clamp
 
@@ -223,7 +227,7 @@ class RoutePipeline:
                         len(candidates),
                         len(ranked),
                         error=type(exc).__name__,
-                        scores={r.cand.tool_id: round(r.score, 6) for r in ranked},
+                        scores={_ckey(r.cand): round(r.score, 6) for r in ranked},
                     )
 
         # Budgets: cap DISTINCT servers in rank order first (slots freed by a
@@ -494,14 +498,14 @@ class RoutePipeline:
                 )
 
         # c. operation (soft)
-        weights = dict.fromkeys((c.tool_id for c in cands), 1.0)
+        weights = dict.fromkeys((_ckey(c) for c in cands), 1.0)
         ops = sorted({c.operation for c in cands if c.operation in _KNOWN_OPS})
         if len(ops) > 1:
             res = m.choice(query, OPERATION_QUESTION, list(ops))
             _check_choice(res.option, res.probabilities, ops)
             for c in cands:
                 if c.operation in _KNOWN_OPS and c.operation != res.option:
-                    weights[c.tool_id] *= OPERATION_MISMATCH_WEIGHT
+                    weights[_ckey(c)] *= OPERATION_MISMATCH_WEIGHT
             if trace is not None:
                 trace.stage(
                     "operation",
@@ -532,14 +536,14 @@ class RoutePipeline:
             total = sum(probs) or 1.0
             relevance = sum(i * p for i, p in enumerate(probs)) / (top_level * total)
             blended = MODEL_WEIGHT * relevance + (1.0 - MODEL_WEIGHT) * c.retrieval_score
-            scored.append(_Scored(c, blended * weights[c.tool_id]))
+            scored.append(_Scored(c, blended * weights[_ckey(c)]))
         scored.sort(key=_rank_key)
         if trace is not None:
             trace.stage(
                 "score",
                 len(cands),
                 len(scored),
-                scores={r.cand.tool_id: round(r.score, 6) for r in scored},
+                scores={_ckey(r.cand): round(r.score, 6) for r in scored},
             )
 
         # e. no-match detection over what would actually be exposed

@@ -140,7 +140,18 @@ def test_cache_hit_drops_revoked_skill(world: dict[str, Any]) -> None:
     first = pipe.route(RouteRequest(Q, "a", 4), scope)
     assert "pdf-fill" in _kinds(first)["skill"]
     scope.allowed.discard("pdf-fill")  # skill rule revoked; fingerprint unchanged
+    seen: list[Any] = []
+    real = pipe._revalidate
+
+    def spy(*a: Any) -> Any:
+        seen.append(out := real(*a))
+        return out
+
+    pipe._revalidate = spy
     second = pipe.route(RouteRequest(Q, "a", 4), scope)
+    # The second route HIT the cache and revalidation rejected it (a miss would
+    # never call _revalidate, so this cannot pass by recomputing from scratch).
+    assert seen == [None]
     assert "pdf-fill" not in _kinds(second)["skill"]
 
 
@@ -209,3 +220,56 @@ def test_undeterminable_principal_budget_fails_closed(world: dict[str, Any]) -> 
     res = world["pipe"].route(RouteRequest(Q, "a", 4), OpaqueScope())
     assert _kinds(res)["skill"] == set()  # never the global cap
     assert _kinds(res)["tool"]  # tools still route
+
+
+def _stage(trace: RouteTrace, name: str) -> Any:
+    return next(st for st in trace.stages if st.stage == name)
+
+
+def _assert_kind_keyed(trace: RouteTrace, scores: dict[str, float]) -> None:
+    skill_ids = {c.tool_id for c in trace.candidates if c.kind == "skill"}
+    assert skill_ids  # the fixture's skills reached the scored set
+    assert all(f"skill:{sid}" in scores and sid not in scores for sid in skill_ids)
+
+
+@requires_db
+def test_trace_score_keys_match_decision_ids(world: dict[str, Any]) -> None:
+    trace = RouteTrace()
+    world["pipe"].route(RouteRequest(Q, "a", 4), AllowAllScope(), trace=trace)
+    scores = _stage(trace, "score").detail["scores"]
+    _assert_kind_keyed(trace, scores)
+
+
+@requires_db
+def test_fallback_trace_score_keys_match_decision_ids(world: dict[str, Any]) -> None:
+    def boom(*_: Any) -> Any:
+        raise RuntimeError("model down")
+
+    world["model"].score_fn = boom
+    world["model"].choice_fn = boom
+    trace = RouteTrace()
+    res = world["pipe"].route(RouteRequest(Q, "a", 4), AllowAllScope(), trace=trace)
+    assert res.fallback_used
+    scores = _stage(trace, "fallback").detail["scores"]
+    _assert_kind_keyed(trace, scores)
+
+
+@dataclass
+class KindsSpy:
+    inner: Any
+    kinds: list[tuple[str, ...]] = field(default_factory=list)
+
+    def retrieve(self, query: str, **kw: Any) -> Any:
+        self.kinds.append(tuple(kw.get("kinds", ())))
+        return self.inner.retrieve(query, **kw)
+
+
+@requires_db
+def test_zero_skills_budget_does_not_retrieve_skills(world: dict[str, Any]) -> None:
+    pipe = world["pipe"]
+    spy = KindsSpy(pipe._retriever)
+    pipe._retriever = spy
+    res = pipe.route(RouteRequest(Q, "a", 4), NamedScope(allowed=set(ALL), max_skills=0))
+    assert spy.kinds == [("tool",)]
+    assert _kinds(res)["skill"] == set()
+    assert not any("skill" in str(c[3]) for c in world["model"].calls)
