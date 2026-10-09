@@ -105,9 +105,12 @@ jobs:
           pgpw=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
           echo "::add-mask::$admin"; echo "::add-mask::$agent"; echo "::add-mask::$pgpw"
           cp .env.example .env
-          # Compose's hash/deterministic defaults override the image's bge/laya
-          # ENV: this smokes the inference image on its fallback path.
-          printf 'MCPR_ADMIN_TOKEN=%s\nMCPR_AGENT_KEYS=smoke:%s\nMCPR_HOST_PORT=8450\nPOSTGRES_PASSWORD=%s\nMCPR_IMAGE=mcp-router:local-inference\n' \
+          # The inference image's ENV selects bge/laya; compose loads .env via
+          # env_file, so the zero-ML fallback has to be requested explicitly.
+          # This job smokes the inference image on its fallback path (no model
+          # cache on the runner); the models themselves are exercised by the
+          # slow lane above.
+          printf 'MCPR_ADMIN_TOKEN=%s\nMCPR_AGENT_KEYS=smoke:%s\nMCPR_HOST_PORT=8450\nPOSTGRES_PASSWORD=%s\nMCPR_IMAGE=mcp-router:local-inference\nMCPR_DECISION_BACKEND=deterministic\nMCPR_EMBEDDING_BACKEND=hash\n' \
             "$admin" "$agent" "$pgpw" >> .env
           echo "MCPR_ADMIN_TOKEN=$admin" >> "$GITHUB_ENV"
           echo "MCPR_AGENT_KEY=$agent" >> "$GITHUB_ENV"
