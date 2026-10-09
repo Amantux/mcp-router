@@ -230,3 +230,116 @@ camelCase `bodyTokensEst` as specified):
   - Analytics (`economy.py:63` `bool_and(tool_id = ANY(known))`, staleness, funnel)
     treat `skill:<id>` decision ids as stale/unknown tools — the analytics lane must
     handle the prefix.
+
+## S2c (wave4/routing-analytics) — embeddings, eval; dedup/analytics BLOCKED
+Done:
+- `inference.pipeline.embed_pending_skills(session, backend)` -> `EmbedReport`.
+  Text = `canonical_skill_text(name, description, body)` =
+  `"name: description\n" + body[:1024]`. Same recompute/backend/optimistic
+  `updated_at` rules as tools; caller commits. Not yet wired into any job/route
+  (whoever owns the refresh job calls it next to `embed_pending_tools`).
+- Eval: JSONL gains `expected_skills` (ranked skill NAMES, matched on
+  `RoutedTool.tool_name` where `kind == "skill"`) and `kinds` (subset of
+  tool/skill, derived when omitted). `CaseOutcome.returned` is now tools-only;
+  `returned_skills` holds skill names. Metrics: `skills: {positive_cases,
+  top1_accuracy, top5_recall}`, `mixed: {cases, both_top1_rate}`. Case rows gain
+  `expected_skills`/`returned_skills`.
+BLOCKER (schema, needs a decision — outside the S2c fence):
+`duplicate_suggestions.tool_a_id/tool_b_id/preferred_tool_id` and
+`tool_stats_daily.tool_id` are `VARCHAR(36)` (verified in the live DB). The
+fixed convention `"skill:<uuid>"` is 42 chars, so cross-kind/skill dedup rows and
+skill rollup rows cannot be stored as planned; "rollups need no schema change"
+does not hold. Smallest fix: widen those four columns to VARCHAR(48) in
+models.py and add idempotent `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(48)`
+lines to db.py's upgrade list (widening varchar is metadata-only in PG). Alt:
+add a `kind` column and keep ids bare (bigger, touches every reader).
+Not done: dedup skill pairs/cross-kind + review kindA/kindB; analytics funnel/
+economy/profiles/`kind` filter/overview `skills`; 20 skill + 10 mixed synthetic
+cases + skills fixture in eval/synthetic_catalog.py.
+
+## S2f — skills in analytics (wave4/skills-analytics)
+
+Funnel ids are **kind-keyed**: a tool is its bare tool id, a skill is
+`"skill:<SkillRecord.id>"` — exactly the string the router writes into
+`RoutingDecisionRecord.selected_tool_ids`, so rank = 1-based position in that
+array for both kinds. `service.kind_of(id)` / `service.SKILL_PREFIX` are the
+one place the prefix is interpreted.
+
+- **Activation** (`funnel.ATT_CTE`, shared by funnel, position curve,
+  co-surfacing, pair evidence, profiles, rollups): an `ExecutionRecord` with
+  `resource_kind="skill"` contributes key `"skill:" || skill_id`; any other row
+  contributes its bare `tool_id`, *unless* that tool_id starts with `skill:`
+  (dropped — a tool-kind row can never forge a skill activation, and a skill
+  row never credits a bare id). The existing same-agent ownership join and
+  `outcome <> 'started'` apply unchanged; NULL `route_request_id` never counts.
+  `simulated/` decisions stay excluded via `SURF_CTE`.
+- **Rollups**: `tool_stats_daily.tool_id` (48 wide) stores `"skill:<id>"`
+  rows; rollup/live merge treats both kinds alike (tested: merged == live on a
+  mixed day; recompute is idempotent).
+- **Wire** (`ToolFunnelOut`, used by `/analytics/tools` items, `/tools/{id}`
+  `.tool`): new field `kind: "tool" | "skill"`. For skills, `toolName` = skill
+  name, `serverName` = skill **source** name, `enabled` = source `enabled`;
+  `tokens` is `null` (skill token economy not yet wired — see below).
+- **`GET /analytics/tools?kind=tool|skill|all`** (default `all`; anything else
+  422). `all` lists catalog tools + catalog skills (zero rows included) + any
+  removed id with funnel data.
+- **`GET /analytics/tools/{id}`** accepts `skill:<id>` (path max_length 42);
+  unknown skill → 404 like tools. Position curve + co-surfacing are kind-blind,
+  so skills appear in tools' co-surfaced lists (with `toolName`/`serverName`
+  resolved) and vice versa.
+- **Profiles**: per-agent `attributed`/selection counts include skill
+  activations via the shared ATT_CTE (no separate skill columns yet).
+
+**Not done in S2f (deferred):** economy (`skillMetadataTokens`,
+`skillBodyTokensExposed`, overview `skills{...}`), per-agent skill
+activationRate, skill staleness, `kind` on wasted-exposure suggestions,
+`mcpr_analytics_skills_{surfaced,activated}_total` counters.
+
+**Known gap (pre-existing, not introduced by S2f; reviewer finding):**
+`economy._DEC_CTE` counts a decision as complete only when every surfaced id
+is in `tool_token_map`. Skill ids never are, so any decision that surfaces a
+skill drops out of the context economy and is counted in
+`staleRefDecisions`. On mixed traffic the economy undercounts and shows false
+drift until the economy item treats `skill:` ids as known.
+
+**Rollup backfill:** days rolled up before this change keep skill
+`selected=0`. Recompute them (`POST /analytics/rollup`) to pick up skill
+activations.
+
+**Metrics:** `mcpr_analytics_tools_{selected,succeeded}` now include skill
+activations, as `surfaced` already did. Their help text still says "Tool".
+
+## S2h — skills economy + overview (wave4/skills-analytics)
+
+Fixes the S2f known gap: `economy._DEC_CTE` now treats `"skill:<id>"` ids of
+skills still in the catalog as known, so decisions surfacing a skill are
+priced, not `staleRefDecisions`. A `skill:` id for a deleted skill is still stale.
+
+**Pricing** (`analytics/economy.py`, `tokens.skill_metadata_tokens`): a surfaced
+skill costs its metadata (chars/4 over compact JSON `{name, description}`); its
+body (`SkillRecord.body_tokens_est`) is exposed ONLY if the skill has an
+attributed activation (`funnel.ATT_CTE`) on that same decision. The catalog
+counterfactual adds the metadata of every skill the agent is CURRENTLY
+authorized for (`evaluate_skill`, enabled+available skills on enabled sources)
+— same current-scope approximation/bias as tools. Skill fields are 0 for
+unscored agents (no rules), like `exposedTokens`.
+
+**Wire additions** (camelCase):
+- `contextEconomy` (overview + per-agent): `skillMetadataTokens`,
+  `skillBodyTokensExposed` (both already inside `exposedTokens`),
+  `skillBodyTokensNotSent` (surfaced-not-activated bodies; NOT in exposed/catalog).
+- `GET /analytics/overview`: `skills: {surfaced, activated, activationRate,
+  bodyTokensNotSent}` — (decision, skill) pairs; `bodyTokensNotSent` ==
+  `contextEconomy.skillBodyTokensNotSent`.
+- Agent profiles: `skillsSurfaced`, `skillsActivated`, `skillActivationRate`
+  (subsets of `surfaced`/`selected`).
+- Wasted-exposure suggestion rows and tool-detail `coSurfaced` rows: `kind:
+  "tool" | "skill"`.
+
+**Metrics:** new `mcpr_analytics_skills_surfaced_total`,
+`mcpr_analytics_skills_activated_total` on the SAME single collector (no new
+registration). Decision: the `tools_*` counters stay kind-blind (tools AND
+skills); their help text now says so; `skills_*` are subsets.
+
+**Deferred:** staleness rows for never-surfaced skills (`kind` on stale rows) —
+not done in S2h (context budget).

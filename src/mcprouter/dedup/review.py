@@ -20,7 +20,15 @@ from sqlalchemy.orm import Session
 
 from mcprouter.analytics.funnel import merged_funnel, pair_evidence
 from mcprouter.analytics.window import parse_window
-from mcprouter.models import DuplicateSuggestion, MCPServerRecord, MCPToolRecord, utcnow
+from mcprouter.dedup.detect import SKILL_PREFIX
+from mcprouter.models import (
+    DuplicateSuggestion,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillRecord,
+    SkillSourceRecord,
+    utcnow,
+)
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.errors import InvalidArgument, InvalidTransition, SuggestionNotFound
@@ -112,8 +120,12 @@ def _usage_evidence(
 
 
 def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, SuggestionToolRef]:
-    tool_ids = {r.tool_a_id for r in rows} | {r.tool_b_id for r in rows}
-    return {
+    """Resolve both kinds: bare ids are tools (serverName = server), "skill:<id>"
+    refs are skills (serverName = skill source name; id keeps the prefix)."""
+    refs = {r.tool_a_id for r in rows} | {r.tool_b_id for r in rows}
+    tool_ids = {x for x in refs if not x.startswith(SKILL_PREFIX)}
+    skill_ids = {x[len(SKILL_PREFIX) :] for x in refs if x.startswith(SKILL_PREFIX)}
+    out = {
         tid: SuggestionToolRef(id=tid, name=name, server_name=srv, enabled=enabled)
         for tid, name, srv, enabled in session.execute(
             select(
@@ -123,6 +135,15 @@ def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, S
             .where(MCPToolRecord.id.in_(tool_ids))
         ).all()
     }
+    if skill_ids:
+        for sid, name, src, enabled in session.execute(
+            select(SkillRecord.id, SkillRecord.name, SkillSourceRecord.name, SkillRecord.enabled)
+            .join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+            .where(SkillRecord.id.in_(skill_ids))
+        ).all():
+            ref = f"{SKILL_PREFIX}{sid}"
+            out[ref] = SuggestionToolRef(id=ref, name=name, server_name=src, enabled=enabled)
+    return out
 
 
 def to_out(session: Session, sug: DuplicateSuggestion) -> SuggestionOut:

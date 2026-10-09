@@ -67,7 +67,7 @@ surf AS (
 # Attributed (decision, tool) pairs for decisions in `surf`.
 ATT_CTE = """
 att AS (
-    SELECT x.route_request_id AS decision_id, x.tool_id,
+    SELECT x.route_request_id AS decision_id, k.tool_id,
            bool_or(x.outcome = 'ok') AS any_ok,
            bool_or(x.outcome IN ('error', 'timeout')) AS any_fail
     FROM execution_records x
@@ -75,9 +75,17 @@ att AS (
     -- an id-shaped string naming another agent's decision is ignored.
     JOIN (SELECT DISTINCT decision_id, agent_id FROM surf) own
       ON own.decision_id = x.route_request_id AND own.agent_id = x.agent_id
-    WHERE x.tool_id IS NOT NULL
+    -- Kind-keyed funnel id: a skill activation is "skill:<skill_id>" (the
+    -- id the router writes into selected_tool_ids); a tool execution is its
+    -- bare tool_id. A tool row spelled "skill:..." never becomes a skill
+    -- activation, and a skill row never credits a bare (tool) id.
+    CROSS JOIN LATERAL (SELECT CASE
+        WHEN x.resource_kind = 'skill' THEN 'skill:' || x.skill_id
+        WHEN NOT starts_with(x.tool_id, 'skill:') THEN x.tool_id
+    END AS tool_id) k
+    WHERE k.tool_id IS NOT NULL
       AND x.outcome <> 'started'
-    GROUP BY x.route_request_id, x.tool_id
+    GROUP BY x.route_request_id, k.tool_id
 )"""
 
 _FUNNEL_SQL = text(

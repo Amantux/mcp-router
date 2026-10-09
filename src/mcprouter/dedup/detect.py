@@ -37,7 +37,13 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from mcprouter.models import DuplicateSuggestion, MCPServerRecord, MCPToolRecord, utcnow
+from mcprouter.models import (
+    DuplicateSuggestion,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillRecord,
+    utcnow,
+)
 from mcprouter.registry.classify import split_identifier
 from mcprouter.registry.errors import InvalidArgument
 from mcprouter.registry.wire import success_rate
@@ -153,8 +159,9 @@ def run_dedup(session: Session, *, threshold: float = DEFAULT_THRESHOLD) -> Dedu
         raise InvalidArgument(f"threshold must be between {MIN_THRESHOLD} and 1.0.")
     cos_floor = (threshold - (W_NAME + W_SCHEMA)) / W_COSINE
     rows = session.execute(_CANDIDATES_SQL, {"cos_floor": cos_floor}).all()
+    skill_run = _run_skill_dedup(session, threshold)
     if not rows:
-        return DedupRun(0, 0, 0, 0)
+        return skill_run
 
     ids = {r.a_id for r in rows} | {r.b_id for r in rows}
     tools = {
@@ -211,5 +218,123 @@ def run_dedup(session: Session, *, threshold: float = DEFAULT_THRESHOLD) -> Dedu
         created += int(res.scalar_one_or_none() is not None)
     session.flush()
     return DedupRun(
-        pairs_considered=len(rows), created=created, refreshed=refreshed, skipped_decided=decided
+        pairs_considered=len(rows) + skill_run.pairs_considered,
+        created=created + skill_run.created,
+        refreshed=refreshed + skill_run.refreshed,
+        skipped_decided=decided + skill_run.skipped_decided,
     )
+
+
+# ------------------------------------------------------------------ skills
+# Wave-4: skills share the suggestion table; a skill side is "skill:<uuid>".
+# skill<->skill: combined = 0.6*cosine + 0.2*name-token Jaccard
+#   + 0.2*Jaccard(allowed-tools ∪ {"kind:"+resource kind}) — same weights as
+#   tools, with allowed-tools/resource kinds standing in for input properties.
+# skill<->tool (cross-kind): same domain + same embedding backend and cosine
+#   >= threshold alone (names/schemas are not comparable across kinds).
+#   tool_a_id = bare tool id, tool_b_id = "skill:<id>", rationale "cross-kind:".
+# Suggestions are advisory only: accept/dismiss never touch `enabled`.
+SKILL_PREFIX = "skill:"
+
+_SKILL_PAIRS_SQL = text(
+    """
+    SELECT a.id AS a_id, b.id AS b_id, 1 - (a.embedding <=> b.embedding) AS cosine
+    FROM skills a JOIN skills b
+      ON a.domain = b.domain AND a.id < b.id AND a.embedding_backend = b.embedding_backend
+    WHERE a.domain IS NOT NULL
+      AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
+      AND vector_norm(a.embedding) > 0 AND vector_norm(b.embedding) > 0
+      AND 1 - (a.embedding <=> b.embedding) >= :cos_floor
+    """
+)
+
+_CROSS_SQL = text(
+    """
+    SELECT t.id AS t_id, k.id AS k_id, 1 - (t.embedding <=> k.embedding) AS cosine
+    FROM mcp_tools t JOIN skills k
+      ON t.domain = k.domain AND t.embedding_backend = k.embedding_backend
+    WHERE t.domain IS NOT NULL
+      AND t.embedding IS NOT NULL AND k.embedding IS NOT NULL
+      AND vector_norm(t.embedding) > 0 AND vector_norm(k.embedding) > 0
+      AND 1 - (t.embedding <=> k.embedding) >= :threshold
+    """
+)
+
+
+def skill_ref(skill_id: str) -> str:
+    return f"{SKILL_PREFIX}{skill_id}"
+
+
+def _skill_traits(sk: SkillRecord) -> set[str]:
+    kinds = {f"kind:{e.get('kind')}" for e in (sk.resource_manifest or []) if isinstance(e, dict)}
+    return {str(t).lower() for t in (sk.allowed_tools or [])} | kinds
+
+
+def score_skill_pair(a: SkillRecord, b: SkillRecord, cosine: float) -> float:
+    nj = jaccard(set(split_identifier(a.name)), set(split_identifier(b.name)))
+    return W_COSINE * cosine + W_NAME * nj + W_SCHEMA * jaccard(_skill_traits(a), _skill_traits(b))
+
+
+def _upsert(
+    session: Session, a_ref: str, b_ref: str, combined: float, rationale: str, counts: list[int]
+) -> None:
+    """counts = [created, refreshed, decided]; never touches either side's state."""
+    prior = session.scalars(
+        select(DuplicateSuggestion).where(
+            DuplicateSuggestion.tool_a_id == a_ref, DuplicateSuggestion.tool_b_id == b_ref
+        )
+    ).first()
+    if prior is not None:
+        if prior.status == "open":
+            prior.similarity, prior.rationale = combined, rationale
+            counts[1] += 1
+        else:
+            counts[2] += 1
+        return
+    res = session.execute(
+        insert(DuplicateSuggestion)
+        .values(
+            id=str(uuid.uuid4()),
+            tool_a_id=a_ref,
+            tool_b_id=b_ref,
+            similarity=combined,
+            rationale=rationale,
+            preferred_tool_id=None,
+            status="open",
+            created_at=utcnow(),
+        )
+        .on_conflict_do_nothing(index_elements=["tool_a_id", "tool_b_id"])
+        .returning(DuplicateSuggestion.id)
+    )
+    counts[0] += int(res.scalar_one_or_none() is not None)
+
+
+def _run_skill_dedup(session: Session, threshold: float) -> DedupRun:
+    cos_floor = (threshold - (W_NAME + W_SCHEMA)) / W_COSINE
+    pairs = session.execute(_SKILL_PAIRS_SQL, {"cos_floor": cos_floor}).all()
+    cross = session.execute(_CROSS_SQL, {"threshold": threshold}).all()
+    ids = {r.a_id for r in pairs} | {r.b_id for r in pairs} | {r.k_id for r in cross}
+    skills = {k.id: k for k in session.scalars(select(SkillRecord).where(SkillRecord.id.in_(ids)))}
+    counts = [0, 0, 0]
+    for r in pairs:
+        a, b = skills[r.a_id], skills[r.b_id]
+        combined = score_skill_pair(a, b, float(r.cosine))
+        if combined < threshold:
+            continue
+        a_ref, b_ref = sorted([skill_ref(a.id), skill_ref(b.id)])
+        why = (
+            f"skill pair: embedding cosine {float(r.cosine):.2f} ({a.embedding_backend}); "
+            f"same domain '{a.domain}'; combined {combined:.2f} = {W_COSINE}*cos + "
+            f"{W_NAME}*name + {W_SCHEMA}*allowed-tools/resource-kinds; "
+            "no preferred skill: insufficient evidence."
+        )
+        _upsert(session, a_ref, b_ref, combined, why, counts)
+    for r in cross:
+        k = skills[r.k_id]
+        why = (
+            f"cross-kind: tool and skill in domain '{k.domain}' with embedding cosine "
+            f"{float(r.cosine):.2f} — a skill may wrap or duplicate this tool."
+        )
+        _upsert(session, r.t_id, skill_ref(k.id), float(r.cosine), why, counts)
+    session.flush()
+    return DedupRun(len(pairs) + len(cross), counts[0], counts[1], counts[2])

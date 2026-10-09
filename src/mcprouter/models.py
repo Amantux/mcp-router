@@ -226,7 +226,7 @@ class ToolStatsDaily(Base):
 
     __tablename__ = "tool_stats_daily"
 
-    tool_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tool_id: Mapped[str] = mapped_column(String(48), primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
     surfaced: Mapped[int] = mapped_column(Integer, default=0)
     selected: Mapped[int] = mapped_column(Integer, default=0)
@@ -243,11 +243,11 @@ class DuplicateSuggestion(Base):
     __tablename__ = "duplicate_suggestions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tool_a_id: Mapped[str] = mapped_column(String(36), index=True)
-    tool_b_id: Mapped[str] = mapped_column(String(36), index=True)
+    tool_a_id: Mapped[str] = mapped_column(String(48), index=True)
+    tool_b_id: Mapped[str] = mapped_column(String(48), index=True)
     similarity: Mapped[float] = mapped_column(Float)
     rationale: Mapped[str] = mapped_column(Text, default="")
-    preferred_tool_id: Mapped[str | None] = mapped_column(String(36))
+    preferred_tool_id: Mapped[str | None] = mapped_column(String(48))
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|accepted|dismissed
     resolved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

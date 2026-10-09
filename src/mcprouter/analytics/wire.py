@@ -4,6 +4,7 @@ docs/INTEGRATION_NOTES-wave2-analytics.md for the UI track)."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -29,6 +30,9 @@ class EconomyOut(Wire):
     tokens_not_sent: int
     savings: float | None
     catalog_tokens_per_decision: int | None = None
+    skill_metadata_tokens: int = 0
+    skill_body_tokens_exposed: int = 0
+    skill_body_tokens_not_sent: int = 0
     estimator: str
     catalog_basis: str
 
@@ -68,6 +72,13 @@ class RankPointOut(Wire):
     rate: float | None
 
 
+class SkillsOverviewOut(Wire):
+    surfaced: int  # (decision, skill) pairs surfaced
+    activated: int  # of those, activated on that decision (attributed)
+    activation_rate: float | None
+    body_tokens_not_sent: int  # = contextEconomy.skillBodyTokensNotSent
+
+
 class OverviewOut(Wire):
     window: WindowOut
     context_economy: EconomyOut
@@ -76,10 +87,12 @@ class OverviewOut(Wire):
     executions: ExecutionsOut
     position_curve: list[RankPointOut]
     catalog_drift: dict[str, int]
+    skills: SkillsOverviewOut
 
 
 class ToolFunnelOut(Wire):
-    tool_id: str
+    tool_id: str  # tool id, or "skill:<skill id>" for a skill
+    kind: Literal["tool", "skill"]  # from the id prefix; skills: name=skill, server=source
     tool_name: str | None  # None: tool no longer in the catalog
     server_name: str | None
     enabled: bool | None
@@ -104,6 +117,7 @@ class ToolFunnelPageOut(Wire):
 
 class CoSurfacedOut(Wire):
     tool_id: str
+    kind: Literal["tool", "skill"]
     tool_name: str | None
     server_name: str | None
     co_surfaced: int
@@ -134,6 +148,9 @@ class AgentProfileOut(Wire):
     attribution_coverage: float | None
     surfaced: int
     selected: int
+    skills_surfaced: int
+    skills_activated: int
+    skill_activation_rate: float | None
     selection_rate: float | None
     avg_surfaced_per_decision: float | None
     budget_tools: int | None = None  # not persisted per decision yet
@@ -148,6 +165,7 @@ class AgentPageOut(Wire):
 
 class WastedOut(Wire):
     tool_id: str
+    kind: Literal["tool", "skill"]
     tool_name: str | None
     server_name: str | None
     surfaced: int

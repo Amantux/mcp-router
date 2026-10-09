@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,6 +39,7 @@ class CaseOutcome:
     fallback_used: bool
     latency_ms: float
     error: str | None = None
+    returned_skills: list[str] = field(default_factory=list)  # "source/name", rank order
 
 
 def run_cases(
@@ -72,7 +73,12 @@ def run_cases(
         outcomes.append(
             CaseOutcome(
                 case=case,
-                returned=[f"{t.server_name}/{t.tool_name}" for t in res.tools],
+                # Kinds are scored separately: tool metrics see only tools, so a
+                # skill ranked first does not count as a "wrong tool".
+                returned=[f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind == "tool"],
+                returned_skills=[
+                    f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind == "skill"
+                ],
                 no_match=res.no_match,
                 fallback_used=res.fallback_used,
                 latency_ms=res.latency_ms,
@@ -108,6 +114,8 @@ def compute_metrics(outcomes: list[CaseOutcome]) -> dict[str, Any]:
     }
     m["fallback_rate"] = _rate(sum(o.fallback_used for o in ok), len(ok))
     cats = sorted({o.case.category for o in outcomes})
+    m["skills"] = _skill_core(outcomes)
+    m["mixed"] = _mixed_core(outcomes)
     m["by_category"] = {c: _core([o for o in outcomes if o.case.category == c]) for c in cats}
     return m
 
@@ -144,6 +152,48 @@ def _core(outs: list[CaseOutcome]) -> dict[str, Any]:
     }
 
 
+def _skill_hit(expected: str, returned: str) -> bool:
+    """ "source/name" matches exactly; a bare "name" (ambiguous) matches any source."""
+    return returned == expected if "/" in expected else returned.split("/", 1)[-1] == expected
+
+
+def _skill_core(outs: list[CaseOutcome]) -> dict[str, Any]:
+    """Skill top-1/top-5 over cases with expected_skills; errored cases
+    (returned_skills=[]) stay in the denominator as misses."""
+    pos = [o for o in outs if o.case.expected_skills]
+    top1 = 0
+    recall = 0.0
+    for o in pos:
+        exp = o.case.expected_skills
+        top1 += bool(o.returned_skills) and any(_skill_hit(e, o.returned_skills[0]) for e in exp)
+        top5 = o.returned_skills[:5]
+        recall += sum(any(_skill_hit(e, r) for r in top5) for e in set(exp)) / len(set(exp))
+    leaked = sum(
+        any(_skill_hit(f, r) for f in o.case.forbidden_skills for r in o.returned_skills)
+        for o in outs
+    )
+    return {
+        "unauthorized_skill_exposures": leaked,
+        "positive_cases": len(pos),
+        "top1_accuracy": _rate(top1, len(pos)),
+        "top5_recall": _rate(recall, len(pos)),
+    }
+
+
+def _mixed_core(outs: list[CaseOutcome]) -> dict[str, Any]:
+    """Cases expecting both kinds: each kind's rank-1 must be an expected one."""
+    mixed = [o for o in outs if o.case.expected_tools and o.case.expected_skills]
+    both = sum(
+        1
+        for o in mixed
+        if o.returned
+        and o.returned[0] in o.case.expected_tools
+        and o.returned_skills
+        and any(_skill_hit(e, o.returned_skills[0]) for e in o.case.expected_skills)
+    )
+    return {"cases": len(mixed), "both_top1_rate": _rate(both, len(mixed))}
+
+
 def case_rows(outcomes: list[CaseOutcome]) -> list[dict[str, Any]]:
     return [
         {
@@ -151,6 +201,8 @@ def case_rows(outcomes: list[CaseOutcome]) -> list[dict[str, Any]]:
             "category": o.case.category,
             "expected": list(o.case.expected_tools),
             "returned": o.returned,
+            "expected_skills": list(o.case.expected_skills),
+            "returned_skills": o.returned_skills,
             "no_match": o.no_match,
             "fallback_used": o.fallback_used,
             "latency_ms": round(o.latency_ms, 3),
