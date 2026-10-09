@@ -175,8 +175,8 @@ async def test_end_to_end_skills_register_sync_route_expose_bundle_analytics(
         await session.initialize()
         prompts = sorted(p.name for p in (await session.list_prompts()).prompts)
         assert prompts == sorted(f"{SOURCE}/{n}" for n in names), prompts
-        got = await session.get_prompt(f"{SOURCE}/{pick}")
-        text = " ".join(getattr(m.content, "text", "") for m in got.messages)
+        prompt = await session.get_prompt(f"{SOURCE}/{pick}")
+        text = " ".join(getattr(m.content, "text", "") for m in prompt.messages)
         assert pick in text, text
 
     with db() as s:
