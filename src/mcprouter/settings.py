@@ -51,6 +51,11 @@ class Settings:
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
+    # Wave 4: Agent Skills
+    max_exposed_skills: int = 3
+    skill_body_max_bytes: int = 65536
+    skill_resource_max_bytes: int = 5 * 1024 * 1024
+    skills_cache_dir: str = "./skills-cache"  # where git skill sources are cloned
     # wave-3 remote decision backend (MCPR_DECISION_BACKEND=remote).
     # Endpoint is a full URL; with no path, /v1/decisions is appended. The key
     # comes from MCPR_DECISION_API_KEY_FILE (wins when both are set) or
@@ -102,6 +107,12 @@ class Settings:
             rate_limit_per_agent_per_min=int(
                 get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
             ),
+            max_exposed_skills=int(get("MCPR_MAX_EXPOSED_SKILLS", str(d.max_exposed_skills))),
+            skill_body_max_bytes=int(get("MCPR_SKILL_BODY_MAX_BYTES", str(d.skill_body_max_bytes))),
+            skill_resource_max_bytes=int(
+                get("MCPR_SKILL_RESOURCE_MAX_BYTES", str(d.skill_resource_max_bytes))
+            ),
+            skills_cache_dir=get("MCPR_SKILLS_CACHE_DIR", d.skills_cache_dir),
             # wave-3 remote decision backend
             decision_endpoint=get("MCPR_DECISION_ENDPOINT", d.decision_endpoint),
             decision_model=get("MCPR_DECISION_MODEL", d.decision_model),
