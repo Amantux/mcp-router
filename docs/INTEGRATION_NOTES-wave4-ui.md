@@ -50,3 +50,23 @@ Body + bundle use a new `requestRaw` (same bearer/credentials:"omit"/noteRespons
 - Skills drawer Classification tab (ClassificationEditor is typed to MCPTool — add a `save` prop) and Funnel tab.
 - Route/simulate types (`skills[]`, `maxSkillsApplied`, maxSkills clamp): not added — S2 notes
   (/root/mcpr4-wt-s2/docs/INTEGRATION_NOTES-wave4-routing.md) still absent at S4b's run.
+
+## S4c — final pass (skills in Lens + Analytics)
+
+**Aligned (S2d item 2, read from /root/mcpr4-wt-s2b notes):** /route `skills[{source,skill,score,bodyTokensEst}]`
++ `max_skills_applied` (camelised); request `maxSkills` / `kinds`; /route/simulate `skills[{skillId,...}]`,
+`maxSkillsApplied`, `kind` on candidatesConsidered / stages[].pruned / policyFiltered, `budgetClamps`
+`{budget:"maxSkills",...}`. `RouteResponse.skills` is set only when the backend sends it (old shape unchanged).
+Lens: Tools and Skills sections with score bars (skills show `~bodyTokensEst`), maxSkills slider
+(0 = not requested), clamp card via the existing ClampView, kind badge column in Filtered out, per-kind
+pruned counts on stage badges (derived from `stages[].pruned[].kind`).
+
+**CONTRACT guesses (S2f notes say the analytics funnel/economy/profiles, `kind` filter and overview
+`skills` are NOT done; names taken from the wave-4 brief):** `GET /analytics/tools?kind=tool|skill`
+(omitted for All; client also filters rows by `kind`, treating a missing kind as "tool"), `kind` on
+tool-funnel and wasted-exposure rows, `overview.skills {surfaced, activated, activationRate,
+bodyTokensNotSent}` (Skills card + economy caption appear only when present).
+
+**Not done (deferred):** item 4, the Skills drawer Classification + Funnel tabs. client.ts has no
+skill-classification write (no `updateSkill`/PATCH /skills/{id}), so generalising ClassificationEditor
+with a `save(fn)` prop would have no real consumer until that endpoint contract is confirmed.
