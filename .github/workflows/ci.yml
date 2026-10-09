@@ -122,6 +122,9 @@ jobs:
       # Names the server only: tests use <db>_test_template / <db>_test_w<N>.
       MCPR_DATABASE_URL: postgresql+psycopg://mcprouter:mcprouter@localhost:5432/mcprouter
       MCPR_REQUIRE_DB: "1"  # a DB-down run fails instead of silently skipping
+      # MT-1: this lane alone requests every OpenAPI route with a 2xx (63/63 at
+      # wave 6), so it is the "full run" for route coverage.
+      MCPR_ENFORCE_ROUTE_COVERAGE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -240,6 +243,7 @@ jobs:
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
       - run: npm run build
+      - run: npm run check:bundle  # size budget on the fresh dist/
       - run: npm run lint
       - name: vitest
         run: |

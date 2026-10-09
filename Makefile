@@ -34,15 +34,15 @@ type: setup-check  ## mypy: src+bench strict, tests+testbed <= mypy-baseline.txt
 	$(PY) .github/scripts/mypy_baseline.py
 
 test-fast: setup-check  ## the CI unit lane (needs db-up): no e2e/slow/scale, parallel
-	MCPR_REQUIRE_DB=1 $(BIN)/pytest tests/ -q -n auto -m "not e2e and not slow and not scale"
+	MCPR_REQUIRE_DB=1 MCPR_ENFORCE_ROUTE_COVERAGE=1 $(BIN)/pytest tests/ -q -n auto -m "not e2e and not slow and not scale"
 
 test-full: setup-check  ## everything incl. e2e + scale; slow ones need MCPR_RUN_SLOW=1
-	MCPR_REQUIRE_DB=1 $(BIN)/pytest tests/ -q -n auto --dist loadgroup
+	MCPR_REQUIRE_DB=1 MCPR_ENFORCE_ROUTE_COVERAGE=1 $(BIN)/pytest tests/ -q -n auto --dist loadgroup
 
 check: lint type test-full ui  ## every gate CI runs except compose smoke
 
 ui:  ## build + lint + vitest (mirrors the ui job)
-	cd ui && npm ci && npm run build && npm run lint && npm test
+	cd ui && npm ci && npm run build && npm run check:bundle && npm run lint && npm test
 
 smoke:  ## build + compose stack on :$(SMOKE_PORT) + scripts/smoke.sh, then tear down
 	@test -f .env || { echo "cp .env.example .env and set MCPR_ADMIN_TOKEN, MCPR_AGENT_KEYS=smoke:<key>, POSTGRES_PASSWORD"; exit 1; }

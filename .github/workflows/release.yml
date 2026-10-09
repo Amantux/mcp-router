@@ -1,7 +1,7 @@
 name: release
 # On a vX.Y.Z[suffix] tag: `verify` proves the tag is shippable (D7), then both
 # images build and push. Nothing publishes unless verify succeeds:
-#   - tag == "v" + pyproject version, top CHANGELOG heading == that version
+#   - tag == "v" + pyproject version, top versioned CHANGELOG heading == that version
 #   - a successful `CI` push run exists for this exact SHA on master
 #   - the SHA is an ancestor of origin/master (no releasing side branches)
 # `:latest` / `:latest-inference` move only for a plain vX.Y.Z tag.
@@ -31,6 +31,7 @@ jobs:
       actions: read  # read CI runs for this SHA
     outputs:
       is_release: ${{ steps.local.outputs.is_release }}
+      version: ${{ steps.local.outputs.version }}  # pyproject version (== tag minus "v")
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,6 +102,9 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
+          # Dockerfile ARG APP_VERSION -> VITE_APP_VERSION: the dashboard shows it.
+          build-args: |
+            APP_VERSION=${{ needs.verify.outputs.version }}
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}
             ${{ needs.verify.outputs.is_release == 'true' && format('{0}:latest', env.IMAGE) || '' }}

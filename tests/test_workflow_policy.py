@@ -94,6 +94,13 @@ def test_release_is_one_lane_and_builds_the_verified_sha() -> None:
     assert "@${{ needs.image.outputs.digest }}" in inf["with"]["build-args"]
 
 
+def test_release_image_carries_the_verified_version_to_the_ui() -> None:
+    jobs = load("release.yml")["jobs"]
+    assert jobs["verify"]["outputs"]["version"] == "${{ steps.local.outputs.version }}"
+    build = next(s for s in jobs["image"]["steps"] if "build-push-action" in s.get("uses", ""))
+    assert "APP_VERSION=${{ needs.verify.outputs.version }}" in build["with"]["build-args"]
+
+
 def test_release_images_have_provenance_and_sbom_and_gate_latest() -> None:
     jobs = load("release.yml")["jobs"]
     for name in ("image", "image-inference"):
