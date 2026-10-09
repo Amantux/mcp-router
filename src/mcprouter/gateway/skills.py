@@ -34,8 +34,10 @@ from mcprouter.skills.serve import (
 
 
 class SkillPolicy(Protocol):
-    """SEAM for S2's kind-aware policy engine (PolicyRule.resource_kind="skill").
-    Returns (allowed, curated_reason). The integrator wires S2's engine here."""
+    """Activation-time policy re-check (PolicyRule.resource_kind="skill").
+    Returns (allowed, curated_reason). The production implementation is
+    `policy.skill_bridge.EngineSkillPolicy` (wired in api.app); SkillExposure
+    requires one, so there is no implicit allow or deny-all fallback."""
 
     def check(
         self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
@@ -46,20 +48,6 @@ class SkillPolicy(Protocol):
     ) -> list[tuple[bool, str]]:
         """One verdict per item, in order (bundle: one policy load, not N)."""
         ...
-
-
-class DenyAllSkillPolicy:
-    """Fail-closed default until S2's engine is wired."""
-
-    def check(
-        self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
-    ) -> tuple[bool, str]:
-        return False, "no skill policy configured"
-
-    def check_many(
-        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
-    ) -> list[tuple[bool, str]]:
-        return [self.check(agent_id, sk, src) for sk, src in items]
 
 
 # The ONE curated code -> message table for skill errors: REST
