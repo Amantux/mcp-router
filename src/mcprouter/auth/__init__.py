@@ -19,6 +19,7 @@ from mcprouter.auth.config import (
     dev_principal,
 )
 from mcprouter.auth.keys import (
+    AGENT_ID_PATTERN,
     MAX_KEY_LEN,
     AgentKeysConfigError,
     AuthenticationError,
@@ -36,6 +37,7 @@ from mcprouter.auth.principals import (
 
 __all__ = [
     "ADMIN_TOKEN_ENV",
+    "AGENT_ID_PATTERN",
     "DEV_AGENT_ID",
     "MAX_KEY_LEN",
     "AgentKeysConfigError",

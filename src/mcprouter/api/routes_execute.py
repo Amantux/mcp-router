@@ -38,11 +38,11 @@ from pydantic.alias_generators import to_camel
 from mcprouter.api.acting import (
     ADMIN_NEEDS_AGENT,
     AGENT_DISABLED,
-    AGENT_ID_PATTERN,
     act_as_agent,
 )
 from mcprouter.api.acting import principal_row as _principal_row
 from mcprouter.api.deps import get_manager
+from mcprouter.auth import AGENT_ID_PATTERN
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult
 from mcprouter.execution.redaction import scrub_log
 

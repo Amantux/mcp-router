@@ -10,8 +10,11 @@ import re
 import secrets
 
 MAX_KEY_LEN = 512
-_AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,120}$")
-_KEY_RE = re.compile(r"^[\x21-\x7e]{1,512}$")  # printable ASCII, no spaces
+#: The one agent-id format: key parsing here and every REST `agentId`
+#: field/query validator (api.acting, api.routes_policy) use this pattern.
+AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,120}$"
+AGENT_ID_RE = re.compile(AGENT_ID_PATTERN)
+KEY_RE = re.compile(rf"^[\x21-\x7e]{{1,{MAX_KEY_LEN}}}$")  # printable ASCII, no spaces
 
 
 class AgentKeysConfigError(ValueError):
@@ -41,7 +44,7 @@ def parse_agent_keys(spec: str) -> list[tuple[str, str]]:
         if not raw:
             continue
         agent_id, sep, key = raw.partition(":")
-        if not sep or not _AGENT_ID_RE.match(agent_id) or not _KEY_RE.match(key):
+        if not sep or not AGENT_ID_RE.match(agent_id) or not KEY_RE.match(key):
             raise AgentKeysConfigError(
                 f"MCPR_AGENT_KEYS entry #{idx + 1} is malformed; expected 'agent_id:key' "
                 "(agent_id [A-Za-z0-9_.-], key printable ASCII without spaces)"
@@ -58,6 +61,6 @@ def parse_bearer(header: str | None) -> str | None:
     if header is None:
         return None
     scheme, sep, token = header.partition(" ")
-    if not sep or scheme.lower() != "bearer" or not _KEY_RE.match(token):
+    if not sep or scheme.lower() != "bearer" or not KEY_RE.match(token):
         raise AuthenticationError()
     return token

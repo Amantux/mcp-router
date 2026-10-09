@@ -31,6 +31,7 @@ from mcprouter.api.deps_auth import (
     require_admin,
     security_of,
 )
+from mcprouter.auth import AGENT_ID_PATTERN
 from mcprouter.execution.manager import ApprovalError, ApprovalView
 from mcprouter.execution.redaction import scrub_log
 from mcprouter.generation import bump_policy
@@ -40,7 +41,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["policy"])
 
-AgentId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.\-]{1,120}$")]
+AgentId = Annotated[str, Field(pattern=AGENT_ID_PATTERN)]
 Operation = Literal["read", "write", "execute"]
 _DEFAULT_MAX_SKILLS = 3  # mirrors AgentPrincipal.max_skills column default
 

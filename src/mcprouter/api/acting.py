@@ -24,7 +24,6 @@ from mcprouter.api.deps_auth import get_principal, is_admin_bearer, require_admi
 from mcprouter.execution.manager import INITIATED_BY_ADMIN
 from mcprouter.models import AgentPrincipal
 
-AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,120}$"
 ADMIN_NEEDS_AGENT = (
     "Admin requests must name the agent to act as: pass agentId. "
     "The request runs under that agent's routing and policy."

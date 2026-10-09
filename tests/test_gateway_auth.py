@@ -85,6 +85,24 @@ def test_parse_agent_keys_rejects_malformed_without_echoing_keys(spec: str) -> N
             assert secret not in str(ei.value)
 
 
+def test_key_length_cap_is_max_key_len() -> None:
+    from mcprouter.auth import MAX_KEY_LEN
+
+    assert parse_agent_keys("a:" + "k" * MAX_KEY_LEN) == [("a", "k" * MAX_KEY_LEN)]
+    with pytest.raises(AgentKeysConfigError):
+        parse_agent_keys("a:" + "k" * (MAX_KEY_LEN + 1))
+
+
+def test_rest_agent_id_validators_use_the_one_auth_pattern() -> None:
+    """HS-C-010: key parsing and every REST agentId validator share one pattern."""
+    from mcprouter.api import routes_policy
+    from mcprouter.auth import AGENT_ID_PATTERN
+    from mcprouter.auth.keys import AGENT_ID_RE
+
+    assert AGENT_ID_RE.pattern == AGENT_ID_PATTERN
+    assert routes_policy.AgentId.__metadata__[0].metadata[0].pattern == AGENT_ID_PATTERN
+
+
 # ---------------------------------------------------------------- bootstrap
 def test_bootstrap_stores_hash_only_and_is_idempotent(
     db: sessionmaker[Session], caplog: pytest.LogCaptureFixture

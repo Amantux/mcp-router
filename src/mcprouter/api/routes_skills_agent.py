@@ -19,8 +19,9 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.api.acting import ADMIN_NEEDS_AGENT, AGENT_ID_PATTERN, act_as_agent
+from mcprouter.api.acting import ADMIN_NEEDS_AGENT, act_as_agent
 from mcprouter.api.deps_auth import security_of
+from mcprouter.auth import AGENT_ID_PATTERN
 from mcprouter.gateway.skills import SkillAccessError, SkillExposure
 from mcprouter.models import RoutingDecisionRecord
 from mcprouter.skills.serve import resource_mime

@@ -54,8 +54,12 @@ from mcprouter.auth.config import (  # noqa: F401
     dev_principal,
 )
 from mcprouter.auth.keys import (  # noqa: F401
-    _AGENT_ID_RE,
-    _KEY_RE,
+    AGENT_ID_RE as _AGENT_ID_RE,
+)
+from mcprouter.auth.keys import (
+    KEY_RE as _KEY_RE,
+)
+from mcprouter.auth.keys import (
     MAX_KEY_LEN,
     AgentKeysConfigError,
     AuthenticationError,

@@ -184,7 +184,7 @@ def _secret(name: str, get: Callable[[str, str], str], *, printable: bool = True
     return _printable_key(text, name) if printable else _no_controls(text, name)
 
 
-_KEY_RE = re.compile(r"[\x21-\x7e]*")
+_PRINTABLE_RE = re.compile(r"[\x21-\x7e]*")
 _NO_CONTROLS_RE = re.compile(r"[\x20-\x7e]*")
 MIN_KEY_LEN = 32
 
@@ -199,7 +199,7 @@ def _no_controls(value: str, name: str) -> str:
 def _printable_key(key: str, name: str) -> str:
     """A key goes into an HTTP header: printable ASCII, no whitespace/control.
     The message names the variable, never the key."""
-    if not _KEY_RE.fullmatch(key):
+    if not _PRINTABLE_RE.fullmatch(key):
         raise ValueError(f"{name}: must be printable ASCII with no whitespace")
     return key
 
