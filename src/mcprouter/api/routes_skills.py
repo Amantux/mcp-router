@@ -250,7 +250,12 @@ def routed_skill_ids(factory: sessionmaker[Session], agent_id: str) -> list[str]
     with factory() as s:
         row = s.scalars(
             select(RoutingDecisionRecord.selected_tool_ids)
-            .where(RoutingDecisionRecord.agent_id == agent_id)
+            .where(
+                RoutingDecisionRecord.agent_id == agent_id,
+                # Admin simulations persist rows under the agent id; they never
+                # define what the agent may activate (gateway ignores them too).
+                ~RoutingDecisionRecord.model_version.startswith("simulated/"),
+            )
             .order_by(RoutingDecisionRecord.created_at.desc(), RoutingDecisionRecord.id.desc())
             .limit(1)
         ).one_or_none()

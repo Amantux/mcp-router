@@ -122,3 +122,24 @@ def test_attribution_column_is_added_idempotently(sec_db: sessionmaker[Session])
             text("SELECT indexname FROM pg_indexes WHERE tablename = 'execution_records'")
         ).scalars()
         assert "ix_execution_records_route_request_id" in set(idx)
+
+
+async def test_simulated_decision_never_attributes(
+    sec_db: sessionmaker[Session], cat: Catalog
+) -> None:
+    """An admin /route/simulate row is persisted under the agent id but is not an
+    exposure the agent acted on: attribution to it is dropped to NULL."""
+    from mcprouter.models import RoutingDecisionRecord
+
+    add_rule(sec_db, "alice")
+    with sec_db() as s:
+        d = RoutingDecisionRecord(
+            agent_id="alice", query="q", selected_tool_ids=[], model_version="simulated/x"
+        )
+        s.add(d)
+        s.commit()
+        sim_id = d.id
+    await _mgr(sec_db).execute(
+        cat.principals["alice"], cat.tools["github.list_issues"], ARGS, route_request_id=sim_id
+    )
+    assert _rrids(sec_db) == [("ok", None)]

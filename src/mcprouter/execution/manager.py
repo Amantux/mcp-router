@@ -254,7 +254,10 @@ class ExecutionManager:
         with self._factory() as s:
             owned = s.scalar(
                 select(RoutingDecisionRecord.id).where(
-                    RoutingDecisionRecord.id == rrid, RoutingDecisionRecord.agent_id == agent_id
+                    RoutingDecisionRecord.id == rrid,
+                    RoutingDecisionRecord.agent_id == agent_id,
+                    # A simulated decision is not an exposure the agent acted on.
+                    ~RoutingDecisionRecord.model_version.startswith("simulated/"),
                 )
             )
         return rrid if owned is not None else None

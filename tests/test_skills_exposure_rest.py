@@ -46,11 +46,14 @@ class Env:
         self.client, self.db, self.policy = client, db, policy
         self.a = self.b = ""
 
-    def route(self, agent: str, *skill_ids: str) -> None:
+    def route(self, agent: str, *skill_ids: str, simulated: bool = False) -> None:
         with self.db() as s:
             s.add(
                 RoutingDecisionRecord(
-                    agent_id=agent, query="q", selected_tool_ids=[f"skill:{i}" for i in skill_ids]
+                    agent_id=agent,
+                    query="q",
+                    selected_tool_ids=[f"skill:{i}" for i in skill_ids],
+                    model_version="simulated/x" if simulated else "",
                 )
             )
             s.commit()
@@ -116,6 +119,15 @@ def test_visibility_is_server_side_latest_decision(env: Env) -> None:
     env.route("alice", env.b)  # latest decision replaces the earlier one
     assert env.client.post(f"/api/v1/skills/{env.a}/activate", headers=H_ALICE).status_code == 404
     assert env.client.post(f"/api/v1/skills/{env.b}/activate", headers=H_ALICE).status_code == 200
+
+
+def test_admin_simulation_does_not_change_rest_visibility(env: Env) -> None:
+    """A /route/simulate row is stored under the agent id but is not an exposure:
+    the latest LIVE decision still defines what the agent may activate."""
+    env.route("alice", env.a)
+    env.route("alice", env.b, simulated=True)  # newer, but simulated
+    assert env.client.post(f"/api/v1/skills/{env.a}/activate", headers=H_ALICE).status_code == 200
+    assert env.client.post(f"/api/v1/skills/{env.b}/activate", headers=H_ALICE).status_code == 404
 
 
 def test_agent_cannot_name_another_agent(env: Env) -> None:

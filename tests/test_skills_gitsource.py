@@ -22,6 +22,7 @@ def test_argv_is_hardened(tmp_path: Path) -> None:
         "--recurse-submodules=no",
         "--no-tags",
         "--depth 1",
+        "http.followRedirects=false",  # a validated https URL must not 302 elsewhere
     ):
         assert frag in joined
     assert "file.allow" not in joined

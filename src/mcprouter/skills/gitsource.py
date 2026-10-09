@@ -31,6 +31,10 @@ _SAFE_CFG = (
     "protocol.https.allow=always",
     "-c",
     "submodule.recurse=false",
+    # The URL is validated before use, but git would otherwise follow a 302 to a
+    # different scheme/host (e.g. https -> http://169.254.169.254), bypassing it.
+    "-c",
+    "http.followRedirects=false",
 )
 
 Runner = Callable[[Sequence[str]], None]
