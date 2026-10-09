@@ -28,8 +28,8 @@ services:
     environment:
       MCPR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mcprouter}:${POSTGRES_PASSWORD:-mcprouter}@db:5432/${POSTGRES_DB:-mcprouter}
       MCPR_AGENT_KEYS: ${MCPR_AGENT_KEYS:-}
-      # Admin API credential. Unset + agent keys set => management API is
-      # locked (403, fail closed); unset + no keys => dev mode (open).
+      # Admin API credential. Unset => the router binds loopback only inside
+      # the container (D1); unset + agent keys => management API locked (403).
       MCPR_ADMIN_TOKEN: ${MCPR_ADMIN_TOKEN:-}
       MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-hash}
       MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-deterministic}
@@ -37,8 +37,12 @@ services:
       # Extra Host names /mcp accepts besides localhost (DNS-rebinding tradeoff:
       # see docs/INSTALL.md §1). The dashboard is served at / on the same port.
       MCPR_ALLOWED_HOSTS: ${MCPR_ALLOWED_HOSTS:-}
+    # Host side binds loopback by default (D1). MCPR_BIND=0.0.0.0 publishes on
+    # every interface; only do that with MCPR_ADMIN_TOKEN set. Without a token
+    # the router itself listens on 127.0.0.1 inside the container, so the
+    # published port is dead until a token is configured (fail closed).
     ports:
-      - "${MCPR_HOST_PORT:-8400}:8400"
+      - "${MCPR_BIND:-127.0.0.1}:${MCPR_HOST_PORT:-8400}:8400"
     volumes:
       - mcpr-data:/data
       - mcpr-skills-cache:/srv/skills-cache

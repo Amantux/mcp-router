@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 
@@ -270,6 +270,69 @@ def _bounded_retries(raw: str, name: str) -> int:
     return value
 
 
+# --- container entrypoint adapter (D1) -------------------------------------
+# The shell never re-parses config: scripts/docker-entrypoint.sh asks this one
+# tested function for the resolved bind host and DB-wait budget.
+
+LOOPBACK_BIND = "127.0.0.1"
+ALL_INTERFACES_BIND = "0.0.0.0"  # noqa: S104 - deliberate when a token is set (D1)
+_DB_WAIT_TRIES_MAX = 1000
+
+
+@dataclass(frozen=True)
+class EntrypointPlan:
+    bind_host: str
+    db_wait_tries: int
+    warnings: tuple[str, ...]
+
+
+def entrypoint_plan(settings: Settings, env: Mapping[str, str]) -> EntrypointPlan:
+    """D1 fail-closed posture. Admin token set -> all interfaces. No token ->
+    loopback only (the admin API is open in dev mode, or locked with agent keys)
+    unless MCPR_ALLOW_OPEN_DEV explicitly opts back in to all interfaces."""
+    raw_tries = env.get("MCPR_DB_WAIT_TRIES", "").strip() or "30"
+    try:
+        tries = int(raw_tries)
+    except ValueError:
+        raise ValueError("MCPR_DB_WAIT_TRIES: must be an integer") from None
+    if not 1 <= tries <= _DB_WAIT_TRIES_MAX:
+        raise ValueError(f"MCPR_DB_WAIT_TRIES: must be between 1 and {_DB_WAIT_TRIES_MAX}")
+    if settings.admin_token:
+        return EntrypointPlan(ALL_INTERFACES_BIND, tries, ())
+    state = "locked (agent keys set)" if settings.agent_keys.strip() else "open"
+    if settings.allow_open_dev:
+        return EntrypointPlan(
+            ALL_INTERFACES_BIND,
+            tries,
+            (
+                f"admin API {state}; MCPR_ALLOW_OPEN_DEV=1 binds ALL interfaces; "
+                "set MCPR_ADMIN_TOKEN for any shared host",
+            ),
+        )
+    return EntrypointPlan(
+        LOOPBACK_BIND,
+        tries,
+        (f"admin API {state}; listening on loopback only; set MCPR_ADMIN_TOKEN",),
+    )
+
+
+def _entrypoint_main() -> int:
+    """`python -m mcprouter.settings entrypoint`: prints "<host> <tries>" on
+    stdout, warnings on stderr. Invalid settings -> exit 2 with a FATAL line
+    that names the variable (never its value)."""
+    import sys
+
+    try:
+        plan = entrypoint_plan(Settings.from_env(), os.environ)
+    except ValueError as exc:
+        print(f"[entrypoint] FATAL: {exc}", file=sys.stderr)
+        return 2
+    for w in plan.warnings:
+        print(f"[entrypoint] WARNING: {w}", file=sys.stderr)
+    print(f"{plan.bind_host} {plan.db_wait_tries}")
+    return 0
+
+
 # wave-3 Azure OpenAI backends
 # Self-contained so it never conflicts with other appended blocks. Selected by
 # MCPR_DECISION_BACKEND=aoai and/or MCPR_EMBEDDING_BACKEND=aoai (Settings above
@@ -318,3 +381,12 @@ class AoaiSettings:
             embedding_deployment=get("MCPR_AOAI_EMBEDDING_DEPLOYMENT"),
             max_retries=retries,
         )
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by tests/test_entrypoint.py
+    import sys
+
+    if sys.argv[1:] != ["entrypoint"]:
+        print("usage: python -m mcprouter.settings entrypoint", file=sys.stderr)
+        raise SystemExit(64)
+    raise SystemExit(_entrypoint_main())
