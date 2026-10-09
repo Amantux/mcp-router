@@ -133,7 +133,7 @@ async def test_clear_also_hides_skills(real: dict[str, Any]) -> None:
     assert gw._routed_skills("alice")[0] == (real["a"],)
     gw.exposure.clear("alice")
     assert gw._routed_skills("alice") == ((), None)
-    assert "alice" not in gw._skill_ids
+    assert gw.exposure.get("alice") is None  # skills live in the same snapshot
     with pytest.raises(MCPError):
         await _read(real, "guide.md")
 

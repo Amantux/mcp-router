@@ -2,8 +2,9 @@
 
 Another MCP Router (MCPR_DECISION_BACKEND=remote) can point at this endpoint
 and use our local decider (e.g. Laya). Auth: agent key or admin; per-principal
-sliding-window rate limit; body caps; runs through the engine's validated,
-deadline-bounded decider under the inference semaphore.
+sliding-window rate limit (MCPR_DECISION_RATE_LIMIT_PER_MIN); body caps; runs
+through the engine's validated, deadline-bounded decider under the inference
+semaphore.
 
 Loop guard (hop count): every outbound remote decision call carries
 `X-MCPR-Decision-Hop: n+1`, and this edge refuses any request that arrives with
@@ -35,7 +36,7 @@ from mcprouter.models import AgentPrincipal
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/decision", tags=["decision"])
 
-RATE_LIMIT_PER_MIN = 120
+# ADAPTER (E1 P-109): becomes net_policy.LOOPBACK_HOSTS (+ the wildcard binds) on rebase.
 _LOCAL_ALIASES = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]", "::"}
 
 
@@ -62,10 +63,28 @@ def is_self_loop(endpoint: str, request: Request) -> bool:
     return ep_host == me_host or (ep_host in _LOCAL_ALIASES and me_host in _LOCAL_ALIASES)
 
 
+MAX_HOP_DIGITS = 3
+
+
+def parse_hop(raw: str | None) -> int:
+    """Absent -> 0. Up to 3 ASCII decimal digits -> their value. Anything else
+    (``"²"`` and ``"٣"`` pass ``isdigit``/``isdecimal`` but are not ASCII; 5000
+    digits exceed ``int()``'s limit; signs, spaces, dots) is malformed and
+    treated as already forwarded (1) — never a 500."""
+    if raw is None:
+        return 0
+    if raw.isascii() and raw.isdecimal() and len(raw) <= MAX_HOP_DIGITS:
+        return int(raw)
+    return 1
+
+
 def _limiter(request: Request) -> SlidingWindowLimiter:
+    """ADAPTER (E6 P-606): when the D10 registry lands, this body becomes
+    ``request.app.state.limiters.get("decision", ...)``. Until then a per-app
+    shim with the W0 budget ``settings.decision_rate_limit_per_min``."""
     lim = getattr(request.app.state, "decision_edge_limiter", None)
     if lim is None:
-        lim = SlidingWindowLimiter(RATE_LIMIT_PER_MIN, 60.0)
+        lim = SlidingWindowLimiter(request.app.state.settings.decision_rate_limit_per_min, 60.0)
         request.app.state.decision_edge_limiter = lim
     return lim
 
@@ -77,10 +96,7 @@ def systemone(
     settings = request.app.state.settings
     if settings.decision_backend == "remote" and is_self_loop(settings.decision_endpoint, request):
         raise HTTPException(503, "decision edge refused: the remote backend points at this router")
-    raw_hop = request.headers.get(HOP_HEADER)
-    hop = (
-        int(raw_hop) if raw_hop is not None and raw_hop.isdigit() else (0 if raw_hop is None else 1)
-    )
+    hop = parse_hop(request.headers.get(HOP_HEADER))
     if hop >= 1 and settings.decision_backend == "remote":
         raise HTTPException(503, "decision edge refused: request already forwarded by a router")
     DECISION_HOP.set(hop)

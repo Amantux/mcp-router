@@ -10,7 +10,7 @@ request — so each request is answered for the principal that sent it.
 Request flow:
   HTTP -> _AuthASGI (Bearer -> principal via deps_auth.resolve_principal,
           401 otherwise; sets scope["user"] so the SDK binds each MCP session
-          to the credential that created it) -> SDK streamable-HTTP app
+          to the agent AND the credential hash that created it) -> SDK streamable-HTTP app
           (/mcp, DNS-rebinding protection) -> handlers below.
 
 * tools/list  = the agent's last route() result (or a deterministic default:
@@ -49,7 +49,7 @@ import mcp_types as types
 from fastapi import FastAPI
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
-from mcp.server.context import ServerRequestContext
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.models import InitializationOptions
@@ -63,7 +63,8 @@ from mcp.server.subscriptions import (
 )
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
-from mcp_types.version import MODERN_PROTOCOL_VERSIONS
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, MODERN_PROTOCOL_VERSIONS
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.authentication import AuthCredentials
@@ -73,10 +74,18 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcprouter import __version__
 from mcprouter.analytics import feedback as _fb
-from mcprouter.api.deps_auth import AuthenticationError, SecurityConfig, hash_key, resolve_principal
+from mcprouter.api.deps_auth import (
+    DEV_AGENT_ID,
+    AuthenticationError,
+    SecurityConfig,
+    hash_key,
+    parse_bearer,
+    resolve_principal,
+)
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import redact, scrub_log
+from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.gateway.exposure import ExposureStore
 from mcprouter.gateway.skills import (
     Activation,
@@ -100,6 +109,10 @@ PRINCIPAL_SCOPE_KEY = "mcprouter.principal"
 MAX_QUERY_LEN = 2000
 MAX_TRACKED_SESSIONS_PER_AGENT = 32
 NOTIFY_TIMEOUT_S = 2.0
+# The SDK's own /mcp body cap, pinned to the app-wide cap (api.body_limit.
+# MAX_BODY_BYTES; equality is asserted by a test, not imported, to keep the
+# gateway from importing further up into mcprouter.api).
+MAX_MCP_BODY_BYTES = 1024 * 1024
 ROUTE_REQUEST_ID_KWARG = "route_request_id"
 
 
@@ -208,6 +221,27 @@ _SKILL_TOOL_DEFS = [
 ]
 
 
+# Every name the gateway answers itself. A catalog tool with one of these
+# stable names is NEVER listed, whatever features are wired (it would shadow or
+# duplicate a meta-tool, or appear only in some deployments).
+RESERVED_TOOL_NAMES = frozenset(
+    {META_TOOL, FEEDBACK_TOOL, ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL}
+)
+_META_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    t.name: dict(t.input_schema) for t in (_META_TOOL_DEF, _FEEDBACK_TOOL_DEF, *_SKILL_TOOL_DEFS)
+}
+
+
+def _meta_args_refusal(name: str, arguments: dict[str, Any] | None) -> types.CallToolResult | None:
+    """Validate a meta-tool call against the schema it ADVERTISES, with the
+    manager's validator (curated: location + keyword, never values). None = ok."""
+    try:
+        validate_arguments(_META_TOOL_SCHEMAS[name], arguments or {})
+    except ArgumentValidationError as exc:
+        return _text(f"Refused: invalid arguments ({exc})", is_error=True)
+    return None
+
+
 def _skill_error(exc: SkillAccessError) -> str:
     return _SKILL_ERRORS.get(exc.code, _SKILL_UNKNOWN)
 
@@ -255,6 +289,51 @@ class _RouterMCPServer(Server[Any]):
             experimental_capabilities,
             extensions,
         )
+
+
+INTERNAL_ERROR_MESSAGE = "Internal server error"
+
+
+class _CuratedErrors:
+    """Server middleware: an uncaught handler exception becomes a curated
+    INTERNAL_ERROR on BOTH protocol eras.
+
+    Without it the handshake-era dispatcher answers ``ErrorData(code=0,
+    message=str(exc))`` (SDK ``jsonrpc_dispatcher``), which would send e.g. a
+    SQLAlchemy statement or DSN fragment to the agent. ``MCPError`` (already
+    curated) and pydantic ``ValidationError`` (the SDK maps it to a sanitised
+    INVALID_PARAMS) pass through untouched. Logs the exception TYPE only."""
+
+    async def __call__(
+        self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
+    ) -> HandlerResult:
+        try:
+            return await call_next(ctx)
+        except (MCPError, ValidationError):
+            raise
+        except Exception as exc:  # noqa: BLE001 — curated boundary: type name only
+            log.warning(
+                "gateway.handler_failed method=%s exc_type=%s",
+                scrub_log(str(ctx.method)),
+                type(exc).__name__,
+            )
+            raise MCPError(types.INTERNAL_ERROR, INTERNAL_ERROR_MESSAGE) from None
+
+
+def _no_param_header_schema(name: str) -> None:
+    """``Server.get_tool_input_schema``: never a schema, so ``Mcp-Param-*``
+    headers are not validated (unsupported, D15) and no listing runs."""
+    del name
+
+
+def _request_subject(ctx: ServerRequestContext[Any, Any]) -> str:
+    """The credential subject _AuthASGI put on this request; fail closed."""
+    request = ctx.request
+    user = getattr(request, "scope", {}).get("user") if request else None
+    subject = user.access_token.subject if isinstance(user, AuthenticatedUser) else None
+    if not subject:
+        raise MCPError(types.INVALID_REQUEST, "unauthenticated")
+    return subject
 
 
 def _text(text: str, *, is_error: bool) -> types.CallToolResult:
@@ -321,16 +400,100 @@ class _AuthASGI:
             return
         scope = dict(scope)
         # The SDK's session manager compares (client_id, issuer, subject) of
-        # scope["user"] against the session creator: a session id minted for
-        # agent A answers 404 to agent B. The token field holds a HASH — the
+        # scope["user"] against the session creator and answers 404 on a
+        # mismatch. client_id = the agent (agent A's session id is useless to
+        # agent B); subject = a HASH of the presented credential (D15), so a
+        # session is bound to the KEY that created it: after a key rotation
+        # the old session id answers 404 and the client re-initializes. The
         # raw key never sits in request state.
+        credential = session_subject(authorization)
         token = AccessToken(
-            token=hash_key(authorization or "dev"), client_id=principal.agent_id, scopes=[]
+            token=credential, client_id=principal.agent_id, scopes=[], subject=credential
         )
         scope["user"] = AuthenticatedUser(token)
         scope["auth"] = AuthCredentials([])
         scope[PRINCIPAL_SCOPE_KEY] = principal
-        await self._inner(scope, receive, send)
+        if not _opens_session(scope):
+            await self._inner(scope, receive, send)
+            if scope.get("method") == "DELETE":
+                self._gw._forget_session(principal.agent_id, Headers(scope=scope))
+            return
+        if not self._gw._reserve_open(principal.agent_id, credential):
+            await _json_response(
+                send,
+                429,
+                [(b"retry-after", str(SESSION_RETRY_AFTER_S).encode())],
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": types.INVALID_REQUEST, "message": TOO_MANY_SESSIONS},
+                },
+            )
+            return
+        try:
+            await self._inner(scope, receive, send)
+        finally:
+            self._gw._release_open(principal.agent_id, credential)
+
+
+SESSION_RETRY_AFTER_S = 60
+
+
+def subject_for_key_hash(key_hash: str) -> str:
+    """Session subject of the credential whose stored hash is ``key_hash``;
+    lets the fan-out re-check derive the CURRENT credential's subject from
+    the DB row (domain-separated: never equal to the stored hash itself)."""
+    return hash_key("mcp-session:" + key_hash)
+
+
+DEV_SUBJECT = hash_key("mcp-session:dev")
+
+
+def session_subject(authorization: str | None) -> str:
+    """The session-binding subject of the presented key (scheme case and
+    spacing normalised by ``parse_bearer``, so ``Bearer k``/``bearer k`` are
+    one credential). Dev mode (no header) is one constant subject. Only
+    called after authentication succeeded, so ``parse_bearer`` cannot raise."""
+    token = parse_bearer(authorization)
+    return DEV_SUBJECT if token is None else subject_for_key_hash(hash_key(token))
+
+
+TOO_MANY_SESSIONS = "Too many open sessions for this agent; close one and retry."
+
+
+def _opens_session(scope: Scope) -> bool:
+    """A request the SDK would answer by minting a NEW handshake-era session:
+    a POST without ``Mcp-Session-Id`` whose protocol-version header is absent
+    or a handshake version (mcp 2.3.0 ``StreamableHTTPSessionManager.
+    _handle_request``: any other version goes to the stateless modern path).
+    Non-POST requests without a session id are briefly registered by the SDK
+    and then refused (400/405); they are not counted here (bounded, never
+    established)."""
+    if scope.get("method") != "POST":
+        return False
+    headers = Headers(scope=scope)
+    if headers.get("mcp-session-id") is not None:
+        return False
+    version = headers.get("mcp-protocol-version")
+    return version is None or version in HANDSHAKE_PROTOCOL_VERSIONS
+
+
+async def _json_response(
+    send: Send, status: int, extra_headers: list[tuple[bytes, bytes]], payload: dict[str, Any]
+) -> None:
+    body = json.dumps(payload).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                *extra_headers,
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 class GatewayServer:
@@ -348,21 +511,29 @@ class GatewayServer:
     ) -> None:
         self._factory = session_factory
         self._skills = skills
-        # Routed skill ids per agent (RoutedTool.kind == "skill" of the last route).
-        self._skill_ids: dict[str, tuple[str, ...]] = {}
         self._security = security
         self._settings = settings
         self._manager = manager
         self._manager_takes_route_id = _accepts_kwarg(manager.execute, ROUTE_REQUEST_ID_KWARG)
         self._route_fn = route_fn
         self.exposure = ExposureStore()
+        # ADAPTER (E6 P-606): becomes the D10 registry's ("find_tools", agent)
+        # limiter (app.state.limiters, passed in by build_gateway) on rebase.
         self._route_limiter = SlidingWindowLimiter(settings.rate_limit_per_agent_per_min)
-        self._buses: dict[str, tuple[InMemorySubscriptionBus, ListenHandler]] = {}
+        # One subscription bus per (agent, credential subject): a modern-era
+        # listen stream is bound to the key that opened it, like a session.
+        self._buses: dict[tuple[str, str], tuple[InMemorySubscriptionBus, ListenHandler]] = {}
         self._legacy: dict[str, OrderedDict[str, ServerSession]] = {}
         self._lock = threading.Lock()
+        # Session-opening requests in flight per agent (see _reserve_open).
+        self._opening: dict[tuple[str, str], int] = {}
         self.server = _RouterMCPServer(
             "mcp-router",
             version=__version__,
+            # D15: no x-mcp-header (Mcp-Param-*) support. Without a lookup the
+            # SDK runs a FULL tools/list before every modern-era tools/call just
+            # to find a schema for header validation (2x DB load per call).
+            get_tool_input_schema=_no_param_header_schema,
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."
@@ -373,10 +544,17 @@ class GatewayServer:
             on_list_prompts=self._on_list_prompts,
             on_get_prompt=self._on_get_prompt,
             on_list_resources=self._on_list_resources,
+            on_list_resource_templates=self._on_list_resource_templates,
             on_read_resource=self._on_read_resource,
         )
+        # Innermost, so the SDK's OpenTelemetry middleware records the curated error.
+        self.server.middleware.append(_CuratedErrors())
         self._starlette = self.server.streamable_http_app(
-            streamable_http_path=MCP_PATH, transport_security=transport_security, host=host
+            streamable_http_path=MCP_PATH,
+            transport_security=transport_security,
+            host=host,
+            max_sessions=settings.mcp_max_sessions,
+            max_request_body_size=MAX_MCP_BODY_BYTES,
         )
 
     # ------------------------------------------------------------ wiring
@@ -419,17 +597,127 @@ class GatewayServer:
             sessions = self._legacy.setdefault(agent_id, OrderedDict())
             sessions[sid] = ctx.session
             sessions.move_to_end(sid)
-            while len(sessions) > MAX_TRACKED_SESSIONS_PER_AGENT:
+            tracked = max(MAX_TRACKED_SESSIONS_PER_AGENT, self._settings.mcp_max_sessions_per_agent)
+            while len(sessions) > tracked:
                 sessions.popitem(last=False)
 
-    def _bus(self, agent_id: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
+    def _live_sessions(self, agent_id: str, subject: str) -> int:
+        """Open handshake-era sessions created by ``agent_id`` with the
+        credential ``subject``. Reads the SDK session manager's owner map
+        (mcp 2.3.0 ``_session_owners``: session id -> (client_id, issuer,
+        subject) of the creating credential); entries leave it on DELETE, idle
+        timeout or crash. Counted per CREDENTIAL, so sessions opened with a
+        rotated-away key never use up the new key's budget."""
+        owners = self.server.session_manager._session_owners
+        return sum(
+            1
+            for owner in list(owners.values())
+            if owner["client_id"] == agent_id and owner["subject"] == subject
+        )
+
+    def _reserve_open(self, agent_id: str, subject: str) -> bool:
+        """Admit a session-opening request unless the agent's credential is at
+        its cap.
+
+        Counts live sessions PLUS opening requests in flight, so concurrent
+        initializes can never overshoot ``mcp_max_sessions_per_agent`` (an
+        in-flight open that the SDK already registered is briefly counted
+        twice: the error is toward refusing, never toward exceeding)."""
+        cap = self._settings.mcp_max_sessions_per_agent
+        key = (agent_id, subject)
         with self._lock:
-            pair = self._buses.get(agent_id)
+            pending = self._opening.get(key, 0)
+            if self._live_sessions(agent_id, subject) + pending >= cap:
+                log.warning("gateway.session_cap agent=%s", scrub_log(agent_id))
+                return False
+            self._opening[key] = pending + 1
+            return True
+
+    def _release_open(self, agent_id: str, subject: str) -> None:
+        key = (agent_id, subject)
+        with self._lock:
+            left = self._opening.get(key, 1) - 1
+            if left > 0:
+                self._opening[key] = left
+            else:
+                self._opening.pop(key, None)
+
+    def _forget_session(self, agent_id: str, headers: Headers) -> None:
+        """After a client DELETE: stop tracking the session for notifications
+        if the SDK has discarded it (no stale sends to a terminated session)."""
+        sid = headers.get("mcp-session-id")
+        if sid is None or sid in self.server.session_manager._server_instances:
+            return
+        with self._lock:
+            sessions = self._legacy.get(agent_id)
+            if sessions is not None:
+                sessions.pop(sid, None)
+
+    def _current_subject(self, agent_id: str) -> str | None:
+        """The subject of the agent's CURRENT credential, or None when the
+        agent is deleted or disabled. The synthetic dev agent (no row) keeps
+        the dev subject; per-request auth already refuses it outside dev mode."""
+        with self._factory() as s:
+            row = s.scalars(
+                select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
+            ).one_or_none()
+            if row is None:
+                return DEV_SUBJECT if agent_id == DEV_AGENT_ID else None
+            return subject_for_key_hash(row.key_hash) if row.enabled else None
+
+    async def _end_stale_streams(self, agent_id: str, subject: str | None) -> None:
+        """Close what outlived a revocation: every handshake session and every
+        modern listen stream of the agent not opened with ``subject`` (all of
+        them when None: agent deleted/disabled). Per-request auth already
+        refuses new requests; this ends LONG-LIVED streams."""
+        manager = self.server.session_manager
+        stale = [
+            sid
+            for sid, owner in list(manager._session_owners.items())
+            if owner["client_id"] == agent_id and owner["subject"] != subject
+        ]
+        for sid in stale:
+            transport = manager._server_instances.get(sid)
+            if transport is not None:
+                await manager._discard_session(sid, transport)
+        with self._lock:
+            sessions = self._legacy.get(agent_id)
+            for sid in stale:
+                if sessions is not None:
+                    sessions.pop(sid, None)
+        with self._lock:
+            stale_buses = [k for k in self._buses if k[0] == agent_id and k[1] != subject]
+            handlers = [self._buses.pop(k)[1] for k in stale_buses]
+            if subject is None:
+                self._legacy.pop(agent_id, None)
+        for handler in handlers:
+            handler.close()  # graceful end of every stream on that bus
+        if stale or stale_buses or subject is None:
+            log.info(
+                "gateway.revoked_streams agent=%s sessions=%d", scrub_log(agent_id), len(stale)
+            )
+
+    def _bus(self, agent_id: str, subject: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
+        with self._lock:
+            pair = self._buses.get((agent_id, subject))
             if pair is None:
                 bus = InMemorySubscriptionBus()
                 pair = (bus, ListenHandler(bus, max_subscriptions=16))
-                self._buses[agent_id] = pair
+                self._buses[(agent_id, subject)] = pair
             return pair
+
+    async def end_stale_streams(self, agent_id: str) -> None:
+        """Revocation hook: re-read the agent's principal and close every
+        long-lived stream not opened with its CURRENT credential (all of them
+        if the agent is deleted/disabled). Runs on every re-route; admin
+        paths that rotate/disable/delete a principal should call
+        :meth:`end_stale_streams_threadsafe` after commit."""
+        subject = await anyio.to_thread.run_sync(self._current_subject, agent_id)
+        await self._end_stale_streams(agent_id, subject)
+
+    def end_stale_streams_threadsafe(self, agent_id: str) -> None:
+        """For sync callers on an anyio worker thread (REST admin routes)."""
+        anyio.from_thread.run(self.end_stale_streams, agent_id)
 
     # ------------------------------------------------------------ exposure
     def _cap(self, principal: AgentPrincipal) -> int:
@@ -487,11 +775,8 @@ class GatewayServer:
                     and len(servers_shown) >= server_cap
                 ):
                     continue  # distinct-server budget (routing.budgets)
-                if self._route_fn is not None and stable_tool_id(server.name, tool.name) in (
-                    META_TOOL,
-                    FEEDBACK_TOOL,
-                ):
-                    continue  # never shadow / duplicate the meta tool's name
+                if stable_tool_id(server.name, tool.name) in RESERVED_TOOL_NAMES:
+                    continue  # never shadow / duplicate a meta-tool's name
                 # Defense in depth: route results are NEVER shown unfiltered.
                 decision = evaluate(principal, server, tool, rules)
                 if decision.allow:
@@ -550,14 +835,20 @@ class GatewayServer:
     ) -> types.CallToolResult:
         principal = self._principal(ctx)
         self._track_session(ctx, principal.agent_id)
-        if params.name == META_TOOL and self._route_fn is not None:
-            return await self._find_tools(principal, params.arguments)
-        if params.name == FEEDBACK_TOOL and self._route_fn is not None:
-            return await self._feedback(principal, params.arguments or {})
-        if self._skills is not None and params.name in (
+        routed = self._route_fn is not None and params.name in (META_TOOL, FEEDBACK_TOOL)
+        skill = self._skills is not None and params.name in (
             ACTIVATE_SKILL_TOOL,
             READ_SKILL_RESOURCE_TOOL,
-        ):
+        )
+        if routed or skill:
+            refusal = _meta_args_refusal(params.name, params.arguments)
+            if refusal is not None:
+                return refusal
+        if routed and params.name == META_TOOL:
+            return await self._find_tools(principal, params.arguments)
+        if routed:
+            return await self._feedback(principal, params.arguments or {})
+        if skill:
             return await self._skill_tool(principal, params.name, params.arguments or {})
         tool_id = await anyio.to_thread.run_sync(self._resolve_stable_id, params.name)
         # Analytics seam (wave 2): attribute the call to the route that exposed
@@ -576,7 +867,7 @@ class GatewayServer:
         self, ctx: ServerRequestContext[Any, Any], params: types.SubscriptionsListenRequestParams
     ) -> types.SubscriptionsListenResult:
         principal = self._principal(ctx)
-        _, handler = self._bus(principal.agent_id)
+        _, handler = self._bus(principal.agent_id, _request_subject(ctx))
         return await handler(ctx, params)
 
     async def _find_tools(
@@ -610,7 +901,14 @@ class GatewayServer:
             return _text(
                 "Refused: routing is unavailable; the tool list is unchanged", is_error=True
             )
-        await self.apply_route(principal.agent_id, result)
+        try:
+            await self.apply_route(principal.agent_id, result)
+        except Exception as exc:  # noqa: BLE001 — exposure is already set; notify is best effort
+            log.warning(
+                "gateway.route_notify_failed agent=%s exc_type=%s",
+                scrub_log(principal.agent_id),
+                type(exc).__name__,
+            )
         rows = await anyio.to_thread.run_sync(self.visible_tools, principal)
         names = [stable_tool_id(server.name, tool.name) for tool, server, _ in rows]
         if not names:
@@ -675,15 +973,13 @@ class GatewayServer:
         return _text(f"Recorded feedback for {n} item(s).", is_error=False)
 
     def _routed_skills(self, agent_id: str) -> tuple[tuple[str, ...], str | None]:
+        """(routed skill ids, request id) from ONE exposure snapshot, so the
+        pair always comes from the same route. exposure.clear(agent) is the
+        reset: skills go with the tools (fail closed)."""
         exposure = self.exposure.get(agent_id)
-        with self._lock:
-            if exposure is None:
-                # exposure.clear(agent) is the reset: skills go with the tools
-                # (fail closed; never serve a stale routed skill set).
-                self._skill_ids.pop(agent_id, None)
-                return (), None
-            ids = self._skill_ids.get(agent_id, ())
-        return ids, exposure.request_id
+        if exposure is None:
+            return (), None
+        return exposure.skill_ids, exposure.request_id
 
     async def _on_list_prompts(
         self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
@@ -735,6 +1031,16 @@ class GatewayServer:
                         )
                     )
         return types.ListResourcesResult(resources=out, cache_scope="private", ttl_ms=0)
+
+    async def _on_list_resource_templates(
+        self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
+    ) -> types.ListResourceTemplatesResult:
+        """D15: always empty (skill resources are concrete URIs). Registered so
+        clients that call it right after resources/list see no error."""
+        self._principal(ctx)
+        return types.ListResourceTemplatesResult(
+            resource_templates=[], cache_scope="private", ttl_ms=0
+        )
 
     async def _on_read_resource(
         self, ctx: ServerRequestContext[Any, Any], params: types.ReadResourceRequestParams
@@ -817,13 +1123,11 @@ class GatewayServer:
         """Install an agent's route result; notify its sessions if it changed."""
         tool_ids = [t.tool_id for t in result.tools if t.kind == "tool"]
         skill_ids = tuple(t.tool_id for t in result.tools if t.kind == "skill")
-        changed = self.exposure.set(agent_id, tool_ids, result.request_id)
-        with self._lock:
-            if self._skill_ids.get(agent_id, ()) != skill_ids:
-                self._skill_ids[agent_id] = skill_ids
-                changed = True
+        changed = self.exposure.set(agent_id, tool_ids, result.request_id, skill_ids=skill_ids)
         if changed:
             await self.notify_tools_changed(agent_id)
+        else:
+            await self.end_stale_streams(agent_id)  # revocation check even without a change
         return changed
 
     def apply_route_threadsafe(self, agent_id: str, result: RouteResult) -> bool:
@@ -832,11 +1136,20 @@ class GatewayServer:
         return anyio.from_thread.run(self.apply_route, agent_id, result)
 
     async def notify_tools_changed(self, agent_id: str) -> None:
-        bus, _ = self._bus(agent_id)
-        await bus.publish(ToolsListChanged())
-        if self._skills is not None:
-            await bus.publish(PromptsListChanged())
-            await bus.publish(ResourcesListChanged())
+        # Re-check the principal at fan-out: streams opened by a revoked,
+        # disabled or rotated-away credential are closed, never notified.
+        subject = await anyio.to_thread.run_sync(self._current_subject, agent_id)
+        await self._end_stale_streams(agent_id, subject)
+        if subject is None:
+            return
+        with self._lock:
+            pair = self._buses.get((agent_id, subject))
+        if pair is not None:  # only the current credential's listen streams
+            bus = pair[0]
+            await bus.publish(ToolsListChanged())
+            if self._skills is not None:
+                await bus.publish(PromptsListChanged())
+                await bus.publish(ResourcesListChanged())
         with self._lock:
             sessions = list(self._legacy.get(agent_id, {}).items())
         dead: list[str] = []
@@ -848,7 +1161,12 @@ class GatewayServer:
                     if self._skills is not None:
                         await session.send_prompt_list_changed()
                         await session.send_resource_list_changed()
-                except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+                except Exception as exc:  # noqa: BLE001 — one bad session must not fail the rest
+                    # Broken/Closed streams are the usual case; anything else
+                    # (e.g. a session the SDK already terminated) is pruned the
+                    # same way instead of escaping as an ExceptionGroup.
+                    if not isinstance(exc, (anyio.BrokenResourceError, anyio.ClosedResourceError)):
+                        log.warning("gateway.notify_failed exc_type=%s", type(exc).__name__)
                     dead.append(sid)
             if scope.cancelled_caught:
                 dead.append(sid)
