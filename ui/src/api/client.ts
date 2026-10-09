@@ -326,7 +326,7 @@ export async function runDedupScan(): Promise<void> {
   await request("POST", `${API_BASE}/dedup/suggestions`);
 }
 
-// CONTRACT: accept body {preferredToolId}.
+// Accept body {preferredToolId} (D12): the backend persists it and echoes the stored id.
 export function acceptDedup(id: string, preferredToolId: string): Promise<DuplicateSuggestion> {
   return request("POST", `${API_BASE}/dedup/suggestions/${encodeURIComponent(id)}/accept`, { body: { preferredToolId } });
 }

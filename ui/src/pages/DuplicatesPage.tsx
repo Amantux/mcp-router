@@ -199,10 +199,11 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
 
   const accept = async () => {
     setAccepting(true);
-    const prefName = preferred === sug.toolAId ? nameA : nameB;
     try {
-      await acceptDedup(sug.id, preferred);
-      notify.success(`Marked “${prefName}” as preferred over its duplicate`);
+      // The toast reports what the backend stored, not what the radio says.
+      const saved = (await acceptDedup(sug.id, preferred)).preferredToolId;
+      const savedName = saved === sug.toolAId ? nameA : saved === sug.toolBId ? nameB : undefined;
+      notify.success(savedName ? `Marked “${savedName}” as preferred over its duplicate` : `Accepted suggestion ${pairLabel}`);
       onResolved();
     } catch (e) {
       notify.error(`Accept suggestion ${pairLabel}`, e);

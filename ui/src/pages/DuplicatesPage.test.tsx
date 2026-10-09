@@ -97,13 +97,17 @@ describe("DuplicatesPage", () => {
           },
         ],
       }),
-      "POST /api/v1/dedup/suggestions/d1/accept": () => ({ json: { id: "d1", status: "accepted" } }),
+      // The backend echoes what it stored; here it differs from the radio on purpose.
+      "POST /api/v1/dedup/suggestions/d1/accept": () => ({ json: { id: "d1", status: "accepted", preferred_tool_id: "b" } }),
     });
     renderWithProviders(<DuplicatesPage />);
     await waitFor(() => expect(screen.getByRole("radio", { name: "Prefer search_issues" })).toBeTruthy());
     await user.click(screen.getByRole("radio", { name: "Prefer search_issues" }));
     await user.click(screen.getByRole("button", { name: "Accept preferred" }));
     await waitFor(() => expect(calls.find((c) => c.url.endsWith("/accept"))?.body).toEqual({ preferredToolId: "a" }));
+    // The toast names the stored preference (find_issues), not the radio (search_issues).
+    expect(await screen.findByText("Marked “find_issues” as preferred over its duplicate")).toBeTruthy();
+    expect(screen.queryByText(/Marked “search_issues”/)).toBeNull();
   });
 });
 
