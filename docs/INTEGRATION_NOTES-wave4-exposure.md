@@ -22,12 +22,27 @@
 - **Routed set**: callers pass the skill ids with `RoutedTool.kind == "skill"` from
   the session's last RouteResult (gateway) / agent's latest decision (REST/bundle).
 
-## NOT yet landed (out of budget this run — next executor)
-- `gateway/server.py`: register `list_prompts/get_prompt/list_resources/read_resource`
-  handlers + `router.activate_skill` / `router.read_skill_resource` meta-tools calling
-  `SkillExposure`; advertise prompts/resources capabilities; send
-  prompts/list_changed + resources/list_changed on re-route — verify against the
-  installed mcp SDK (same mechanism as tools/list_changed). Not yet verified.
+## Gateway wiring (landed, S3b)
+- `GatewayServer(..., skills: SkillExposure | None = None)` / `build_gateway(..., skills=)`.
+  **Integrator must construct a SkillExposure (S2 policy behind SkillPolicy) and pass
+  it**; with `None` the prompts/resources lists are empty and no skill meta-tools appear.
+- Installed SDK (verified in .venv): `Server(on_list_prompts, on_get_prompt,
+  on_list_resources, on_read_resource)`; `NotificationOptions(prompts_changed,
+  resources_changed)` (we set all three true); handshake era via
+  `ServerSession.send_prompt_list_changed/send_resource_list_changed`; 2026-07-28 era
+  via `PromptsListChanged`/`ResourcesListChanged` on the per-agent subscription bus.
+  List results require `cache_scope`/`ttl_ms` (private/0).
+- Routed skill ids: `RoutedTool.kind == "skill"` from the agent's last RouteResult,
+  held in `GatewayServer._skill_ids[agent]` (not in `Exposure`, to stay out of
+  exposure.py); tool ids passed to ExposureStore now exclude skills.
+- Resource URI `skill://<source>/<skill>/<path>`, split on the first two `/`, no
+  percent-decoding; the path is validated only by SkillFiles.
+- All MCP skill errors are `INVALID_PARAMS` with messages chosen by code:
+  rate_limited / denied / too_large, else "Unknown skill or resource.".
+- Meta-tools `router.activate_skill{name}` and `router.read_skill_resource{name,path}`
+  go through the same `_activate` / `_read_skill_resource` helpers (tested with a stub).
+
+## NOT yet landed (out of budget, S3b — next executor)
 - `api/routes_skills.py` section "# --- wave-4 S3: activation + bundle ---".
   Planned shapes (S4 can build against these):
   - `POST /api/v1/skills/{id}/activate` body `{agentId?, routeRequestId?}` (agentId
