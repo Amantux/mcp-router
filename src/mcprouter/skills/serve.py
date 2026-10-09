@@ -135,6 +135,8 @@ class SkillFiles:
         entries = manifest_entries(skill)
         if rel not in entries:
             raise SkillServeError("not_in_manifest", "Resource is not part of this skill.")
+        if entries[rel].get("oversize"):  # listed for visibility, never servable (no sha256)
+            raise SkillServeError("stale", "Resource changed since the skill was indexed.")
         sdir = self.skill_dir(skill.relative_path)
         real = os.path.realpath(os.path.join(sdir, rel))
         if not _within(real, sdir) or real == sdir:
