@@ -206,3 +206,71 @@ describe("ToolDetailDrawer funnel tab", () => {
     expect(screen.getByTestId("card-savings").textContent).toMatch(/36,000 skill-body tokens not sent/);
   });
 });
+
+describe("AnalyticsPage estimates, measured latency and feedback", () => {
+  const MEASURED = { routeLatencyP50Ms: 40, routeLatencyP95Ms: 170, executionLatencyP50Ms: 250, executionLatencyP95Ms: 900 };
+
+  it("says 'Not configured' (never 0) when the operator rates are unset", async () => {
+    mockAnalytics({
+      ...OVERVIEW,
+      context_economy: {
+        ...ECON,
+        estimatedTimeSavedMs: null,
+        estimatedCostSaved: null,
+        currency: null,
+        assumptions: { prefillMsPer1kTokens: null, pricePer1kInputTokens: null, estimator: "chars/4" },
+      },
+      measured: MEASURED,
+    });
+    renderWithProviders(<AnalyticsPage />);
+    const time = await screen.findByTestId("card-time-saved");
+    expect(time.textContent).toContain("Not configured — set MCPR_PREFILL_MS_PER_1K_TOKENS");
+    expect(time.textContent).not.toMatch(/\b0\b/);
+    const cost = screen.getByTestId("card-cost-saved");
+    expect(cost.textContent).toContain("Not configured — set MCPR_PRICE_PER_1K_INPUT_TOKENS");
+    expect(screen.queryByTestId("card-feedback")).toBeNull();
+  });
+
+  it("shows each configured estimate together with its assumption, and measured latency apart", async () => {
+    mockAnalytics({
+      ...OVERVIEW,
+      context_economy: {
+        ...ECON,
+        estimatedTimeSavedMs: 2520,
+        estimatedCostSaved: 0.63,
+        currency: "USD",
+        assumptions: { prefillMsPer1kTokens: 12, pricePer1kInputTokens: 0.003, estimator: "chars/4" },
+      },
+      measured: MEASURED,
+      feedback: { items: 40, helpfulRate: 0.75, coverage: 0.2 },
+    });
+    renderWithProviders(<AnalyticsPage />);
+    const time = await screen.findByTestId("card-time-saved");
+    expect(time.textContent).toContain("2.5 s");
+    expect(time.textContent).toContain("at 12 ms / 1K tokens");
+    const cost = screen.getByTestId("card-cost-saved");
+    expect(cost.textContent).toContain("0.63");
+    expect(cost.textContent).toMatch(/at .*0\.003 \/ 1K input tokens/);
+    const measured = screen.getByLabelText("Measured latency");
+    expect(within(measured).getByTestId("card-measured-route").textContent).toContain("measured");
+    expect(within(measured).getByTestId("card-measured-exec").textContent).toContain("p95 900 ms");
+    expect(within(measured).queryByTestId("card-time-saved")).toBeNull();
+    const fb = screen.getByTestId("card-feedback");
+    expect(fb.textContent).toContain("75.0%");
+    expect(fb.textContent).toContain("40 items");
+    expect(fb.textContent).toContain("20.0% of decisions covered");
+  });
+});
+
+describe("estimate helpers", () => {
+  it("never return a value without its basis", async () => {
+    const { timeSavedEstimate, costSavedEstimate } = await import("../components/analytics");
+    // value present but rate missing → no estimate at all
+    expect(timeSavedEstimate({ estimatedTimeSavedMs: 100, assumptions: { prefillMsPer1kTokens: null } })).toBeNull();
+    expect(costSavedEstimate({ estimatedCostSaved: 1, currency: "USD", assumptions: { pricePer1kInputTokens: null } })).toBeNull();
+    const t = timeSavedEstimate({ estimatedTimeSavedMs: 100, assumptions: { prefillMsPer1kTokens: 12 } });
+    expect(t).toEqual({ value: "100 ms", basis: "at 12 ms / 1K tokens" });
+    const c = costSavedEstimate({ estimatedCostSaved: 2, currency: "XYZ1", assumptions: { pricePer1kInputTokens: 0.5 } });
+    expect(c?.basis).toContain("0.5");
+  });
+});
