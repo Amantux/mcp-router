@@ -26,7 +26,7 @@ import { getTool, getToolAnalytics, setToolEnabled } from "../api/client";
 import { useNotify } from "../components/Notifications";
 import type { AnalyticsWindow, MCPTool, ToolVersion } from "../api/types";
 import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
-import { fmtInt, fmtMs, fmtTime, JsonBlock, LoadingRow, OperationBadge, useCommonStyles } from "../components/common";
+import { ErrorState, fmtInt, fmtMs, fmtTime, JsonBlock, LoadingRow, OperationBadge, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { ClassificationEditor } from "./ClassificationEditor";
 
@@ -91,7 +91,8 @@ export function VersionTimeline({ versions }: { versions: ToolVersion[] }) {
 export function ToolFunnelPanel({ toolId, kind = "tool" }: { toolId: string; kind?: "tool" | "skill" }) {
   const s = useStyles();
   const c = useCommonStyles();
-  const [win, setWin] = useState<AnalyticsWindow>("30d");
+  // 7d by default: the same window as the Tools table's "Funnel (7d)" column (HS-U-028).
+  const [win, setWin] = useState<AnalyticsWindow>("7d");
   const a = useLoader("Load tool analytics", (sig) => getToolAnalytics(toolId, win, sig), [toolId, win]);
   const d = a.data;
   return (
@@ -104,18 +105,23 @@ export function ToolFunnelPanel({ toolId, kind = "tool" }: { toolId: string; kin
       ) : !d && kind === "skill" ? (
         <Caption1 className={c.muted}>No funnel data for this skill yet. It appears once agents are routed to it.</Caption1>
       ) : !d ? (
-        <Caption1>Funnel data couldn't be loaded.</Caption1>
+        <ErrorState what="Funnel data" onRetry={a.reload} />
       ) : d.tool.surfaced === 0 ? (
         <Caption1 className={c.muted}>This {kind} wasn't surfaced to any agent in this window. Analytics accrue once agents start routing.</Caption1>
       ) : (
         <>
           <section className={s.section} aria-label="Tool funnel">
             <Subtitle2 as="h2">Funnel</Subtitle2>
+            <Caption1 as="p" className={c.muted} style={{ margin: 0 }}>
+              Surfaced: routing offered it to an agent. Selected: the agent then tried to call it (once per offer). Succeeded: a call returned
+              ok. Average rank: its mean position in the offered list (1 = top). Context spent: estimated tokens its definition used in agents'
+              context while offered.
+            </Caption1>
             <FunnelBars label={d.tool.toolName ?? toolId} surfaced={d.tool.surfaced} selected={d.tool.selected} succeeded={d.tool.succeeded} />
             <div className={s.stats}>
               <StatCard label="Selection rate" value={fmtPct(d.tool.selectionRate)} />
               <StatCard label="Success rate" value={fmtPct(d.tool.successRate)} />
-              <StatCard label="Avg rank" value={d.tool.avgRank == null ? "—" : d.tool.avgRank.toFixed(1)} />
+              <StatCard label="Average rank" value={d.tool.avgRank == null ? "—" : d.tool.avgRank.toFixed(1)} />
               <StatCard label="Context spent" value={fmtInt(d.tool.exposedTokens)} sub="tokens" />
             </div>
           </section>
@@ -132,9 +138,9 @@ export function ToolFunnelPanel({ toolId, kind = "tool" }: { toolId: string; kin
                 <TableHeader>
                   <TableRow>
                     <TableHeaderCell>Tool</TableHeaderCell>
-                    <TableHeaderCell className={c.num}>Together</TableHeaderCell>
-                    <TableHeaderCell className={c.num}>This picked</TableHeaderCell>
-                    <TableHeaderCell className={c.num}>Other picked</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>Shown together</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>This one picked</TableHeaderCell>
+                    <TableHeaderCell className={c.num}>The other picked</TableHeaderCell>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -223,7 +229,7 @@ function ToolDetailContent({ toolId, onClose, onChanged }: { toolId: string; onC
         {detail.loading && !t ? (
           <LoadingRow label="Loading tool…" />
         ) : !t ? (
-          <Caption1>Tool details couldn't be loaded.</Caption1>
+          <ErrorState what="Tool details" onRetry={detail.reload} />
         ) : tab === "funnel" ? (
           <ToolFunnelPanel toolId={t.id} />
         ) : (

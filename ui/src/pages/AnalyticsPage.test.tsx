@@ -172,7 +172,7 @@ describe("ToolDetailDrawer funnel tab", () => {
     renderWithProviders(<ToolFunnelPanel toolId="t1" />);
     expect(await screen.findByRole("img", { name: "list_prs: surfaced 200, selected 50, succeeded 45" })).toBeTruthy();
     expect(screen.getByRole("table", { name: "Co-surfaced tools" }).textContent).toContain("get_pr");
-    expect(calls[0].url).toContain("window=30d");
+    expect(calls[0].url).toContain("window=7d"); // the Tools table's "Funnel (7d)" window (HS-U-028)
   });
   it("filters tool rows by kind (client-side fallback) and sends ?kind=", async () => {
     const mixed = {

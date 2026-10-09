@@ -826,7 +826,7 @@ function SkillsPlayground() {
           detail.loading ? (
             <LoadingRow label="Loading skill…" />
           ) : (
-            <Caption1>That skill couldn't be loaded.</Caption1>
+            <ErrorState what="That skill" onRetry={detail.reload} />
           )
         ) : (
           <SkillActivator key={selected.id} skill={selected} />
@@ -917,7 +917,7 @@ function ToolsPlayground() {
           detail.loading ? (
             <LoadingRow label="Loading tool…" />
           ) : (
-            <Caption1>That tool couldn't be loaded.</Caption1>
+            <ErrorState what="That tool" onRetry={detail.reload} />
           )
         ) : (
           <ToolRunner key={`${selected.id}:${selected.schemaHash}`} tool={selected} />

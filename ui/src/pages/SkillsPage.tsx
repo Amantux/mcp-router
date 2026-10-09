@@ -111,7 +111,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
         </TabList>
         {!d ? (
           detail.failed ? (
-            <Caption1>Skill details couldn't be loaded.</Caption1>
+            <ErrorState what="Skill details" onRetry={detail.reload} />
           ) : (
             <LoadingRow label="Loading skill…" />
           )
@@ -133,7 +133,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
         ) : tab === "body" ? (
           <div style={{ paddingTop: 12 }}>
             <Caption1 className={c.muted}>Shown as plain text. Skill bodies come from third-party sources, so Markdown and HTML are not rendered here.</Caption1>
-            {body.data == null ? body.failed ? <Caption1>The body couldn't be loaded.</Caption1> : <LoadingRow label="Loading body…" /> : <SkillBodyText body={body.data} />}
+            {body.data == null ? body.failed ? <ErrorState what="The body" onRetry={body.reload} /> : <LoadingRow label="Loading body…" /> : <SkillBodyText body={body.data} />}
           </div>
         ) : tab === "resources" ? (
           <Table size="extra-small" aria-label="Resources">
@@ -160,7 +160,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
           </Table>
         ) : (
           versions.data == null ? (
-            versions.failed ? <Caption1>The version history couldn't be loaded.</Caption1> : <LoadingRow label="Loading versions…" />
+            versions.failed ? <ErrorState what="The version history" onRetry={versions.reload} /> : <LoadingRow label="Loading versions…" />
           ) : versions.data.length === 0 ? (
             <Caption1>No versions recorded yet.</Caption1>
           ) : (

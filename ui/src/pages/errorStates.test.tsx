@@ -184,6 +184,8 @@ describe("drawers", () => {
     renderWithProviders(<SkillDrawer skillId="k9" onClose={() => {}} />, { route: "/skills" });
     expect(await screen.findByText("Skill details couldn't be loaded.")).toBeTruthy();
     expect(screen.queryByText("Loading skill…")).toBeNull();
+    // HS-U-032: the drawer offers Retry like every other failed load.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
 
