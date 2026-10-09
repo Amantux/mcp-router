@@ -308,22 +308,40 @@ function fullTool(t: (Partial<MCPTool> & { id: string }) | null | undefined): MC
   return t && t.operation !== undefined && t.inputSchema !== undefined ? normaliseTool(t as MCPTool) : undefined;
 }
 
-export async function listDedupSuggestions(status: DedupStatus = "open", signal?: AbortSignal): Promise<DuplicateSuggestion[]> {
-  const raw = toList<BackendSuggestion>(await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status } }));
+/** GET /dedup/suggestions is paged ({items,total,limit,offset}; default limit 50). */
+export async function listDedupSuggestions(
+  q: { status?: DedupStatus; limit: number; offset: number },
+  signal?: AbortSignal,
+): Promise<Page<DuplicateSuggestion>> {
+  const page = toPage<BackendSuggestion>(
+    await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status: q.status ?? "open", limit: q.limit, offset: q.offset } }),
+    q.limit,
+    q.offset,
+  );
   // Reconciled at integration: take ids from the embedded refs; when they are
   // slim refs (no description/schema) the page fetches the full tools by id.
-  return raw.map(({ toolA, toolB, ...s }) => ({
+  const items = page.items.map(({ toolA, toolB, ...s }) => ({
     ...s,
     toolAId: s.toolAId ?? toolA?.id ?? "",
     toolBId: s.toolBId ?? toolB?.id ?? "",
     toolA: fullTool(toolA),
     toolB: fullTool(toolB),
   }));
+  return { ...page, items };
 }
 
-// CONTRACT: POST /dedup/suggestions triggers a scan; response body ignored.
-export async function runDedupScan(): Promise<void> {
-  await request("POST", `${API_BASE}/dedup/suggestions`);
+/** What a scan did. `truncated`: the scan hit MCPR_DEDUP_MAX_PAIRS (null on backends that don't say). */
+export interface DedupRun {
+  pairsConsidered: number;
+  created: number;
+  refreshed: number;
+  skippedDecided: number;
+  truncated?: boolean | null;
+}
+
+/** POST /dedup/suggestions runs a scan and returns its counts (DedupRunOut). */
+export function runDedupScan(): Promise<DedupRun> {
+  return request("POST", `${API_BASE}/dedup/suggestions`);
 }
 
 // Accept body {preferredToolId} (D12): the backend persists it and echoes the stored id.
@@ -519,8 +537,9 @@ export async function listApprovals(status?: ApprovalStatus, signal?: AbortSigna
 
 /**
  * One approval's current state. With an agent key: GET /me/approvals/{id}
- * (agents see only their own). Without: the admin list, filtered by id (there
- * is no admin get-by-id endpoint). Undefined if it no longer exists.
+ * (agents see only their own). Without: there is no admin get-by-id endpoint, so
+ * poll the (small) pending list, and only when the id has left it look once in the
+ * unfiltered list for its final state. Undefined if it no longer exists.
  */
 export async function getApproval(id: string, asAgent: boolean, signal?: AbortSignal): Promise<Approval | undefined> {
   if (asAgent) {
@@ -531,6 +550,8 @@ export async function getApproval(id: string, asAgent: boolean, signal?: AbortSi
       throw e;
     }
   }
+  const pending = (await listApprovals("pending", signal)).find((a) => a.id === id);
+  if (pending) return pending;
   return (await listApprovals(undefined, signal)).find((a) => a.id === id);
 }
 

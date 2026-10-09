@@ -32,7 +32,9 @@ function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): 
   return embedded ? Promise.resolve(embedded) : getTool(id, sig);
 }
 import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
-import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+
+const PAGE_SIZE = 50;
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -256,13 +258,16 @@ export function DuplicatesPage() {
   const s = useStyles();
   const c = useCommonStyles();
   const notify = useNotify();
-  const sugs = useLoader("Load duplicate suggestions", (sig) => listDedupSuggestions("open", sig), []);
+  const [offset, setOffset] = useState(0);
+  const sugs = useLoader("Load duplicate suggestions", (sig) => listDedupSuggestions({ status: "open", limit: PAGE_SIZE, offset }, sig), [offset]);
   const [scanning, setScanning] = useState(false);
   const scan = async () => {
     setScanning(true);
     try {
-      await runDedupScan();
-      notify.success("Duplicate scan finished");
+      const run = await runDedupScan();
+      const what = run.created === 0 ? "No new duplicates found" : `${fmtInt(run.created)} new duplicate suggestion${run.created === 1 ? "" : "s"}`;
+      const cut = run.truncated ? ". The scan stopped at its pair limit (MCPR_DEDUP_MAX_PAIRS), so some pairs were not compared" : "";
+      notify.success(`${what}${cut}.`);
       sugs.refresh();
     } catch (e) {
       notify.error("Run duplicate scan", e);
@@ -270,12 +275,12 @@ export function DuplicatesPage() {
       setScanning(false);
     }
   };
-  const list = sugs.data ?? [];
+  const list = sugs.data?.items ?? [];
   return (
     <>
       <PageHeader
         title="Duplicate review"
-        meta={sugs.data && <Caption1 className={c.muted}>{fmtInt(list.length)} open</Caption1>}
+        meta={sugs.data && <Caption1 className={c.muted}>{fmtInt(sugs.data.total)} open</Caption1>}
         actions={
           <Button appearance="primary" disabled={scanning} onClick={() => void scan()}>
             {scanning ? "Scanning…" : "Run duplicate scan"}
@@ -305,6 +310,7 @@ export function DuplicatesPage() {
           {list.map((sug) => (
             <PairCard key={sug.id} sug={sug} onResolved={() => sugs.refresh()} />
           ))}
+          {sugs.data && <Pager offset={sugs.data.offset} limit={PAGE_SIZE} total={sugs.data.total} onChange={setOffset} />}
         </div>
       )}
     </>

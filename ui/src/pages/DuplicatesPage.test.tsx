@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockFetch, renderWithProviders } from "../test/render";
+import { expectQuery, mockFetch, renderWithProviders } from "../test/render";
 import { DismissDialog, DuplicatesPage } from "./DuplicatesPage";
 import type { MCPTool } from "../api/types";
 
@@ -138,3 +138,50 @@ describe("DuplicatesPage cross-kind pairs", () => {
     expect(screen.getByText(/Nothing is ever auto-disabled/)).toBeTruthy();
   });
 });
+
+describe("DuplicatesPage scan and paging", () => {
+  const sug = (i: number) => ({
+    id: `d${i}`,
+    tool_a_id: `a${i}`,
+    tool_b_id: `b${i}`,
+    similarity: 0.8,
+    rationale: `pair ${i}`,
+    status: "open",
+    created_at: "2026-10-01T00:00:00Z",
+    tool_a: tool(`a${i}`, `x${i}`, "github"),
+    tool_b: tool(`b${i}`, `y${i}`, "gitea"),
+  });
+
+  it("says when a scan found nothing new, and when it was truncated", async () => {
+    const user = userEvent.setup();
+    let created = 0;
+    mockFetch({
+      "GET /api/v1/dedup/suggestions": () => ({ json: { items: [], total: 0, limit: 50, offset: 0 } }),
+      "POST /api/v1/dedup/suggestions": () => ({ json: { pairs_considered: 10, created, refreshed: 2, skipped_decided: 1, truncated: created > 0 } }),
+    });
+    renderWithProviders(<DuplicatesPage />);
+    await screen.findByText("No open duplicate suggestions");
+    await user.click(screen.getByRole("button", { name: "Run duplicate scan" }));
+    expect(await screen.findByText("No new duplicates found.")).toBeTruthy();
+    created = 3;
+    await user.click(screen.getByRole("button", { name: "Run duplicate scan" }));
+    expect(await screen.findByText(/^3 new duplicate suggestions\. The scan stopped at its pair limit/)).toBeTruthy();
+  });
+
+  it("pages past 50 suggestions and counts the total, not the page", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/dedup/suggestions": (_b, call) =>
+        call.query.offset === "50"
+          ? { json: { items: [sug(51)], total: 51, limit: 50, offset: 50 } }
+          : { json: { items: Array.from({ length: 50 }, (_, i) => sug(i + 1)), total: 51, limit: 50, offset: 0 } },
+    });
+    renderWithProviders(<DuplicatesPage />);
+    expect(await screen.findByText("51 open")).toBeTruthy();
+    expectQuery(calls, "GET", "/api/v1/dedup/suggestions", { status: "open", limit: "50", offset: "0" });
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("pair 51")).toBeTruthy();
+    expectQuery(calls, "GET", "/api/v1/dedup/suggestions", { status: "open", limit: "50", offset: "50" });
+  });
+});
+

@@ -6,6 +6,7 @@ import {
   executeTool,
   getModelsHealth,
   getTool,
+  getApproval,
   listDedupSuggestions,
   listRules,
   listServers,
@@ -226,7 +227,9 @@ describe("integration reconciliation (backend shapes)", () => {
         json: { items: [{ id: "d1", tool_a: { id: "a", name: "x" }, tool_b: { id: "b", name: "y" }, similarity: 0.9, status: "open" }] },
       }),
     });
-    const [s] = await listDedupSuggestions();
+    const {
+      items: [s],
+    } = await listDedupSuggestions({ limit: 50, offset: 0 });
     expect([s.toolAId, s.toolBId, s.toolA, s.toolB]).toEqual(["a", "b", undefined, undefined]);
   });
 });
@@ -289,3 +292,18 @@ describe("skills on /route and /route/simulate (S2d item 2)", () => {
     expect(s.maxSkillsApplied).toBeNull();
   });
 });
+
+describe("getApproval (admin path)", () => {
+  const ap = (status: string) => ({ id: "ap-1", agent_id: "a", tool_id: "t", status, summary: {}, created_at: "", expires_at: "", decided_at: null, result_preview: null });
+  it("polls only the pending list while the approval is pending", async () => {
+    const { calls } = mockFetch({ "GET /api/v1/approvals": () => ({ json: [ap("pending")] }) });
+    expect((await getApproval("ap-1", false))?.status).toBe("pending");
+    expect(calls.map((c) => c.query)).toEqual([{ status: "pending" }]);
+  });
+  it("looks once in the full list after it leaves pending", async () => {
+    const { calls } = mockFetch({ "GET /api/v1/approvals": (_b, call) => ({ json: call.query.status === "pending" ? [] : [ap("executed")] }) });
+    expect((await getApproval("ap-1", false))?.status).toBe("executed");
+    expect(calls.map((c) => c.query)).toEqual([{ status: "pending" }, {}]);
+  });
+});
+
