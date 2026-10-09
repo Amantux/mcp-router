@@ -16,7 +16,7 @@ from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.routes_skill_sources import router as src_router
 from mcprouter.models import SkillSourceRecord
 from mcprouter.settings import Settings
-from mcprouter.skills import gitsource, sources
+from mcprouter.skills import gitsource
 
 ADMIN = "admin_" + "f" * 40
 H = {"Authorization": f"Bearer {ADMIN}"}
@@ -44,7 +44,7 @@ def test_sync_error_body_is_curated(
     def boom(*_a: Any, **_k: Any) -> Any:
         raise cls(SECRET)
 
-    monkeypatch.setattr(sources.gitsource, "fetch", boom)
+    monkeypatch.setattr(gitsource, "fetch", boom)
     deps_auth._reset_dev_warning_for_tests()
     app = FastAPI()
     app.state.settings, app.state.session_factory = settings, db
