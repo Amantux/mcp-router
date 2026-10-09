@@ -38,7 +38,7 @@ For UI development use <code>npm run dev</code> (proxies to this server).</p>
 
 def _reserved(path: str) -> bool:
     head = path.split("/", 1)[0]
-    return head in RESERVED_PREFIXES
+    return head.lower() in RESERVED_PREFIXES
 
 
 def _resolve(dist: Path, path: str) -> Path | None:

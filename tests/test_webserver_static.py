@@ -72,6 +72,11 @@ def test_reserved_prefixes_404_not_spa(dist: Path) -> None:
     for path in ("/api/v1/does-not-exist", "/mcp/x", "/metrics/x", "/healthz/x", "/docs/x"):
         r = c.get(path)
         assert r.status_code == 404 and "SPA" not in r.text, path
+    for path in ("/API/x", "/Mcp/x", "/HEALTHZ/x"):  # case must not reach the SPA
+        r = c.get(path)
+        assert r.status_code == 404 and r.headers["content-type"].startswith("application/json"), (
+            path
+        )
 
 
 def test_not_built_page(tmp_path: Path) -> None:
