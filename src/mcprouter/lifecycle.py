@@ -28,8 +28,9 @@ itself already succeeded and its catalog rows are committed.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -41,6 +42,7 @@ from mcprouter.interfaces import EmbeddingBackend
 from mcprouter.models import MCPToolRecord
 from mcprouter.registry.catalog import apply_auto_classification
 from mcprouter.registry.classify import RuleBasedClassifier, ToolClassifier
+from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
 
@@ -194,3 +196,48 @@ def run_skill_post_sync(
     except Exception as exc:  # noqa: BLE001 — best effort; the sync already succeeded
         log.warning("skill post-sync embedding failed: %s", type(exc).__name__)
     bump_catalog()
+
+
+def run_due_skill_syncs(
+    factory: sessionmaker[Session],
+    settings: Settings,
+    post_sync: Callable[[str, dict[str, str]], None] | None,
+    now: datetime,
+    attempts: dict[str, datetime],
+) -> list[str]:
+    """Scheduled skill-source tick: sync every ENABLED source whose
+    ``sync_interval_s`` has elapsed since its last success (``last_synced_at``)
+    or last attempt (``attempts``, so a failing git source isn't hammered every
+    tick). Returns the ids attempted. One bad source never blocks the rest."""
+    from mcprouter.models import SkillSourceRecord
+    from mcprouter.skills.sources import run_sync
+
+    with factory() as s:
+        rows = s.execute(
+            select(
+                SkillSourceRecord.id,
+                SkillSourceRecord.last_synced_at,
+                SkillSourceRecord.sync_interval_s,
+            ).where(SkillSourceRecord.enabled.is_(True))
+        ).all()
+    due: list[str] = []
+    for sid, last, interval in rows:
+        marks = [m for m in (last, attempts.get(sid)) if m is not None]
+        marks = [m if m.tzinfo else m.replace(tzinfo=UTC) for m in marks]
+        if not marks or (now - max(marks)).total_seconds() >= interval:
+            due.append(sid)
+    for sid in due:
+        attempts[sid] = now
+        try:
+            with factory() as s:
+                rec = s.get(SkillSourceRecord, sid)
+                if rec is None:
+                    continue
+                before = skill_content_snapshot(s, sid)
+                run_sync(s, rec, settings)
+                s.commit()
+            if post_sync is not None:
+                post_sync(sid, before)
+        except Exception as exc:  # noqa: BLE001 — one bad source must not stop the tick
+            log.warning("scheduled skill sync failed: %s", type(exc).__name__)
+    return due

@@ -25,6 +25,7 @@ import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 
 import anyio.to_thread
 from fastapi import FastAPI
@@ -52,7 +53,11 @@ from mcprouter.gateway.skills import SkillExposure
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
 from mcprouter.inference.engine import InferenceEngine
 from mcprouter.interfaces import RouteRequest, RouteResult
-from mcprouter.lifecycle import make_post_sync_hook, run_skill_post_sync
+from mcprouter.lifecycle import (
+    make_post_sync_hook,
+    run_due_skill_syncs,
+    run_skill_post_sync,
+)
 from mcprouter.policy.scope import policy_scope_resolver
 from mcprouter.policy.skill_bridge import EngineSkillPolicy
 from mcprouter.registry.schema import init_registry
@@ -97,7 +102,19 @@ def create_app(
         rollups: RollupLoop | None = None
         try:
             if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
-                loop = SyncLoop(_app.state.discovery)
+                attempts: dict[str, datetime] = {}
+
+                async def _skill_tick() -> object:
+                    return await anyio.to_thread.run_sync(
+                        run_due_skill_syncs,
+                        _app.state.session_factory,
+                        settings,
+                        _app.state.skill_post_sync,
+                        datetime.now(UTC),
+                        attempts,
+                    )
+
+                loop = SyncLoop(_app.state.discovery, skill_tick=_skill_tick)
                 await loop.start()
                 _app.state.sync_loop = loop
             if settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
