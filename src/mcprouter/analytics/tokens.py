@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord
 
 CHARS_PER_TOKEN = 4
 ESTIMATOR = "chars/4 over compact JSON of name+description+inputSchema"
@@ -61,3 +61,33 @@ def tool_token_map(session: Session) -> dict[str, int]:
         ).join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
     ).all()
     return {tid: estimate_tokens(srv, name, desc, sch) for tid, srv, name, desc, sch in rows}
+
+
+SKILL_METADATA_ESTIMATOR = "chars/4 over compact JSON of skill name+description"
+
+
+def skill_metadata_tokens(name: str, description: str) -> int:
+    """The progressive-disclosure tier an agent always receives for a skill:
+    `name` + `description` (the body is sent only on activation)."""
+    chars = len(
+        json.dumps(
+            {"name": name, "description": description or ""},
+            separators=(",", ":"),
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    )
+    return math.ceil(chars / CHARS_PER_TOKEN)
+
+
+def skill_token_maps(session: Session) -> tuple[dict[str, int], dict[str, int]]:
+    """("skill:<id>" -> metadata tokens, "skill:<id>" -> body_tokens_est) for
+    every skill currently in the catalog. Keys use the funnel's kind prefix."""
+    rows = session.execute(
+        select(
+            SkillRecord.id, SkillRecord.name, SkillRecord.description, SkillRecord.body_tokens_est
+        )
+    ).all()
+    meta = {f"skill:{sid}": skill_metadata_tokens(n, d) for sid, n, d, _ in rows}
+    body = {f"skill:{sid}": int(b or 0) for sid, _, _, b in rows}
+    return meta, body

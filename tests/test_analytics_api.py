@@ -94,6 +94,9 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "tokensNotSent",
         "savings",
         "catalogTokensPerDecision",
+        "skillMetadataTokens",
+        "skillBodyTokensExposed",
+        "skillBodyTokensNotSent",
         "estimator",
         "catalogBasis",
     }

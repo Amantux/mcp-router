@@ -9,13 +9,14 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.analytics import economy, service
 from mcprouter.analytics import funnel as fn
-from mcprouter.analytics import service
+from mcprouter.analytics import tokens as tokens_mod
 from mcprouter.analytics.profiles import profiles
 from mcprouter.analytics.rollup import recompute_day
 from mcprouter.analytics.tokens import tool_token_map
 from mcprouter.analytics.window import midnight, parse_window
-from mcprouter.models import ExecutionRecord, SkillRecord, SkillSourceRecord
+from mcprouter.models import ExecutionRecord, PolicyRule, SkillRecord, SkillSourceRecord
 
 from .conftest import requires_db
 from .test_analytics_support import NOW, add_decision, add_exec
@@ -188,3 +189,37 @@ def test_route_accepts_skill_ids_and_kind(sec_db: sessionmaker[Session]) -> None
     r = c.get("/api/v1/analytics/tools?kind=skill", headers=H_ADMIN)
     assert [i["toolId"] for i in r.json()["items"]] == [f"skill:{sid}"]
     assert c.get("/api/v1/analytics/tools?kind=bogus", headers=H_ADMIN).status_code == 422
+
+
+def _econ(db: sessionmaker[Session], agent: str = "alice") -> economy.Economy:
+    with db() as s:
+        return economy.economy_by_agent(s, parse_window("7d", NOW), tool_token_map(s))[agent]
+
+
+def test_economy_prices_skills_and_never_counts_unactivated_bodies(
+    db: sessionmaker[Session],
+) -> None:
+    a = _skill(db, "pdf-fill")
+    b = _skill(db, "xlsx-edit")
+    with db() as s:
+        s.add(PolicyRule(agent_id="alice", resource_kind="skill", max_operation="execute"))
+        s.commit()
+    r1 = add_decision(db, "alice", NOW - timedelta(minutes=5), [f"skill:{a}", f"skill:{b}"])
+    _activate(db, "alice", a, r1)
+    # Same skill surfaced again, NOT activated there: its body is not exposed
+    # on this decision even though it was activated on r1.
+    add_decision(db, "alice", NOW - timedelta(minutes=4), [f"skill:{a}"])
+    meta = tokens_mod.skill_metadata_tokens("pdf-fill", "Fill PDF forms")
+    meta_b = tokens_mod.skill_metadata_tokens("xlsx-edit", "Fill PDF forms")
+    e = _econ(db)
+    assert e.stale_ref_decisions == 0 and e.served_decisions == 2
+    assert e.skill_metadata_tokens == 2 * meta + meta_b
+    assert e.skill_body_tokens_exposed == 100  # only a's body, only on r1
+    assert e.skill_body_tokens_not_sent == 200  # b on r1 + a on the 2nd decision
+    assert e.exposed_tokens == 2 * meta + meta_b + 100
+    assert e.catalog_tokens == 2 * (meta + meta_b)  # authorized skills' metadata
+
+
+def test_economy_unknown_skill_id_is_still_stale(db: sessionmaker[Session]) -> None:
+    add_decision(db, "alice", NOW - timedelta(minutes=5), ["skill:does-not-exist"])
+    assert _econ(db).stale_ref_decisions == 1

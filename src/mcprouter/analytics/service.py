@@ -78,6 +78,9 @@ def _economy_out(e: Economy, *, per_agent: bool = False) -> EconomyOut:
         tokens_not_sent=e.tokens_not_sent,
         savings=e.savings,
         catalog_tokens_per_decision=e.catalog_tokens_per_decision if per_agent else None,
+        skill_metadata_tokens=e.skill_metadata_tokens,
+        skill_body_tokens_exposed=e.skill_body_tokens_exposed,
+        skill_body_tokens_not_sent=e.skill_body_tokens_not_sent,
         estimator=ESTIMATOR,
         catalog_basis=CATALOG_BASIS,
     )

@@ -30,6 +30,9 @@ class EconomyOut(Wire):
     tokens_not_sent: int
     savings: float | None
     catalog_tokens_per_decision: int | None = None
+    skill_metadata_tokens: int = 0
+    skill_body_tokens_exposed: int = 0
+    skill_body_tokens_not_sent: int = 0
     estimator: str
     catalog_basis: str
 

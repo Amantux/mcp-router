@@ -37,6 +37,15 @@ approximations, all surfaced on the wire so the number can be audited:
 * No-match decisions (nothing surfaced) are EXCLUDED from savings — a miss
   is not a saving — and counted separately.
 * Raw tables only (no rollup): per-agent catalogs are not rolled up.
+* SKILLS (funnel id "skill:<id>"): a surfaced skill costs its METADATA
+  (chars/4 over name+description, `tokens.skill_metadata_tokens`); its body
+  (`SkillRecord.body_tokens_est`) counts as exposed ONLY when the skill has an
+  attributed activation on that same decision (`funnel.ATT_CTE`). Bodies of
+  surfaced-but-not-activated skills are reported as `skill_body_tokens_not_sent`
+  and are NOT part of `exposed` or `catalog`. The catalog counterfactual adds
+  the metadata of every skill the agent is CURRENTLY authorized for
+  (`policy.engine.evaluate_skill`, enabled + available skills on enabled
+  sources) — same current-scope approximation and bias as tools.
 """
 
 from __future__ import annotations
@@ -47,11 +56,18 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from mcprouter.analytics.funnel import LIVE_DECISION_SQL, SURF_CTE, ratio
-from mcprouter.analytics.tokens import ESTIMATOR
+from mcprouter.analytics.funnel import ATT_CTE, LIVE_DECISION_SQL, SURF_CTE, ratio
+from mcprouter.analytics.tokens import ESTIMATOR, skill_token_maps
 from mcprouter.analytics.window import Window
-from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
-from mcprouter.policy.engine import evaluate
+from mcprouter.models import (
+    AgentPrincipal,
+    MCPServerRecord,
+    MCPToolRecord,
+    PolicyRule,
+    SkillRecord,
+    SkillSourceRecord,
+)
+from mcprouter.policy.engine import evaluate, evaluate_skill
 
 CATALOG_BASIS = "current_policy_scope"
 
@@ -87,6 +103,24 @@ SELECT dec.agent_id, count(*) FROM dec WHERE NOT dec.complete GROUP BY dec.agent
 """
 )
 
+# Skill bodies on priceable decisions: activated (attributed on THIS decision)
+# vs surfaced-only. Only "skill:" ids; tool ids never reach this query.
+_SKILL_BODY_SQL = text(
+    "WITH"
+    + SURF_CTE
+    + _DEC_CTE
+    + ","
+    + ATT_CTE
+    + """
+SELECT s.agent_id, s.tool_id, (att.decision_id IS NOT NULL) AS activated, count(*) AS n
+FROM surf s
+JOIN dec ON dec.decision_id = s.decision_id
+LEFT JOIN att ON att.decision_id = s.decision_id AND att.tool_id = s.tool_id
+WHERE dec.complete AND starts_with(s.tool_id, 'skill:')
+GROUP BY s.agent_id, s.tool_id, activated
+"""
+)
+
 _AGENT_DECISIONS_SQL = text(
     """
 SELECT d.agent_id,
@@ -114,6 +148,9 @@ class Economy:
     exposed_tokens: int = 0
     catalog_tokens: int = 0
     catalog_tokens_per_decision: int | None = None  # per agent only
+    skill_metadata_tokens: int = 0  # part of exposed_tokens
+    skill_body_tokens_exposed: int = 0  # part of exposed_tokens (activated only)
+    skill_body_tokens_not_sent: int = 0  # surfaced, never activated; NOT in exposed
 
     @property
     def tokens_not_sent(self) -> int:
@@ -131,14 +168,21 @@ class Economy:
         self.no_match_decisions += other.no_match_decisions
         self.exposed_tokens += other.exposed_tokens
         self.catalog_tokens += other.catalog_tokens
+        self.skill_metadata_tokens += other.skill_metadata_tokens
+        self.skill_body_tokens_exposed += other.skill_body_tokens_exposed
+        self.skill_body_tokens_not_sent += other.skill_body_tokens_not_sent
 
 
 def agent_catalog_tokens(
-    session: Session, agent_ids: list[str], tokens: dict[str, int]
+    session: Session,
+    agent_ids: list[str],
+    tokens: dict[str, int],
+    skill_tokens: dict[str, int] | None = None,
 ) -> dict[str, int]:
     """agent_id -> estimated tokens of its CURRENT authorized catalog."""
     if not agent_ids:
         return {}
+    skill_tokens = skill_tokens or {}
     pairs = session.execute(
         select(MCPToolRecord, MCPServerRecord)
         .join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
@@ -153,6 +197,11 @@ def agent_catalog_tokens(
     rules: dict[str, list[PolicyRule]] = defaultdict(list)
     for r in session.scalars(select(PolicyRule).where(PolicyRule.agent_id.in_(agent_ids))).all():
         rules[r.agent_id].append(r)
+    skills = session.execute(
+        select(SkillRecord, SkillSourceRecord)
+        .join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+        .where(SkillRecord.enabled, SkillRecord.available, SkillSourceRecord.enabled)
+    ).all()
     out: dict[str, int] = {}
     for agent in agent_ids:
         principal = principals.get(agent) or AgentPrincipal(
@@ -165,6 +214,11 @@ def agent_catalog_tokens(
                 for t, srv in pairs
                 if evaluate(principal, srv, t, agent_rules).allow
             )
+            + sum(
+                skill_tokens.get(f"skill:{sk.id}", 0)
+                for sk, src in skills
+                if evaluate_skill(principal, src, sk, agent_rules).allow
+            )
             if agent_rules
             else 0
         )
@@ -174,21 +228,32 @@ def agent_catalog_tokens(
 def economy_by_agent(
     session: Session, window: Window, tokens: dict[str, int]
 ) -> dict[str, Economy]:
+    skill_meta, skill_body = skill_token_maps(session)
     params = {
         "start": window.start,
         "end": window.end,
         "skip_days": [],
-        "known": sorted(tokens),
+        # Tool ids, plus "skill:<id>" for skills still in the catalog. Tool
+        # ids are never "skill:"-prefixed, so the two key spaces cannot collide.
+        "known": sorted(set(tokens) | set(skill_meta)),
     }
     decisions = {
         a: (int(n), int(served))
         for a, n, served in session.execute(_AGENT_DECISIONS_SQL, params).all()
     }
     exposed: dict[str, int] = defaultdict(int)
+    meta_x: dict[str, int] = defaultdict(int)
     for agent, tid, n in session.execute(_AGENT_TOOL_SQL, params).all():
-        exposed[agent] += int(n) * tokens.get(tid, 0)
+        if tid in skill_meta:
+            meta_x[agent] += int(n) * skill_meta[tid]
+        else:
+            exposed[agent] += int(n) * tokens.get(tid, 0)
+    body_x: dict[str, int] = defaultdict(int)
+    body_ns: dict[str, int] = defaultdict(int)
+    for agent, sid, activated, n in session.execute(_SKILL_BODY_SQL, params).all():
+        (body_x if activated else body_ns)[agent] += int(n) * skill_body.get(sid, 0)
     stale = {a: int(n) for a, n in session.execute(_INCOMPLETE_SQL, params).all()}
-    catalogs = agent_catalog_tokens(session, sorted(decisions), tokens)
+    catalogs = agent_catalog_tokens(session, sorted(decisions), tokens, skill_meta)
     out: dict[str, Economy] = {}
     for agent, (n, served) in decisions.items():
         per = catalogs.get(agent, 0)
@@ -200,9 +265,12 @@ def economy_by_agent(
             unscored_decisions=0 if scored else priced,
             stale_ref_decisions=stale_n,
             no_match_decisions=n - served,
-            exposed_tokens=exposed[agent] if scored else 0,
+            exposed_tokens=(exposed[agent] + meta_x[agent] + body_x[agent]) if scored else 0,
             catalog_tokens=priced * per if scored else 0,
             catalog_tokens_per_decision=per,
+            skill_metadata_tokens=meta_x[agent] if scored else 0,
+            skill_body_tokens_exposed=body_x[agent] if scored else 0,
+            skill_body_tokens_not_sent=body_ns[agent] if scored else 0,
         )
     return out
 
