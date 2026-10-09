@@ -291,6 +291,20 @@ export interface CreatedPrincipal extends Principal {
   apiKey: string;
 }
 
+export interface PrincipalPatch {
+  enabled?: boolean;
+  maxTools?: number;
+  /** null clears the cap (no limit). */
+  maxServers?: number | null;
+  maxSkills?: number;
+}
+
+export interface RotatedKey {
+  id: string;
+  agentId: string;
+  apiKey: string;
+}
+
 export interface PolicyRule {
   id: string;
   agentId: string;
@@ -307,6 +321,13 @@ export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt"> & {
   /** "skill" re-targets serverId at a skill source id; immutable after create. */
   resourceKind?: "tool" | "skill";
 };
+
+export interface RulePatch {
+  serverId?: string | null;
+  toolName?: string | null;
+  maxOperation?: OperationCeiling;
+  requiresApproval?: boolean;
+}
 
 // -------------------------------------------------------------- execution
 /** execution/manager.py statuses (ExecutionResult.status). */
@@ -739,6 +760,14 @@ export interface SkillResource {
   sha256?: string;
   kind: string;
   oversize?: boolean;
+}
+/** One row of GET /skills/{id}/versions. */
+export interface SkillVersionRow {
+  version: number;
+  changeKind: string;
+  contentHash: string;
+  manifestHash?: string | null;
+  recordedAt: string;
 }
 export interface SkillVersion {
   version?: string | null;

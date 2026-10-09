@@ -20,7 +20,7 @@ import {
 } from "@fluentui/react-components";
 import { ArrowDownloadRegular, BookRegular, DismissRegular, FilterDismissRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources, updateSkillClassification } from "../api/client";
+import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources, listSkillVersions, updateSkillClassification } from "../api/client";
 import { ClassificationEditor } from "./ClassificationEditor";
 import { ToolFunnelPanel } from "./ToolDetailDrawer";
 import { DOMAINS, OPERATIONS, type Operation, type Skill, type SkillDetail } from "../api/types";
@@ -71,6 +71,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
   const [tab, setTab] = useState("overview");
   const detail = useLoader<SkillDetail>("Load skill", (sig) => getSkill(skillId, sig), [skillId]);
   const body = useLoader<string | null>("Load skill body", (sig) => (tab === "body" ? getSkillBody(skillId, sig) : Promise.resolve(null)), [skillId, tab]);
+  const versions = useLoader("Load skill versions", (sig) => (tab === "versions" ? listSkillVersions(skillId, sig) : Promise.resolve(null)), [skillId, tab]);
   const d = detail.data;
   return (
     <>
@@ -137,13 +138,22 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
             </TableBody>
           </Table>
         ) : (
-          <ol aria-label="Versions">
-            {(d.versions ?? []).map((v, i) => (
-              <li key={i}>
-                {v.version ?? "unversioned"} <Caption1 className={c.muted}>{fmtTime(v.createdAt)} {v.contentHash?.slice(0, 8)}</Caption1>
-              </li>
-            ))}
-          </ol>
+          versions.data == null ? (
+            versions.failed ? <Caption1>The version history couldn't be loaded.</Caption1> : <LoadingRow label="Loading versions…" />
+          ) : versions.data.length === 0 ? (
+            <Caption1>No versions recorded yet.</Caption1>
+          ) : (
+            <ol aria-label="Versions">
+              {[...versions.data].reverse().map((v) => (
+                <li key={v.version}>
+                  v{v.version} · {v.changeKind}{" "}
+                  <Caption1 className={c.muted}>
+                    {fmtTime(v.recordedAt)} <span className={c.mono}>{v.contentHash.slice(0, 8)}</span>
+                  </Caption1>
+                </li>
+              ))}
+            </ol>
+          )
         )}
       </DrawerBody>
     </>

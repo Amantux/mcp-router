@@ -68,7 +68,9 @@ export function mockFetch(routes: Record<string, MockHandler>) {
     }
     const r = await handler(body, call);
     const text = r.text ?? (r.json !== undefined ? JSON.stringify(r.json) : "");
-    return new Response(text, { status: r.status ?? 200, headers: { "Content-Type": "application/json" } });
+    const status = r.status ?? 200;
+    // A null-body status (204 No Content) cannot carry a body, not even "".
+    return new Response(status === 204 ? null : text, { status, headers: { "Content-Type": "application/json" } });
   });
   vi.stubGlobal("fetch", fn);
   return { fn, calls };

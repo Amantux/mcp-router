@@ -22,7 +22,8 @@ import {
 } from "@fluentui/react-components";
 import { DismissRegular, PlayRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { getTool, getToolAnalytics } from "../api/client";
+import { getTool, getToolAnalytics, setToolEnabled } from "../api/client";
+import { useNotify } from "../components/Notifications";
 import type { AnalyticsWindow, MCPTool, ToolVersion } from "../api/types";
 import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
 import { fmtInt, fmtMs, fmtTime, JsonBlock, LoadingRow, OperationBadge, useCommonStyles } from "../components/common";
@@ -173,6 +174,22 @@ function ToolDetailContent({ toolId, onClose, onChanged }: { toolId: string; onC
   const t = detail.data;
   const calls = t?.callCount ?? 0;
   const [tab, setTab] = useState<"details" | "funnel">("details");
+  const notify = useNotify();
+  const [toggling, setToggling] = useState(false);
+  // One tool, reversible, no confirm: disabling the whole server is the confirmed bulk action.
+  const toggle = async (tool: MCPTool) => {
+    setToggling(true);
+    try {
+      const updated = await setToolEnabled(tool.id, !tool.enabled);
+      notify.success(`${tool.enabled ? "Disabled" : "Enabled"} tool “${tool.name}”${tool.enabled ? ": agents no longer see it" : ""}`);
+      onChanged(updated);
+      detail.refresh();
+    } catch (e) {
+      notify.error(`${tool.enabled ? "Disable" : "Enable"} tool “${tool.name}”`, e);
+    } finally {
+      setToggling(false);
+    }
+  };
   const errRate = calls > 0 ? `${(((t?.errorCount ?? 0) / calls) * 100).toFixed(1)}%` : "—";
 
   return (
@@ -192,6 +209,9 @@ function ToolDetailContent({ toolId, onClose, onChanged }: { toolId: string; onC
             <Link to={`/playground?tool=${encodeURIComponent(t.id)}`} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               <PlayRegular /> Try in playground
             </Link>
+            <Button size="small" disabled={toggling} onClick={() => void toggle(t)}>
+              {toggling ? (t.enabled ? "Disabling…" : "Enabling…") : t.enabled ? "Disable tool" : "Enable tool"}
+            </Button>
           </div>
         )}
         <TabList size="small" selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as "details" | "funnel")}>

@@ -36,6 +36,10 @@ import type {
   CreatePrincipalRequest,
   CreateRuleRequest,
   CreatedPrincipal,
+  PrincipalPatch,
+  RotatedKey,
+  RulePatch,
+  SkillVersionRow,
   DedupStatus,
   DuplicateSuggestion,
   ExecutionQuery,
@@ -240,6 +244,11 @@ export function setServerEnabled(id: string, enabled: boolean): Promise<MCPServe
   return request("PATCH", `${API_BASE}/servers/${encodeURIComponent(id)}`, { body: { enabled } });
 }
 
+/** DELETE /servers/{id} (204). 409 while policy rules reference it or it has execution history. */
+export async function deleteServer(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/servers/${encodeURIComponent(id)}`);
+}
+
 // ------------------------------------------------------------------- tools
 /** Reconciled at integration: the backend nests usage under `stats` and has no version `id`. */
 interface BackendToolStats {
@@ -287,6 +296,11 @@ export async function getTool(id: string, signal?: AbortSignal): Promise<ToolDet
 
 export function updateClassification(id: string, body: ClassificationUpdate): Promise<MCPTool> {
   return request("PATCH", `${API_BASE}/tools/${encodeURIComponent(id)}/classification`, { body });
+}
+
+/** POST /tools/{id}/enable | /disable: one tool, without disabling its server. */
+export function setToolEnabled(id: string, enabled: boolean): Promise<MCPTool> {
+  return request("POST", `${API_BASE}/tools/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`);
 }
 
 /** Skills mirror the tools PATCH (admin; sets classificationReviewed, human override wins). */
@@ -490,6 +504,30 @@ export function createRule(body: CreateRuleRequest): Promise<PolicyRule> {
   return request("POST", `${API_BASE}/policy-rules`, { body });
 }
 
+/** PATCH /principals/{id}. Omitted fields are unchanged; `maxServers: null` clears the cap. */
+export function updatePrincipal(id: string, patch: PrincipalPatch): Promise<Principal> {
+  return request("PATCH", `${API_BASE}/principals/${encodeURIComponent(id)}`, { body: patch });
+}
+
+/** POST /principals/{id}/rotate-key: the old key stops working; the new one is returned once. */
+export function rotatePrincipalKey(id: string): Promise<RotatedKey> {
+  return request("POST", `${API_BASE}/principals/${encodeURIComponent(id)}/rotate-key`);
+}
+
+/** DELETE /principals/{id} (204). The backend deletes the agent's rules with it. */
+export async function deletePrincipal(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/principals/${encodeURIComponent(id)}`);
+}
+
+/** PATCH /policy-rules/{id}. resourceKind is immutable after create. */
+export function updateRule(id: string, patch: RulePatch): Promise<PolicyRule> {
+  return request("PATCH", `${API_BASE}/policy-rules/${encodeURIComponent(id)}`, { body: patch });
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/policy-rules/${encodeURIComponent(id)}`);
+}
+
 // -------------------------------------------------------------- identity
 /** Cheap admin-only call used by the Connect panel to verify the admin token. */
 export async function probeAdmin(signal?: AbortSignal): Promise<void> {
@@ -687,6 +725,10 @@ export async function syncSkillSource(id: string): Promise<SyncReport> {
   return { added: r.added ?? 0, changed: r.changed ?? 0, removed: r.removed ?? 0, skipped: r.skipped ?? [] };
 }
 // PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
+/** DELETE /skill-sources/{id} (204). 409 while policy rules reference it. */
+export async function deleteSkillSource(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`);
+}
 export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
   return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
 }
@@ -697,6 +739,10 @@ export async function listSkills(q: SkillQuery, signal?: AbortSignal): Promise<P
     query: { q: q.q, domain: q.domain, operation: q.operation, sourceId: q.sourceId, enabled: q.enabled, available: q.available, reviewed: q.reviewed, hasScripts: q.hasScripts, limit: q.limit, offset: q.offset },
   });
   return toPage<Skill>(raw, q.limit, q.offset);
+}
+/** GET /skills/{id}/versions: the recorded version history, oldest first. */
+export async function listSkillVersions(id: string, signal?: AbortSignal): Promise<SkillVersionRow[]> {
+  return toList<SkillVersionRow>(await request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}/versions`, { signal }));
 }
 export function getSkill(id: string, signal?: AbortSignal): Promise<SkillDetail> {
   return request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}`, { signal });

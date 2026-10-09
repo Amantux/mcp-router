@@ -11,8 +11,8 @@ import {
   TableRow,
   Tooltip,
 } from "@fluentui/react-components";
-import { AddRegular, ArrowSyncRegular, ServerRegular } from "@fluentui/react-icons";
-import { listServers, refreshServer, setServerEnabled } from "../api/client";
+import { AddRegular, ArrowSyncRegular, ServerRegular, DeleteRegular } from "@fluentui/react-icons";
+import { deleteServer, listServers, refreshServer, setServerEnabled } from "../api/client";
 import type { MCPServer } from "../api/types";
 import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, StatusBadge, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
@@ -32,6 +32,22 @@ export function ServersPage() {
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
   const [toggling, setToggling] = useState<string | null>(null);
   const [confirmDisable, setConfirmDisable] = useState<MCPServer | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<MCPServer | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const doDelete = async (srv: MCPServer) => {
+    setDeleting(true);
+    try {
+      await deleteServer(srv.id);
+      notify.success(`Deleted server “${srv.name}”`);
+      setConfirmDelete(null);
+      servers.refresh();
+    } catch (e) {
+      notify.error(`Delete server “${srv.name}”`, e);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const doRefresh = async (srv: MCPServer) => {
     setRefreshing((r) => new Set(r).add(srv.id));
@@ -133,9 +149,12 @@ export function ServersPage() {
                     />
                   </TableCell>
                   <TableCell>
-                    <Button size="small" icon={<ArrowSyncRegular />} disabled={busy} onClick={() => void doRefresh(srv)}>
-                      {busy ? "Refreshing…" : "Refresh"}
-                    </Button>
+                    <span style={{ display: "flex", gap: 4 }}>
+                      <Button size="small" icon={<ArrowSyncRegular />} disabled={busy} onClick={() => void doRefresh(srv)}>
+                        {busy ? "Refreshing…" : "Refresh"}
+                      </Button>
+                      <Button size="small" appearance="subtle" icon={<DeleteRegular />} aria-label={`Delete ${srv.name}`} onClick={() => setConfirmDelete(srv)} />
+                    </span>
                   </TableCell>
                 </TableRow>
               );
@@ -158,6 +177,22 @@ export function ServersPage() {
         pending={toggling !== null}
         onConfirm={() => confirmDisable && void doToggle(confirmDisable, false)}
         onCancel={() => setConfirmDisable(null)}
+      />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={`Delete server “${confirmDelete?.name ?? ""}”?`}
+        body={
+          <>
+            This removes the server, its {confirmDelete?.toolCount != null ? `${fmtInt(confirmDelete.toolCount)} ` : ""}catalogued tools, their version
+            history and stored credentials. It can't be undone. The backend refuses while policy rules reference the server or it has execution
+            history; disable it instead to keep that history.
+          </>
+        }
+        confirmLabel="Delete server"
+        pendingLabel="Deleting…"
+        pending={deleting}
+        onConfirm={() => confirmDelete && void doDelete(confirmDelete)}
+        onCancel={() => setConfirmDelete(null)}
       />
     </>
   );
