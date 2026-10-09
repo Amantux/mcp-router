@@ -243,6 +243,21 @@ export interface ExecutionRecord {
   initiatedBy?: string | null; // "admin" = impersonated (admin-initiated) run
 }
 
+// CONTRACT: POST /api/v1/route/{requestId}/feedback {items:[{kind?, id|name, helpful, note?}]}
+// → {recorded, source}; 404 unknown/foreign decision, 422 bad body, 429 rate-limited.
+export interface FeedbackItem {
+  kind?: "tool" | "skill";
+  id?: string;
+  name?: string;
+  helpful: boolean;
+  note?: string;
+}
+
+export interface FeedbackResult {
+  recorded: number;
+  source: "agent" | "human";
+}
+
 export interface ExecutionQuery {
   agentId?: string;
   outcome?: ExecutionOutcome;
@@ -446,6 +461,33 @@ export interface ContextEconomy {
   skillBodyTokensExposed: number;
   /** Bodies of surfaced-but-never-activated skills; NOT in exposedTokens. */
   skillBodyTokensNotSent: number;
+  /** ESTIMATES (tokensNotSent x operator rates), never measured; null = rate not configured. */
+  estimatedTimeSavedMs?: number | null;
+  estimatedCostSaved?: number | null;
+  currency?: string | null;
+  assumptions?: EconomyAssumptions;
+}
+
+/** analytics/wire.py AssumptionsOut: the basis every estimate must be shown with. */
+export interface EconomyAssumptions {
+  prefillMsPer1kTokens: number | null;
+  pricePer1kInputTokens: number | null;
+  estimator: string;
+}
+
+/** analytics/wire.py MeasuredOut: recorded per row, kept apart from estimates. */
+export interface MeasuredLatency {
+  routeLatencyP50Ms: number | null;
+  routeLatencyP95Ms: number | null;
+  executionLatencyP50Ms: number | null;
+  executionLatencyP95Ms: number | null;
+}
+
+// CONTRACT (guessed, parallel W5 executor): overview.feedback; all nullable until it lands.
+export interface FeedbackOverview {
+  items: number | null;
+  helpfulRate: number | null;
+  coverage: number | null;
 }
 
 export interface FunnelTotals {
@@ -494,6 +536,9 @@ export interface AnalyticsOverview {
   catalogDrift: Record<string, number>;
   /** analytics/wire.py SkillsOverviewOut. */
   skills: SkillsOverview;
+  measured?: MeasuredLatency;
+  // CONTRACT (guessed, parallel W5 executor): absent until the feedback rollup lands.
+  feedback?: FeedbackOverview | null;
 }
 
 export interface SkillsOverview {
@@ -524,6 +569,10 @@ export interface ToolFunnel {
   successRate: number | null;
   avgRank: number | null;
   exposedTokens: number;
+  // CONTRACT (guessed, parallel W5 executor): human/agent feedback counts per row.
+  feedbackHelpful?: number | null;
+  feedbackUnhelpful?: number | null;
+  helpfulRate?: number | null;
 }
 
 export type ToolFunnelSort =
@@ -594,6 +643,8 @@ export interface WastedTool {
   exposedTokens: number;
   // CONTRACT (guessed, S2f): rows gain kind.
   kind?: "tool" | "skill";
+  // CONTRACT (guessed, parallel W5 executor): count of unhelpful feedback on the row.
+  unhelpful?: number | null;
 }
 
 export interface StaleTool {

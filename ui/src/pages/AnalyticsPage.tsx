@@ -20,7 +20,18 @@ import {
 import { DataBarVerticalRegular } from "@fluentui/react-icons";
 import { getAnalyticsOverview, getAnalyticsSuggestions, listAgentProfiles, listToolFunnels } from "../api/client";
 import type { AnalyticsKind, AnalyticsWindow, ToolFunnelSort, WastedTool } from "../api/types";
-import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
+import {
+  costSavedEstimate,
+  fmtPct,
+  FunnelBars,
+  PositionChart,
+  PRICE_RATE_ENV,
+  StatCard,
+  TIME_RATE_ENV,
+  timeSavedEstimate,
+  WindowPicker,
+} from "../components/analytics";
+import type { Estimate } from "../components/analytics";
 import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { ToolDetailDrawer } from "./ToolDetailDrawer";
@@ -38,6 +49,11 @@ const useStyles = makeStyles({
     flexDirection: "column",
     gap: tokens.spacingVerticalS,
     marginBottom: tokens.spacingVerticalL,
+  },
+  measured: {
+    marginTop: tokens.spacingVerticalM,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   section: { marginTop: tokens.spacingVerticalXL, display: "flex", flexDirection: "column", gap: tokens.spacingVerticalS },
   split: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: tokens.spacingHorizontalXL, alignItems: "start" },
@@ -113,6 +129,7 @@ export function WastedExposure({
                 <TableHeaderCell className={c.num}>Selected</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Selection rate</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Context spent (tokens)</TableHeaderCell>
+                <TableHeaderCell className={c.num}>Unhelpful</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -133,6 +150,7 @@ export function WastedExposure({
                   <TableCell className={c.num}>
                     <strong>{fmtInt(w.exposedTokens)}</strong>
                   </TableCell>
+                  <TableCell className={c.num}>{w.unhelpful == null ? "—" : fmtInt(w.unhelpful)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -141,6 +159,12 @@ export function WastedExposure({
       )}
     </section>
   );
+}
+
+/** An estimate card: value + its assumption inline, or "Not configured" (never a bare 0). */
+function EstimateCard({ label, est, env, testId }: { label: string; est: Estimate | null; env: string; testId: string }) {
+  if (!est) return <StatCard testId={testId} label={label} value="—" sub={`Not configured — set ${env}`} />;
+  return <StatCard testId={testId} label={label} value={est.value} sub={`estimate ${est.basis}`} />;
 }
 
 export function AnalyticsPage() {
@@ -223,7 +247,35 @@ export function AnalyticsPage() {
         <StatCard testId="card-fallback" label="Fallback rate" value={fmtPct(o.routing.fallbackRate)} sub={`${fmtInt(o.routing.fallback)} heuristic rankings`} />
         <StatCard testId="card-denial" label="Denial rate" value={fmtPct(o.executions.denialRate)} sub={`${fmtInt(o.executions.denied)} of ${fmtInt(o.executions.attempts)} calls`} />
         <StatCard testId="card-latency" label="Routing latency" value={`${fmtMs(o.routing.latencyP50Ms)}`} sub={`p50 · p95 ${fmtMs(o.routing.latencyP95Ms)}`} />
+        <EstimateCard testId="card-time-saved" label="Est. time saved" est={timeSavedEstimate(e)} env={TIME_RATE_ENV} />
+        <EstimateCard testId="card-cost-saved" label="Est. cost saved" est={costSavedEstimate(e)} env={PRICE_RATE_ENV} />
+        {o.feedback && (
+          <StatCard
+            testId="card-feedback"
+            label="Feedback"
+            value={fmtPct(o.feedback.helpfulRate)}
+            sub={`helpful · ${o.feedback.items == null ? "—" : fmtInt(o.feedback.items)} items · ${fmtPct(o.feedback.coverage)} of decisions covered`}
+          />
+        )}
       </div>
+
+      {o.measured && (
+        // MEASURED (recorded per row), deliberately set apart from the estimates above.
+        <div className={`${s.cards} ${s.measured}`} aria-label="Measured latency">
+          <StatCard
+            testId="card-measured-route"
+            label="Measured route latency"
+            value={fmtMs(o.measured.routeLatencyP50Ms)}
+            sub={`measured · p50 · p95 ${fmtMs(o.measured.routeLatencyP95Ms)}`}
+          />
+          <StatCard
+            testId="card-measured-exec"
+            label="Measured execution latency"
+            value={fmtMs(o.measured.executionLatencyP50Ms)}
+            sub={`measured · p50 · p95 ${fmtMs(o.measured.executionLatencyP95Ms)}`}
+          />
+        </div>
+      )}
 
       <div className={s.section}>
         <div className={s.split}>
@@ -293,6 +345,8 @@ export function AnalyticsPage() {
                   <TableHeaderCell className={c.num}>Success</TableHeaderCell>
                   <TableHeaderCell className={c.num}>Avg rank</TableHeaderCell>
                   <TableHeaderCell className={c.num}>Context (tokens)</TableHeaderCell>
+                  <TableHeaderCell className={c.num}>Helpful</TableHeaderCell>
+                  <TableHeaderCell className={c.num}>Unhelpful</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -309,6 +363,8 @@ export function AnalyticsPage() {
                     <TableCell className={c.num}>{fmtPct(t.successRate)}</TableCell>
                     <TableCell className={c.num}>{t.avgRank == null ? "—" : t.avgRank.toFixed(1)}</TableCell>
                     <TableCell className={c.num}>{fmtInt(t.exposedTokens)}</TableCell>
+                    <TableCell className={c.num}>{t.feedbackHelpful == null ? "—" : fmtInt(t.feedbackHelpful)}</TableCell>
+                    <TableCell className={c.num}>{t.feedbackUnhelpful == null ? "—" : fmtInt(t.feedbackUnhelpful)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
