@@ -24,6 +24,7 @@ import {
   snippetFor,
   suggestToken,
 } from "./snippets";
+import { STEP_KEY, skipSetup } from "./redirect";
 
 export const STEPS = [
   "Admin token",
@@ -34,7 +35,6 @@ export const STEPS = [
   "Connect",
   "Verify",
 ];
-const STEP_KEY = "mcpr.setup.step"; // progress only; never a secret
 
 function loadStep(): number {
   try {
@@ -227,6 +227,9 @@ export function SetupPage() {
 
   return (
     <section aria-label="Setup wizard">
+      <Link to="/" onClick={skipSetup}>
+        Skip setup
+      </Link>
       <TabList
         selectedValue={step}
         onTabSelect={(_, d) => setStep(d.value as number)}
