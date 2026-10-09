@@ -78,6 +78,7 @@ from mcprouter.models import (
 from mcprouter.routing.budgets import BudgetClamp, cap_servers, clamp_budget
 from mcprouter.routing.cache import CachedRoute, CachedTool, RouteCache, normalize_query
 from mcprouter.routing.retriever import eligibility_filters, skill_eligibility_filters
+from mcprouter.routing.scope import principal_skill_cap
 from mcprouter.routing.trace import PolicyFiltered, RouteTrace
 from mcprouter.settings import Settings
 
@@ -655,9 +656,7 @@ def _route_kinds(request: RouteRequest) -> tuple[str, ...]:
 
 
 def _principal_max_skills(scope: ScopeFilter) -> int | None:
-    # PolicyScope keeps its principal private; other ScopeFilters have none.
-    value = getattr(getattr(scope, "_principal", None), "max_skills", None)
-    return value if isinstance(value, int) else None
+    return principal_skill_cap(scope)  # fail-closed resolver (routing.scope)
 
 
 def _kind_counts(raw: list[ToolCandidate], out: list[ToolCandidate]) -> dict[str, int]:

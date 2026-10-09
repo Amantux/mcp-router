@@ -155,3 +155,57 @@ def test_trace_records_per_kind_counts_and_skills_clamp(world: dict[str, Any]) -
     skills = next(st for st in trace.stages if st.stage == "maxSkills")
     assert (skills.before, skills.after, skills.detail["limit"]) == (2, 1, 1)
     assert trace.skill_budget is not None and trace.skill_budget.applied == 1
+
+
+def _policy_scope(max_skills: int) -> Any:
+    from mcprouter.models import AgentPrincipal, PolicyRule
+    from mcprouter.policy.scope import PolicyScope
+
+    principal = AgentPrincipal(
+        id="p1", agent_id="a", key_hash="h", enabled=True, max_tools=8, max_skills=max_skills
+    )
+    rules = [
+        PolicyRule(id="r1", agent_id="a", server_id=None, max_operation="execute"),
+        PolicyRule(
+            id="r2",
+            agent_id="a",
+            server_id=None,
+            max_operation="execute",
+            resource_kind="skill",
+        ),
+    ]
+    return PolicyScope(principal, rules)
+
+
+@requires_db
+@pytest.mark.parametrize("cap", [0, 1])
+def test_uncached_scope_keeps_the_principal_skills_budget(world: dict[str, Any], cap: int) -> None:
+    from mcprouter.routing.scope import UncachedScope
+
+    pipe = world["pipe"]
+    direct = pipe.route(RouteRequest(Q, "a", 4), _policy_scope(cap))
+    wrapped = pipe.route(RouteRequest(Q, "a", 4), UncachedScope(_policy_scope(cap)))
+    assert len(_kinds(direct)["skill"]) == cap
+    assert len(_kinds(wrapped)["skill"]) == cap  # was the global cap (3) before
+    assert (
+        pipe.skills_budget(RouteRequest(Q, "a", 4), UncachedScope(_policy_scope(cap))).applied
+        == cap
+    )
+
+
+@dataclass
+class OpaqueScope:
+    """A ScopeFilter that cannot say what its principal may see."""
+
+    def server_ids(self) -> list[str] | None:
+        return None
+
+    def permits(self, candidate: ToolCandidate) -> bool:
+        return True
+
+
+@requires_db
+def test_undeterminable_principal_budget_fails_closed(world: dict[str, Any]) -> None:
+    res = world["pipe"].route(RouteRequest(Q, "a", 4), OpaqueScope())
+    assert _kinds(res)["skill"] == set()  # never the global cap
+    assert _kinds(res)["tool"]  # tools still route
