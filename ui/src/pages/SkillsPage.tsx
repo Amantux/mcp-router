@@ -20,7 +20,9 @@ import {
 } from "@fluentui/react-components";
 import { ArrowDownloadRegular, BookRegular, DismissRegular, FilterDismissRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources } from "../api/client";
+import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources, updateSkillClassification } from "../api/client";
+import { ClassificationEditor } from "./ClassificationEditor";
+import { ToolFunnelPanel } from "./ToolDetailDrawer";
 import { DOMAINS, OPERATIONS, type Operation, type Skill, type SkillDetail } from "../api/types";
 import { EmptyState, fmtInt, fmtTime, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
@@ -73,6 +75,8 @@ function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: ()
           <Tab value="body">Body</Tab>
           <Tab value="resources">Resources</Tab>
           <Tab value="versions">Versions</Tab>
+          <Tab value="classification">Classification</Tab>
+          <Tab value="funnel">Funnel</Tab>
         </TabList>
         {!d ? (
           <LoadingRow label="Loading skill…" />
@@ -87,6 +91,10 @@ function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: ()
             </div>
             {d.metadata && <pre className={c.mono}>{JSON.stringify(d.metadata, null, 2)}</pre>}
           </div>
+        ) : tab === "classification" ? (
+          <ClassificationEditor<Skill> key={d.id} tool={d} save={updateSkillClassification} onSaved={() => detail.refresh()} />
+        ) : tab === "funnel" ? (
+          <ToolFunnelPanel toolId={d.id} kind="skill" />
         ) : tab === "body" ? (
           <div style={{ paddingTop: 12 }}>
             <Caption1 className={c.muted}>Shown as plain text. Skill bodies come from third-party sources, so Markdown and HTML are not rendered here.</Caption1>

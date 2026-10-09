@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Caption1, Field, Input, makeStyles, Select, tokens } from "@fluentui/react-components";
 import { updateClassification } from "../api/client";
-import { DOMAINS, OPERATIONS, type MCPTool, type Operation } from "../api/types";
+import { DOMAINS, OPERATIONS, type ClassificationUpdate, type MCPTool, type Operation } from "../api/types";
 import { useNotify } from "../components/Notifications";
 
 const useStyles = makeStyles({
@@ -17,7 +17,27 @@ const splitList = (v: string) =>
     .filter(Boolean);
 const NONE = "__none__";
 
-export function ClassificationEditor({ tool, onSaved }: { tool: MCPTool; onSaved: (t: MCPTool) => void }) {
+/** Anything classifiable: a tool or a skill (same wire shape). */
+export interface Classifiable {
+  id: string;
+  name: string;
+  domain?: string | null;
+  operation: Operation;
+  tags?: string[];
+  requiredScopes?: string[];
+  classificationReviewed?: boolean;
+}
+
+/** `save` defaults to the tools PATCH; skills pass their own endpoint. */
+export function ClassificationEditor<T extends Classifiable = MCPTool>({
+  tool,
+  onSaved,
+  save: saveFn = updateClassification as unknown as (id: string, body: ClassificationUpdate) => Promise<T>,
+}: {
+  tool: T;
+  onSaved: (t: T) => void;
+  save?: (id: string, body: ClassificationUpdate) => Promise<T>;
+}) {
   const s = useStyles();
   const notify = useNotify();
   const [domain, setDomain] = useState<string>(tool.domain ?? NONE);
@@ -38,7 +58,7 @@ export function ClassificationEditor({ tool, onSaved }: { tool: MCPTool; onSaved
   const save = async () => {
     setPending(true);
     try {
-      const updated = await updateClassification(tool.id, {
+      const updated = await saveFn(tool.id, {
         domain: domain === NONE ? null : domain,
         operation,
         tags: splitList(tags),

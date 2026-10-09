@@ -287,6 +287,11 @@ export function updateClassification(id: string, body: ClassificationUpdate): Pr
   return request("PATCH", `${API_BASE}/tools/${encodeURIComponent(id)}/classification`, { body });
 }
 
+/** Skills mirror the tools PATCH (admin; sets classificationReviewed, human override wins). */
+export function updateSkillClassification(id: string, body: ClassificationUpdate): Promise<Skill> {
+  return request("PATCH", `${API_BASE}/skills/${encodeURIComponent(id)}/classification`, { body });
+}
+
 // ------------------------------------------------------------------- dedup
 /** Backend embeds a small tool ref ({id, name, serverName, enabled}), not a full MCPTool. */
 interface BackendSuggestion extends Omit<DuplicateSuggestion, "toolA" | "toolB" | "toolAId" | "toolBId"> {

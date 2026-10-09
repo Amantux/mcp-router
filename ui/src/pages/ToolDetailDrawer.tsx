@@ -87,7 +87,7 @@ export function VersionTimeline({ versions }: { versions: ToolVersion[] }) {
 }
 
 /** Funnel tab: this tool's surfaced → selected → succeeded, its position curve, and what it competes with. */
-export function ToolFunnelPanel({ toolId }: { toolId: string }) {
+export function ToolFunnelPanel({ toolId, kind = "tool" }: { toolId: string; kind?: "tool" | "skill" }) {
   const s = useStyles();
   const c = useCommonStyles();
   const [win, setWin] = useState<AnalyticsWindow>("30d");
@@ -100,10 +100,12 @@ export function ToolFunnelPanel({ toolId }: { toolId: string }) {
       </section>
       {a.loading && !d ? (
         <LoadingRow label="Loading funnel…" />
+      ) : !d && kind === "skill" ? (
+        <Caption1 className={c.muted}>No funnel data for this skill yet. It appears once agents are routed to it.</Caption1>
       ) : !d ? (
         <Caption1>Funnel data couldn't be loaded.</Caption1>
       ) : d.tool.surfaced === 0 ? (
-        <Caption1 className={c.muted}>This tool wasn't surfaced to any agent in this window. Analytics accrue once agents start routing.</Caption1>
+        <Caption1 className={c.muted}>This {kind} wasn't surfaced to any agent in this window. Analytics accrue once agents start routing.</Caption1>
       ) : (
         <>
           <section className={s.section} aria-label="Tool funnel">

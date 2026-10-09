@@ -3,7 +3,8 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { ClassificationEditor } from "./ClassificationEditor";
-import type { MCPTool } from "../api/types";
+import type { MCPTool, Skill } from "../api/types";
+import { updateSkillClassification } from "../api/client";
 
 const tool: MCPTool = {
   id: "t1",
@@ -71,5 +72,21 @@ describe("ClassificationEditor", () => {
     expect(onSaved).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain("raw validator dump");
     expect(screen.getByRole("button", { name: "Save classification" })).toBeTruthy();
+  });
+
+  it("saves a skill through the injected save function (skills PATCH, not tools)", async () => {
+    const user = userEvent.setup();
+    const skill = { id: "s1", sourceId: "src", name: "pdf-fill", description: "d", operation: "read", domain: null, tags: [], requiredScopes: [] } as unknown as Skill;
+    const { calls } = mockFetch({
+      "PATCH /api/v1/skills/s1/classification": (body) => ({ json: { ...skill, ...(body as object), classificationReviewed: true } }),
+    });
+    const onSaved = vi.fn();
+    renderWithProviders(<ClassificationEditor<Skill> tool={skill} save={updateSkillClassification} onSaved={onSaved} />);
+    await user.type(screen.getByRole("textbox", { name: /Required scopes/ }), "docs:read");
+    await user.click(screen.getByRole("button", { name: "Save classification" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].body).toMatchObject({ operation: "read", requiredScopes: ["docs:read"] });
+    expect(onSaved.mock.calls[0][0].classificationReviewed).toBe(true);
   });
 });

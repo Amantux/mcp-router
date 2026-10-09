@@ -652,6 +652,8 @@ export interface Skill {
   description: string;
   operation: Operation;
   domain?: string | null;
+  categories?: string[];
+  requiredScopes?: string[];
   tags?: string[];
   hasScripts?: boolean;
   bodyTokensEst?: number | null;
