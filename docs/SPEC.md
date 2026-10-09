@@ -1,5 +1,9 @@
 # MCP Intelligent Routing Platform — Technical Specification v0.2
 
+> **Proposal v0.2, kept as the design baseline.** Shipped behaviour differs
+> in places; see [Deviations](#deviations-from-shipped-behaviour) below and the
+> generated [API reference](reference/api.md).
+>
 > Verbatim-in-substance copy of the proposing spec. Binding scope decisions
 > layered on top live in `scoping.md` (which wins where they conflict).
 
@@ -102,7 +106,7 @@ execution traces, feedback, policy rules, tool versions, model evals.
 {request_id, tools:[{server, tool, score}], fallback_used, latency_ms}.
 Also: GET/POST /api/v1/servers · POST /api/v1/servers/{id}/refresh ·
 GET /api/v1/tools · POST /api/v1/route/evaluate · GET /api/v1/models/health ·
-GET /api/v1/metrics. The gateway also exposes a standards-compatible MCP
+Prometheus metrics at `/metrics`. The gateway also exposes a standards-compatible MCP
 endpoint.
 
 ## 10. Evaluation & observability
@@ -143,3 +147,14 @@ Docker Compose.
 Laya makes fast decisions, deterministic code enforces security and executes
 tools. No unnecessary services, GPU replicas, or large generative models in
 the routing path.
+
+## Deviations from shipped behaviour
+
+- **Metrics path.** Prometheus metrics are served at `/metrics`, outside
+  `/api/v1`, and from v0.6 need the admin token when one is configured.
+- **`agent_id` in `/route`.** Ignored. The agent is always the authenticated
+  principal (security-model.md §1).
+- **LLM fallback (§5).** Out of scope (scoping.md #2): low confidence falls
+  back to deterministic ranking.
+- **Response casing.** `/route` keeps the snake_case shape above; the rest of
+  the API is camelCase (INSTALL.md, API conventions).
