@@ -288,7 +288,7 @@ def test_stale_resource_is_409(env: Env, tmp_path: Path) -> None:
     r = env.client.get(f"/api/v1/skills/{env.a}/resources/guide.md", headers=H_ALICE)
     assert (r.status_code, r.json()["detail"]) == (
         409,
-        "Skill resource is out of date; re-index the skill.",
+        "Skill resource is out of date; sync its skill source.",
     )
 
 

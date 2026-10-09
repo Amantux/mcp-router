@@ -60,7 +60,7 @@ SKILL_ERROR_MESSAGES: dict[str, str] = {
     "rate_limited": "Too many skill activations; retry later.",
     "too_large": "Skill resource exceeds the size limit.",
     "too_many": "Too many skills routed to bundle; narrow the routing.",
-    "stale": "Skill resource is out of date; re-index the skill.",
+    "stale": "Skill resource is out of date; sync its skill source.",
     "duplicate_name": (
         "Two routed skills share a name and cannot be bundled together; activate them singly."
     ),

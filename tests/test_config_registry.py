@@ -80,9 +80,10 @@ def test_required_block_first_and_empty() -> None:
         for ln in EXAMPLE.read_text().splitlines()
         if ln.strip() and not ln.lstrip().startswith("#")
     ]
-    # Only the REQUIRED block is active, with empty values: CI appends real
-    # values after `cp .env.example .env` (last assignment wins in dotenv).
-    assert [k for k, _ in active] == ["MCPR_ADMIN_TOKEN", "MCPR_AGENT_KEYS", "POSTGRES_PASSWORD"]
+    # Only the REQUIRED block (POSTGRES_PASSWORD) and the strongly-recommended
+    # secrets are active, with empty values: CI appends real values after
+    # `cp .env.example .env` (last assignment wins in dotenv).
+    assert [k for k, _ in active] == ["POSTGRES_PASSWORD", "MCPR_ADMIN_TOKEN", "MCPR_AGENT_KEYS"]
     assert all(v == "" for _, v in active)
     assert "openssl rand -hex 32" in EXAMPLE.read_text()
 

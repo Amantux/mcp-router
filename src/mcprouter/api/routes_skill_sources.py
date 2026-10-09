@@ -150,7 +150,10 @@ def delete_source(sid: str, request: Request) -> Response:
     with _factory(request)() as s:
         rec = _get(s, sid)
         if referencing_rules(s, sid):
-            raise HTTPException(409, "skill source is referenced by policy rules")
+            raise HTTPException(
+                409,
+                "Skill source is referenced by policy rules; remove or retarget those rules before deleting it.",
+            )
         s.delete(rec)
         s.commit()
     return Response(status_code=204)

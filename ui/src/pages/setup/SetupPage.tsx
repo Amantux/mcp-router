@@ -83,7 +83,7 @@ function loadStep(): number {
 }
 
 /** D11: the backend's 409 detail (verbatim, for matching) for a first principal in dev mode without MCPR_ADMIN_TOKEN. */
-export const FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode.";
+export const FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first agent; creating one ends dev mode.";
 /** What the wizard shows for it: the same advice in the UI's word, "agent" (HS-U-006). */
 export const FIRST_AGENT_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first agent; creating one ends dev mode.";
 

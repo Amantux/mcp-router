@@ -223,7 +223,7 @@ def list_principals(request: Request) -> list[PrincipalOut]:
 # exist, so creating the first one with no admin token would 403 every admin
 # route forever. Refuse instead; the setup wizard shows this message.
 FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = (
-    "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode."
+    "Set MCPR_ADMIN_TOKEN before creating the first agent; creating one ends dev mode."
 )
 
 
