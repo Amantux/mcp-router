@@ -62,6 +62,8 @@ class _Wire(BaseModel):
 
 
 class ServerIn(_Wire):
+    # Typos (e.g. `transprt`) are 422, not silently dropped.
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
     name: str = Field(min_length=1, max_length=120)
     transport: Literal["stdio", "streamable-http", "sse"]
     endpoint: str | None = Field(default=None, max_length=2048)

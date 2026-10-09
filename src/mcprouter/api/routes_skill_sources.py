@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import require_admin
@@ -25,12 +26,13 @@ class _Camel(BaseModel):
 
 
 # No "/" (names become path/URI segments), whitespace or control chars.
+_DUPLICATE_NAME = "a skill source with that name exists"
 _NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$"
 
 
 class SourceIn(_Camel):
     name: str = Field(min_length=1, max_length=120, pattern=_NAME_PATTERN)
-    kind: str
+    kind: Literal["directory", "git"]
     location: str = Field(min_length=1, max_length=2000)
     git_ref: str | None = Field(default=None, max_length=200)
     enabled: bool = True
@@ -43,6 +45,15 @@ class SourcePatch(_Camel):
     git_ref: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
     sync_interval_s: int | None = Field(default=None, ge=60)
+
+    # Omitting a field leaves it unchanged; an explicit null is only meaningful
+    # for gitRef (back to the default branch). The rest are NOT NULL columns.
+    @field_validator("name", "location", "enabled", "sync_interval_s", mode="before")
+    @classmethod
+    def _not_null(cls, v: object) -> object:
+        if v is None:
+            raise ValueError("may not be null; omit the field to leave it unchanged")
+        return v
 
 
 def _factory(request: Request) -> sessionmaker[Session]:
@@ -88,10 +99,14 @@ def create_source(body: SourceIn, request: Request) -> dict[str, Any]:
         raise HTTPException(422, str(exc)) from exc
     with _factory(request)() as s:
         if s.scalar(select(SkillSourceRecord.id).where(SkillSourceRecord.name == body.name)):
-            raise HTTPException(409, "a skill source with that name exists")
+            raise HTTPException(409, _DUPLICATE_NAME)
         rec = SkillSourceRecord(**body.model_dump())
         s.add(rec)
-        s.commit()
+        try:
+            s.commit()
+        except IntegrityError:  # concurrent create raced the pre-check
+            s.rollback()
+            raise HTTPException(409, _DUPLICATE_NAME) from None
         return _out(rec)
 
 
@@ -112,9 +127,22 @@ def patch_source(sid: str, body: SourcePatch, request: Request) -> dict[str, Any
             )
         except SourceError as exc:
             raise HTTPException(422, str(exc)) from exc
+        new_name = upd.get("name")
+        if new_name is not None and new_name != rec.name:
+            taken = s.scalar(
+                select(SkillSourceRecord.id).where(
+                    SkillSourceRecord.name == new_name, SkillSourceRecord.id != rec.id
+                )
+            )
+            if taken:
+                raise HTTPException(409, _DUPLICATE_NAME)
         for k, v in upd.items():
             setattr(rec, k, v)
-        s.commit()
+        try:
+            s.commit()
+        except IntegrityError:  # concurrent rename raced the pre-check
+            s.rollback()
+            raise HTTPException(409, _DUPLICATE_NAME) from None
         return _out(rec)
 
 
