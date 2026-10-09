@@ -37,6 +37,17 @@ FEEDBACK_LIMIT_PER_MIN = 30
 PRUNE_EVERY = 1024
 SURFACES = ("execute", "skills", "route", "decision", "feedback")
 
+MIB = 1024 * 1024
+#: The one request-body cap: the app-wide middleware (api.body_limit) and the
+#: MCP SDK's own /mcp cap (gateway.server) both use it.
+MAX_BODY_BYTES = MIB
+
+
+def format_bytes(n: int) -> str:
+    """Human size for cap error texts ("1 MiB"), built from the cap itself so
+    a message can never disagree with the limit it reports."""
+    return f"{n / MIB:g} MiB"
+
 
 class SurfaceLimiter:
     """One surface of a registry, shaped like SlidingWindowLimiter

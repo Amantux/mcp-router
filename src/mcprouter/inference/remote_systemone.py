@@ -38,11 +38,12 @@ from mcprouter.execution.redaction import redact
 from mcprouter.inference.errors import DecisionRuntimeError, InferenceError
 from mcprouter.inference.urlcheck import validate_outbound_url
 from mcprouter.interfaces import ChoiceResult, ScoreResult
+from mcprouter.limits import MIB
 
 log = logging.getLogger(__name__)
 
 DEFAULT_PATH = "/v1/decisions"
-MAX_RESPONSE_BYTES = 1024 * 1024
+MAX_RESPONSE_BYTES = MIB
 MAX_JSON_DEPTH = 20
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_BASE_S = 0.25

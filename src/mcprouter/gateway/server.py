@@ -94,7 +94,7 @@ from mcprouter.gateway.skills import (
     resource_uri,
 )
 from mcprouter.interfaces import RouteFn, RouteRequest, RouteResult
-from mcprouter.limits import LimiterRegistry, make_limiters
+from mcprouter.limits import MAX_BODY_BYTES, LimiterRegistry, make_limiters
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from mcprouter.policy.engine import evaluate
 from mcprouter.routing.budgets import effective_budgets
@@ -109,10 +109,9 @@ PRINCIPAL_SCOPE_KEY = "mcprouter.principal"
 MAX_QUERY_LEN = 2000
 MAX_TRACKED_SESSIONS_PER_AGENT = 32
 NOTIFY_TIMEOUT_S = 2.0
-# The SDK's own /mcp body cap, pinned to the app-wide cap (api.body_limit.
-# MAX_BODY_BYTES; equality is asserted by a test, not imported, to keep the
-# gateway from importing further up into mcprouter.api).
-MAX_MCP_BODY_BYTES = 1024 * 1024
+# The SDK's own /mcp body cap: the app-wide cap (limits.MAX_BODY_BYTES, which
+# api.body_limit enforces in front of every route).
+MAX_MCP_BODY_BYTES = MAX_BODY_BYTES
 ROUTE_REQUEST_ID_KWARG = "route_request_id"
 
 

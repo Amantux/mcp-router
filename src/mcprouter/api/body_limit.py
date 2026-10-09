@@ -1,9 +1,12 @@
 """App-wide request body cap, enforced before routing, auth and parsing.
 
-A declared Content-Length over the cap is refused outright. A body without one
-(chunked) is read up to the cap, counting bytes as they arrive, then replayed to
-the app; one byte over and the request is refused without reaching a handler.
-Memory per request is therefore bounded by the cap either way.
+A declared Content-Length over the cap is refused outright with 413. A body
+without one (chunked) is read up to the cap, counting bytes as they arrive,
+then replayed to the app; one byte over and the request is refused with 413
+without reaching a handler. A client that under-declares Content-Length and
+then sends more is cut off at the cap: the middleware answers 413 itself (the
+app only sees a disconnect, never a truncated body) unless the app already
+started its response. Memory per request is bounded by the cap either way.
 """
 
 from __future__ import annotations
@@ -12,23 +15,26 @@ import json
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-MAX_BODY_BYTES = 1024 * 1024
-_DETAIL = json.dumps({"detail": "request body too large (limit 1 MiB)"}).encode()
+from mcprouter.limits import MAX_BODY_BYTES, format_bytes
 
-
-async def _reject(send: Send) -> None:
-    headers = [
-        (b"content-type", b"application/json"),
-        (b"content-length", str(len(_DETAIL)).encode()),
-    ]
-    await send({"type": "http.response.start", "status": 413, "headers": headers})
-    await send({"type": "http.response.body", "body": _DETAIL})
+__all__ = ["MAX_BODY_BYTES", "BodySizeLimitMiddleware"]
 
 
 class BodySizeLimitMiddleware:
     def __init__(self, app: ASGIApp, max_bytes: int = MAX_BODY_BYTES) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        self._detail = json.dumps(
+            {"detail": f"request body too large (limit {format_bytes(max_bytes)})"}
+        ).encode()
+
+    async def _reject(self, send: Send) -> None:
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(self._detail)).encode()),
+        ]
+        await send({"type": "http.response.start", "status": 413, "headers": headers})
+        await send({"type": "http.response.body", "body": self._detail})
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -41,9 +47,9 @@ class BodySizeLimitMiddleware:
             except ValueError:
                 too_big = True  # malformed length: refuse rather than guess
             if too_big:
-                await _reject(send)
+                await self._reject(send)
                 return
-            await self.app(scope, self._counting(receive), send)
+            await self._counting(scope, receive, send)
             return
         # No declared length: buffer up to the cap, then replay.
         chunks: list[bytes] = []
@@ -54,7 +60,7 @@ class BodySizeLimitMiddleware:
                 break  # disconnect: let the app see it on its own receive
             size += len(msg.get("body", b""))
             if size > self.max_bytes:
-                await _reject(send)
+                await self._reject(send)
                 return
             chunks.append(msg.get("body", b""))
             if not msg.get("more_body", False):
@@ -70,17 +76,30 @@ class BodySizeLimitMiddleware:
 
         await self.app(scope, replay, send)
 
-    def _counting(self, receive: Receive) -> Receive:
-        """A client that under-declares Content-Length still cannot exceed the cap."""
+    async def _counting(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """A client that under-declares Content-Length still cannot exceed the
+        cap: past it the app reads a disconnect and the client gets the 413."""
         seen = 0
+        started = rejected = False
 
-        async def wrapped() -> Message:
-            nonlocal seen
+        async def counted() -> Message:
+            nonlocal seen, rejected
             msg = await receive()
             if msg["type"] == "http.request":
                 seen += len(msg.get("body", b""))
                 if seen > self.max_bytes:
+                    if not started and not rejected:
+                        rejected = True
+                        await self._reject(send)
                     return {"type": "http.disconnect"}
             return msg
 
-        return wrapped
+        async def guarded(msg: Message) -> None:
+            nonlocal started
+            if rejected:
+                return  # the 413 is the response; drop whatever the app sends
+            if msg["type"] == "http.response.start":
+                started = True
+            await send(msg)
+
+        await self.app(scope, counted, guarded)

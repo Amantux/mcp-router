@@ -51,6 +51,7 @@ from mcprouter.inference.errors import (
 from mcprouter.inference.urlcheck import InvalidEndpointError, validate_outbound_url
 from mcprouter.inference.validation import ValidatedDecisionModel
 from mcprouter.interfaces import ChoiceResult, ScoreResult
+from mcprouter.limits import MIB, format_bytes
 from mcprouter.settings import AoaiSettings
 
 log = logging.getLogger(__name__)
@@ -58,7 +59,8 @@ log = logging.getLogger(__name__)
 EMBEDDING_DIM = 384
 EMBED_BATCH = 64
 EMBED_TIMEOUT_S = 30.0
-MAX_RESPONSE_BYTES = 1 << 20
+MAX_RESPONSE_BYTES = MIB
+_TOO_LARGE = f"Azure OpenAI response exceeded the {format_bytes(MAX_RESPONSE_BYTES)} cap"
 MAX_JSON_DEPTH = 20
 _ALLOWED_SUFFIXES = (".openai.azure.com", ".services.ai.azure.com")
 _LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -135,7 +137,7 @@ def _depth(obj: Any, limit: int) -> int:
 
 def _parse_capped(data: bytes) -> Any:
     if len(data) > MAX_RESPONSE_BYTES:
-        raise _HttpError("Azure OpenAI response exceeded the 1 MiB cap")
+        raise _HttpError(_TOO_LARGE)
     try:
         obj = json.loads(data)
     except (ValueError, RecursionError):
@@ -229,7 +231,7 @@ class _AoaiHttp:
                         if self._clock() > deadline:
                             raise _HttpError("Azure OpenAI request timed out")
                         if len(buf) > MAX_RESPONSE_BYTES:
-                            raise _HttpError("Azure OpenAI response exceeded the 1 MiB cap")
+                            raise _HttpError(_TOO_LARGE)
                     return _parse_capped(bytes(buf))
             except httpx.TimeoutException:
                 raise _HttpError("Azure OpenAI request timed out") from None
