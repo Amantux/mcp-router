@@ -126,8 +126,9 @@ def test_audit_written_before_body_returned(db: sessionmaker[Session], tmp_path:
         raise RuntimeError("audit down")
 
     exp._manager.record_skill_activation = boom  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError):
+    with pytest.raises(SkillAccessError) as ei:
         exp.activate("agent-a", a, [a])  # no audit => no body
+    assert ei.value.code == "internal" and "audit down" not in ei.value.message
 
 
 def test_rate_limited(db: sessionmaker[Session], tmp_path: Path) -> None:

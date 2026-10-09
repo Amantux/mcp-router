@@ -70,3 +70,20 @@ new marker at `~/.claude/skills/.mcp-router-bundle.json`.
 7. nit: case-insensitive dup names; skill named like MARKER.
 8. nit: nested metadata str() repr.
 Also: `routed_ids` must be derived server-side from the agent's own route, never taken from the client.
+
+## S3c step 1 — reviewer should-fixes (closed)
+
+- Every skill path (prompts/get, resources/read, both meta-tools) now funnels
+  untyped exceptions to a curated `INTERNAL_ERROR` ("Internal error while
+  serving the skill."); SkillExposure audits them as outcome `error`, detail
+  `internal: <ClassName>` (best-effort). Never `str(exc)`.
+- `exposure.clear(agent)` is the reset for skills too: `_routed_skills` drops
+  `_skill_ids[agent]` and returns nothing when the agent has no exposure (fail closed).
+- `resolve()` refuses names with more than one "/" (`invalid_name`, constant
+  message), and never matches by name a source whose name contains "/" (id still
+  works). **Integrator:** skill-source ingest should reject "/" in source names;
+  skill names already cannot contain "/" (spec regex).
+- Meta-tools (`router.*`) do not count toward `max_tools`. Their names are
+  checked before upstream dispatch, so an upstream server named "router" cannot
+  shadow them (its tools are simply unreachable under those two names).
+- `_track_session` now also runs on prompts/get and resources/read.

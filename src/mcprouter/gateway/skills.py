@@ -115,10 +115,40 @@ class SkillExposure:
     def resolve(
         self, name_or_id: str, routed_ids: Iterable[str]
     ) -> tuple[SkillRecord, SkillSourceRecord]:
+        # A prompt name is exactly "<source>/<skill>". Skill names cannot hold
+        # "/" (spec regex) but a source name could, which would make the split
+        # ambiguous -- refuse rather than guess. Ingest should reject "/" in
+        # source names (integrator note in INTEGRATION_NOTES-wave4-exposure.md).
+        if name_or_id.count("/") > 1:
+            raise SkillAccessError("invalid_name", "Invalid skill name.")
         for sk, src in self.load_routed(routed_ids):
-            if name_or_id in (sk.id, prompt_name(src.name, sk.name)):
+            if name_or_id == sk.id or (
+                "/" not in src.name and name_or_id == prompt_name(src.name, sk.name)
+            ):
                 return sk, src
         raise SkillAccessError("not_found", "Unknown skill.")
+
+    def _internal(
+        self,
+        agent_id: str,
+        skill_id: str,
+        exc: Exception,
+        route_request_id: str | None,
+        initiated_by: str | None,
+    ) -> SkillAccessError:
+        """Audit an untyped failure (class name only) and curate it."""
+        try:
+            self._manager.record_skill_activation(
+                agent_id,
+                skill_id,
+                "error",
+                f"internal: {type(exc).__name__}",
+                route_request_id,
+                initiated_by,
+            )
+        except Exception:  # noqa: BLE001,S110 -- audit is best-effort on a failure path
+            pass
+        return SkillAccessError("internal", "Internal error while serving the skill.")
 
     # ------------------------------------------------------------- gating
     def _gate(
@@ -151,10 +181,15 @@ class SkillExposure:
     ) -> Activation:
         sk, src = self.resolve(name_or_id, routed_ids)
         self._gate(agent_id, sk, src, route_request_id, initiated_by)
-        body = read_body(sk, self._body_max)
-        rid = self._manager.record_skill_activation(
-            agent_id, sk.id, "ok", "activated", route_request_id, initiated_by
-        )
+        try:
+            body = read_body(sk, self._body_max)
+            rid = self._manager.record_skill_activation(
+                agent_id, sk.id, "ok", "activated", route_request_id, initiated_by
+            )
+        except SkillAccessError:
+            raise
+        except Exception as exc:  # noqa: BLE001 -- curated: class name only
+            raise self._internal(agent_id, sk.id, exc, route_request_id, initiated_by) from None
         manifest = [
             {"path": e.get("path"), "size": e.get("size"), "kind": e.get("kind")}
             for e in sk.resource_manifest or []
@@ -185,6 +220,8 @@ class SkillExposure:
                 initiated_by,
             )
             raise SkillAccessError(exc.code, exc.message) from None
+        except Exception as exc:  # noqa: BLE001 -- curated: class name only
+            raise self._internal(agent_id, sk.id, exc, route_request_id, initiated_by) from None
         self._manager.record_skill_activation(
             agent_id, sk.id, "ok", f"resource: {content.path}", route_request_id, initiated_by
         )

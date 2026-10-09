@@ -139,6 +139,7 @@ _SKILL_ERRORS: dict[str, str] = {
     "too_large": "Skill resource is too large.",
 }
 _SKILL_UNKNOWN = "Unknown skill or resource."
+_SKILL_INTERNAL = "Internal error while serving the skill."
 
 _SKILL_TOOL_DEFS = [
     types.Tool(
@@ -170,6 +171,15 @@ _SKILL_TOOL_DEFS = [
 
 def _skill_error(exc: SkillAccessError) -> str:
     return _SKILL_ERRORS.get(exc.code, _SKILL_UNKNOWN)
+
+
+def _skill_mcp_error(exc: Exception) -> MCPError:
+    """Curated MCP error for any skill-path failure; never `str(exc)`."""
+    if isinstance(exc, SkillAccessError) and exc.code != "internal":
+        return MCPError(types.INVALID_PARAMS, _skill_error(exc))
+    if not isinstance(exc, SkillAccessError):
+        log.warning("gateway.skill_failed exc_type=%s", type(exc).__name__)
+    return MCPError(types.INTERNAL_ERROR, _SKILL_INTERNAL)
 
 
 def _parse_skill_uri(uri: str) -> tuple[str, str] | None:
@@ -568,10 +578,15 @@ class GatewayServer:
 
     # ------------------------------------------------------------ skills
     def _routed_skills(self, agent_id: str) -> tuple[tuple[str, ...], str | None]:
-        with self._lock:
-            ids = self._skill_ids.get(agent_id, ())
         exposure = self.exposure.get(agent_id)
-        return ids, (exposure.request_id if exposure is not None else None)
+        with self._lock:
+            if exposure is None:
+                # exposure.clear(agent) is the reset: skills go with the tools
+                # (fail closed; never serve a stale routed skill set).
+                self._skill_ids.pop(agent_id, None)
+                return (), None
+            ids = self._skill_ids.get(agent_id, ())
+        return ids, exposure.request_id
 
     async def _on_list_prompts(
         self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
@@ -595,6 +610,7 @@ class GatewayServer:
         self, ctx: ServerRequestContext[Any, Any], params: types.GetPromptRequestParams
     ) -> types.GetPromptResult:
         principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
         act = await self._activate(principal, params.name)
         return types.GetPromptResult(
             description=act.name,
@@ -631,6 +647,7 @@ class GatewayServer:
         self, ctx: ServerRequestContext[Any, Any], params: types.ReadResourceRequestParams
     ) -> types.ReadResourceResult:
         principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
         parsed = _parse_skill_uri(str(params.uri))
         if parsed is None or self._skills is None:
             raise MCPError(types.INVALID_PARAMS, _SKILL_UNKNOWN)
@@ -663,8 +680,8 @@ class GatewayServer:
             return await anyio.to_thread.run_sync(
                 lambda: skills.activate(principal.agent_id, name, ids, rid)
             )
-        except SkillAccessError as exc:
-            raise MCPError(types.INVALID_PARAMS, _skill_error(exc)) from None
+        except Exception as exc:  # noqa: BLE001 — curated boundary (_skill_mcp_error)
+            raise _skill_mcp_error(exc) from None
 
     async def _read_skill_resource(
         self, principal: AgentPrincipal, name: str, path: str
@@ -677,8 +694,8 @@ class GatewayServer:
             return await anyio.to_thread.run_sync(
                 lambda: skills.read_resource(principal.agent_id, name, path, ids, rid)
             )
-        except SkillAccessError as exc:
-            raise MCPError(types.INVALID_PARAMS, _skill_error(exc)) from None
+        except Exception as exc:  # noqa: BLE001 — curated boundary (_skill_mcp_error)
+            raise _skill_mcp_error(exc) from None
 
     async def _skill_tool(
         self, principal: AgentPrincipal, tool: str, args: dict[str, Any]
