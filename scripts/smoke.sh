@@ -35,8 +35,11 @@ mh=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/models/health") || fail "models/health"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); k=d["decisionBackend"]["kind"]; assert k=="deterministic",k; print("PASS models/health decisionBackend.kind="+k)' "$mh"
 
 # 5. setup status before any principal exists
-ss=$(curl -fsS "$BASE/api/v1/setup/status") || fail "setup/status"
-python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["needsSetup"] is True,d; print("PASS setup/status needsSetup=true")' "$ss"
+ss=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/setup/status") || fail "setup/status"
+# MCPR_AGENT_KEYS seeds a principal at startup, so a keyed stack is already
+# "set up": needsSetup must be false with principals >= 1 (true only on a
+# keyless first run).
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); n=d["counts"]["principals"]; assert n>=1 and d["needsSetup"] is False,d; print("PASS setup/status needsSetup=false principals=%d (env-seeded)" % n)' "$ss"
 
 # 6. create a principal via admin -> key returned
 pc=$(curl -fsS "${ADM[@]}" -H 'Content-Type: application/json' \
@@ -47,15 +50,19 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("apiKey"),d
 $COMPOSE exec -T -e K="$MCPR_AGENT_KEY" api python - <<'PY' || fail "MCP handshake"
 import asyncio, os
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared._httpx_utils import create_mcp_http_client
 async def main():
     h = {"Authorization": "Bearer " + os.environ["K"]}
-    async with streamablehttp_client("http://127.0.0.1:8400/mcp", headers=h) as (r, w, _):
+    # Installed SDK: headers ride on the http client (no headers= kwarg).
+    async with create_mcp_http_client(headers=h) as hc, \
+            streamable_http_client("http://127.0.0.1:8400/mcp", http_client=hc) as streams:
+        r, w = streams[0], streams[1]
         async with ClientSession(r, w) as s:
             init = await s.initialize()
             names = sorted(t.name for t in (await s.list_tools()).tools)
             assert any(n.startswith("router.") for n in names), names
-            print("PASS MCP initialize server=%s tools=%s" % (init.serverInfo.name, names))
+            print("PASS MCP initialize server=%s tools=%s" % (init.server_info.name, names))
 asyncio.run(main())
 PY
 

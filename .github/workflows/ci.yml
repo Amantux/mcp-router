@@ -77,12 +77,42 @@ jobs:
       - run: npm run lint
       - run: npm test
 
+  # Builds the real image and runs the compose stack end to end (scripts/smoke.sh):
+  # dashboard, health, admin + agent auth, MCP handshake, non-root, HEALTHCHECK.
+  compose-smoke:
+    name: compose-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Write .env (ephemeral per-run credentials)
+        run: |
+          admin=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+          agent=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$admin"; echo "::add-mask::$agent"
+          cp .env.example .env
+          printf 'MCPR_ADMIN_TOKEN=%s\nMCPR_AGENT_KEYS=smoke:%s\nMCPR_HOST_PORT=8450\n' "$admin" "$agent" >> .env
+          echo "MCPR_ADMIN_TOKEN=$admin" >> "$GITHUB_ENV"
+          echo "MCPR_AGENT_KEY=$agent" >> "$GITHUB_ENV"
+      - name: Build and start the stack
+        run: docker compose -p mcprsmoke up -d --build --wait --wait-timeout 180
+      - name: Smoke
+        run: scripts/smoke.sh
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -p mcprsmoke logs --no-color --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose -p mcprsmoke down -v
+
   # The ONE required status check. A job only blocks a merge if it is named
   # here AND its result is checked below (`needs` alone passes on skipped).
   ci-gate:
     name: ci-gate
     if: always()
-    needs: [backend, ui]
+    needs: [backend, ui, compose-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -90,7 +120,9 @@ jobs:
         env:
           BACKEND: ${{ needs.backend.result }}
           UI: ${{ needs.ui.result }}
+          COMPOSE_SMOKE: ${{ needs.compose-smoke.result }}
         run: |
-          echo "backend=$BACKEND ui=$UI"
+          echo "backend=$BACKEND ui=$UI compose-smoke=$COMPOSE_SMOKE"
           test "$BACKEND" = "success"
           test "$UI" = "success"
+          test "$COMPOSE_SMOKE" = "success"
