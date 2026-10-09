@@ -133,3 +133,64 @@ def make_post_sync_hook(
         bump_catalog()
 
     return hook
+
+
+# --- wave-4: skill-source post-sync (classify changed skills, embed pending) ---
+
+
+def skill_content_snapshot(session: Session, source_id: str) -> dict[str, str]:
+    """{skill_id: content_hash} for a source — taken BEFORE a sync so the hook
+    can tell new / content-changed skills apart from untouched ones."""
+    from sqlalchemy import select
+
+    from mcprouter.models import SkillRecord
+
+    rows = session.execute(
+        select(SkillRecord.id, SkillRecord.content_hash).where(SkillRecord.source_id == source_id)
+    ).all()
+    return {r[0]: r[1] for r in rows}
+
+
+def run_skill_post_sync(
+    session_factory: sessionmaker[Session],
+    embedder: EmbeddingBackend,
+    source_id: str,
+    before: dict[str, str],
+    *,
+    embed_batch_size: int = 32,
+) -> None:
+    """Best effort (the sync already committed): classify skills that are new,
+    content-changed, or never auto-classified, then embed pending skills."""
+    from mcprouter.inference.pipeline import embed_pending_skills
+    from mcprouter.models import SkillRecord
+    from mcprouter.registry.classify import apply_skill_classification, classify_skill
+
+    try:
+        with session_factory() as s:
+            from sqlalchemy import select
+
+            n = 0
+            for sk in s.scalars(select(SkillRecord).where(SkillRecord.source_id == source_id)):
+                changed = sk.id in before and before[sk.id] != sk.content_hash
+                if sk.id in before and not changed and sk.classification_source is not None:
+                    continue
+                c = classify_skill(
+                    sk.name,
+                    sk.description,
+                    sk.body,
+                    has_scripts=sk.has_scripts,
+                    allowed_tools=list(sk.allowed_tools or []),
+                )
+                n += int(apply_skill_classification(s, sk.id, c, content_changed=changed))
+            s.commit()
+        log.info("skill post-sync classify source=%s classified=%d", source_id, n)
+    except Exception as exc:  # noqa: BLE001 — best effort; the sync already succeeded
+        log.warning("skill post-sync classification failed: %s", type(exc).__name__)
+    try:
+        with session_factory() as s:
+            rep = embed_pending_skills(s, embedder, batch_size=embed_batch_size)
+            s.commit()
+        log.info("skill post-sync embed embedded=%d", rep.embedded)
+    except Exception as exc:  # noqa: BLE001 — best effort; the sync already succeeded
+        log.warning("skill post-sync embedding failed: %s", type(exc).__name__)
+    bump_catalog()

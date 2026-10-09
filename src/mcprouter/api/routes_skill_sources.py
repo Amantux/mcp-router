@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import require_admin
+from mcprouter.lifecycle import skill_content_snapshot
 from mcprouter.models import SkillSourceRecord
 from mcprouter.skills.sources import SourceError, referencing_rules, run_sync, validate_location
 
@@ -128,6 +129,10 @@ def delete_source(sid: str, request: Request) -> Response:
 def sync(sid: str, request: Request) -> dict[str, Any]:
     with _factory(request)() as s:
         rec = _get(s, sid)
+        before = skill_content_snapshot(s, rec.id)
         report = run_sync(s, rec, request.app.state.settings)
         s.commit()
-        return report
+    hook = getattr(request.app.state, "skill_post_sync", None)
+    if hook is not None:  # classify + embed (wired in api/app.py)
+        hook(sid, before)
+    return report
