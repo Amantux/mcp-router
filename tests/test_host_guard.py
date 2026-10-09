@@ -111,3 +111,56 @@ def test_security_headers_on_healthz_and_spa(client: TestClient) -> None:
 )
 def test_hostname_of(header: str, name: str) -> None:
     assert hardening.hostname_of(header) == name
+
+
+# --- P-108 (D14): /metrics gate, curated /healthz, /readyz --------------------
+
+H_ADMIN = {"Authorization": f"Bearer {ADMIN}"}
+
+
+def test_metrics_requires_admin_when_token_set(client: TestClient) -> None:
+    from mcprouter.analytics.metrics import install_metrics
+
+    install_metrics(client.app.state.session_factory).refresh_now()  # type: ignore[attr-defined]
+    assert client.get("/metrics/").status_code == 401
+    assert client.get("/metrics/", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    r = client.get("/metrics/", headers=H_ADMIN)
+    assert r.status_code == 200 and "mcpr_analytics_" in r.text
+
+
+def test_metrics_open_without_admin_token() -> None:
+    s = Settings(database_url=TEST_DB_URL)
+    with TestClient(create_app(s, env={})) as c:
+        assert c.get("/metrics/").status_code == 200
+
+
+def test_healthz_db_down_is_curated_503(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from sqlalchemy.exc import OperationalError
+
+    def boom() -> None:
+        raise OperationalError("connect", {}, Exception("password=hunter2-dsn @db:5432"))
+
+    monkeypatch.setattr(client.app.state.engine, "connect", boom)  # type: ignore[attr-defined]
+    for path in ("/healthz", "/readyz"):
+        r = client.get(path)
+        assert r.status_code == 503
+        assert r.json() == {"status": "unavailable", "detail": "database unreachable"}
+        assert "hunter2" not in r.text
+    assert "hunter2" not in caplog.text
+
+
+def test_readyz_ready_and_minimal(client: TestClient) -> None:
+    r = client.get("/readyz")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ready", "db": "ok", "engineLoaded": True, "degraded": False}
+
+
+def test_readyz_degraded_when_laya_requested_but_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "laya", None)  # import laya -> ImportError
+    with _client(decision_backend="laya") as c:
+        body = c.get("/readyz").json()
+    assert body["status"] == "degraded" and body["degraded"] is True

@@ -17,12 +17,14 @@ the SPA, /healthz) before routing, auth or body parsing.
 
 from __future__ import annotations
 
+import hmac
 import json
 
 from fastapi import FastAPI
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from mcprouter.api.deps_auth import hash_key
 from mcprouter.settings import Settings
 
 # Port-insensitive loopback names.
@@ -112,6 +114,46 @@ class HostGuard:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+_UNAUTHORIZED = json.dumps({"detail": "admin token required"}).encode()
+
+
+class MetricsGate:
+    """D14: /metrics requires `Authorization: Bearer <MCPR_ADMIN_TOKEN>` when
+    an admin token is configured (hash compared in constant time); open
+    otherwise (dev mode / loopback-only posture)."""
+
+    def __init__(self, app: ASGIApp, admin_token_hash: str | None) -> None:
+        self.app = app
+        self.admin_token_hash = admin_token_hash
+
+    def _authorized(self, scope: Scope) -> bool:
+        if self.admin_token_hash is None:
+            return True
+        for key, value in scope.get("headers", ()):
+            if key == b"authorization":
+                scheme, _, token = value.decode("latin-1").partition(" ")
+                if scheme.lower() == "bearer" and token.strip():
+                    return hmac.compare_digest(hash_key(token.strip()), self.admin_token_hash)
+        return False
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or self._authorized(scope):
+            await self.app(scope, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(_UNAUTHORIZED)).encode()),
+                    (b"www-authenticate", b"Bearer"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": _UNAUTHORIZED})
 
 
 def install(app: FastAPI, settings: Settings) -> None:

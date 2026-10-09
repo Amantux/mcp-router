@@ -29,7 +29,10 @@ from datetime import UTC, datetime
 
 import anyio.to_thread
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
@@ -238,15 +241,41 @@ def create_app(
         transport_security=gateway_transport_security(settings.allowed_hosts),
     )  # /mcp; wraps the lifespan
 
-    @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        from sqlalchemy import text
+    def _db_ok() -> bool:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except SQLAlchemyError as exc:  # curated: the DSN never reaches the client or log
+            log.warning("health: database unreachable (%s)", type(exc).__name__)
+            return False
+        return True
 
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+    _DB_DOWN = {"status": "unavailable", "detail": "database unreachable"}
+
+    @app.get("/healthz", response_model=None)
+    def healthz() -> dict[str, str] | JSONResponse:
+        """Liveness (D14): the process serves and reaches its database."""
+        if not _db_ok():
+            return JSONResponse(_DB_DOWN, status_code=503)
         return {"status": "ok"}
 
-    app.mount("/metrics", make_asgi_app())
+    @app.get("/readyz", response_model=None)
+    def readyz() -> dict[str, object] | JSONResponse:
+        """Readiness (D14): database + inference engine. `degraded` = a
+        requested backend fell back (still serving, deterministically)."""
+        if not _db_ok():
+            return JSONResponse(_DB_DOWN, status_code=503)
+        health = inference.health(check_idle=False)
+        degraded = health["status"] == "degraded"
+        return {
+            "status": "degraded" if degraded else "ready",
+            "db": "ok",
+            "engineLoaded": bool(health["loaded"]),
+            "degraded": degraded,
+        }
+
+    # /metrics: admin bearer required whenever an admin token is configured.
+    app.mount("/metrics", hardening.MetricsGate(make_asgi_app(), security.admin_token_hash))
     # Dashboard + SPA fallback: registered LAST so API, /mcp and /metrics win.
     mount_ui(app, settings.ui_dist)
     # Outermost: refuse oversized bodies before routing, auth or parsing.
