@@ -226,6 +226,27 @@ def _http_error(exc: SkillAccessError) -> HTTPException:
     return HTTPException(status_code=status, detail=msg)
 
 
+SKIPPED_HEADER_MAX = 2048  # bytes; proxies commonly reject headers past 4-8 KiB
+
+
+def skipped_header(skipped: list[str]) -> str:
+    """Comma-joined, percent-quoted skipped paths, capped at SKIPPED_HEADER_MAX
+    bytes: whole entries only, then ",...+N" naming how many were left out."""
+    parts = [quote(p, safe="/") for p in skipped]
+    full = ",".join(parts)
+    if len(full) <= SKIPPED_HEADER_MAX:
+        return full
+    reserve = len(f",...+{len(parts)}")  # worst-case suffix width
+    out: list[str] = []
+    size = 0
+    for part in parts:
+        if size + len(part) + 1 + reserve > SKIPPED_HEADER_MAX:
+            break
+        out.append(part)
+        size += len(part) + 1
+    return ",".join([*out, f"...+{len(parts) - len(out)}"])
+
+
 def _exposure(request: Request) -> SkillExposure:
     exp = getattr(request.app.state, "skill_exposure", None)
     if not isinstance(exp, SkillExposure):
@@ -297,7 +318,7 @@ async def skills_bundle(request: Request, agent_id: _AgentQ = None) -> Response:
         content=data,
         media_type="application/zip",
         headers={
-            "X-Skipped-Resources": ",".join(quote(p, safe="/") for p in skipped),
+            "X-Skipped-Resources": skipped_header(skipped),
             "Content-Disposition": 'attachment; filename="skills-bundle.zip"',
         },
     )
