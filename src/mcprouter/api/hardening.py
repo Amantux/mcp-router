@@ -25,10 +25,11 @@ from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from mcprouter.api.deps_auth import hash_key
+from mcprouter.net_policy import LOOPBACK_HOSTS
 from mcprouter.settings import Settings
 
-# Port-insensitive loopback names.
-LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "[::1]"})
+# Port-insensitive loopback names: the one shared set (net_policy).
+LOOPBACK_HOSTNAMES = LOOPBACK_HOSTS
 
 # Test-only seam (D2): tests/support/settings.py patches this to admit the
 # TestClient's "testserver". Never set from env.
