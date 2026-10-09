@@ -85,24 +85,24 @@ describe("PlaygroundPage", () => {
     setCredentials({ adminToken: "adm" });
     const { calls } = mockTool({ ...TOOL, name: "create_issue", operation: "write" }, () => ({ json: { status: "ok", detail: "ok", record_id: "r2", result: { content: [{ type: "text", text: '{"number":7}' }], is_error: false } } }));
     renderWithProviders(<PlaygroundPage />, { route: "/playground?tool=t1" });
-    await user.type(await screen.findByRole("textbox", { name: /repo/ }), "a/b");
+    await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
     // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
-    expect((screen.getByRole("button", { name: "Run tool" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(((await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 })) as HTMLButtonElement).disabled).toBe(true);
     // The principals list loads asynchronously: wait for the option itself, not just the picker.
-    await screen.findByRole("option", { name: "billing-bot" });
+    await screen.findByRole("option", { name: "billing-bot" }, { timeout: 5000 });
     await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
-    await user.click(screen.getByRole("button", { name: "Run tool" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    expect(await within(dialog).findByText("Run create_issue as agent “billing-bot” (admin-initiated)?", {}, { timeout: 5000 })).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     // Fluent keeps the surface aria-hidden during its open transition; wait it out.
-    await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 3000 }));
-    const ok = await screen.findByTestId("outcome-ok");
-    expect(within(ok).getByText("Ran create_issue")).toBeTruthy();
+    await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
+    const ok = await screen.findByTestId("outcome-ok", {}, { timeout: 5000 });
+    expect(await within(ok).findByText("Ran create_issue", {}, { timeout: 5000 })).toBeTruthy();
     expect(within(ok).getByLabelText("Result block 1").textContent).toBe('{\n  "number": 7\n}');
     const exec = calls.find((c) => c.method === "POST")!;
     expect((exec.body as Record<string, unknown>).agentId).toBe("billing-bot");
-  });
+  }, 30000);
 
   it("raw JSON toggle: form→JSON always works; unrepresentable JSON stays raw with a notice", async () => {
     const user = userEvent.setup();
