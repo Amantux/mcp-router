@@ -39,7 +39,7 @@ class CaseOutcome:
     fallback_used: bool
     latency_ms: float
     error: str | None = None
-    returned_skills: list[str] = field(default_factory=list)  # skill names, rank order
+    returned_skills: list[str] = field(default_factory=list)  # "source/name", rank order
 
 
 def run_cases(
@@ -76,7 +76,9 @@ def run_cases(
                 # Kinds are scored separately: tool metrics see only tools, so a
                 # skill ranked first does not count as a "wrong tool".
                 returned=[f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind == "tool"],
-                returned_skills=[t.tool_name for t in res.tools if t.kind == "skill"],
+                returned_skills=[
+                    f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind == "skill"
+                ],
                 no_match=res.no_match,
                 fallback_used=res.fallback_used,
                 latency_ms=res.latency_ms,
@@ -150,6 +152,11 @@ def _core(outs: list[CaseOutcome]) -> dict[str, Any]:
     }
 
 
+def _skill_hit(expected: str, returned: str) -> bool:
+    """ "source/name" matches exactly; a bare "name" (ambiguous) matches any source."""
+    return returned == expected if "/" in expected else returned.split("/", 1)[-1] == expected
+
+
 def _skill_core(outs: list[CaseOutcome]) -> dict[str, Any]:
     """Skill top-1/top-5 over cases with expected_skills; errored cases
     (returned_skills=[]) stay in the denominator as misses."""
@@ -157,10 +164,16 @@ def _skill_core(outs: list[CaseOutcome]) -> dict[str, Any]:
     top1 = 0
     recall = 0.0
     for o in pos:
-        expected = set(o.case.expected_skills)
-        top1 += bool(o.returned_skills) and o.returned_skills[0] in expected
-        recall += len(expected & set(o.returned_skills[:5])) / len(expected)
+        exp = o.case.expected_skills
+        top1 += bool(o.returned_skills) and any(_skill_hit(e, o.returned_skills[0]) for e in exp)
+        top5 = o.returned_skills[:5]
+        recall += sum(any(_skill_hit(e, r) for r in top5) for e in set(exp)) / len(set(exp))
+    leaked = sum(
+        any(_skill_hit(f, r) for f in o.case.forbidden_skills for r in o.returned_skills)
+        for o in outs
+    )
     return {
+        "unauthorized_skill_exposures": leaked,
         "positive_cases": len(pos),
         "top1_accuracy": _rate(top1, len(pos)),
         "top5_recall": _rate(recall, len(pos)),
@@ -176,7 +189,7 @@ def _mixed_core(outs: list[CaseOutcome]) -> dict[str, Any]:
         if o.returned
         and o.returned[0] in o.case.expected_tools
         and o.returned_skills
-        and o.returned_skills[0] in o.case.expected_skills
+        and any(_skill_hit(e, o.returned_skills[0]) for e in o.case.expected_skills)
     )
     return {"cases": len(mixed), "both_top1_rate": _rate(both, len(mixed))}
 

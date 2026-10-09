@@ -79,7 +79,7 @@ def test_runner_splits_kinds_and_scores_skills_separately() -> None:
         session_factory=None,  # type: ignore[arg-type]
         scope_resolver=lambda _a: None,  # type: ignore[arg-type, return-value]
     )
-    assert outs[0].returned == ["s/read"] and outs[0].returned_skills == ["pdf-fill"]
+    assert outs[0].returned == ["s/read"] and outs[0].returned_skills == ["s/pdf-fill"]
     m = compute_metrics(outs)
     sk = m["skills"]
     assert sk["positive_cases"] == 3

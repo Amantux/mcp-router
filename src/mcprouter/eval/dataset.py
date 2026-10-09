@@ -15,8 +15,11 @@ Fields:
   agent_id         str                                     (default "eval-agent")
   expect_no_match  bool — correct answer is no_match=true; requires empty
                    expected_tools.                                   (default false)
-  expected_skills  ["skill-name", ...] ranked by preference (Wave 4). Matched on
-                   the routed skill's name (RoutedTool.tool_name, kind=skill).
+  expected_skills  ["source/name", ...] ranked by preference (Wave 4). Matched on
+                   "<skill source>/<skill name>". A bare "name" is still accepted
+                   but AMBIGUOUS: it matches that name from any source.
+  forbidden_skills ["source/name", ...] that must NEVER be shown; any shown one
+                   counts as an unauthorized skill exposure.
   kinds            subset of ["tool", "skill"] the case exercises; derived from
                    which expected_* lists are non-empty when omitted. A case
                    with both kinds is a "mixed" case.
@@ -45,6 +48,7 @@ _ALLOWED_KEYS = {
     "expected_tools",
     "forbidden_tools",
     "expected_skills",
+    "forbidden_skills",
     "kinds",
     "allowed_servers",
     "agent_id",
@@ -69,6 +73,7 @@ class EvalCase:
     expect_no_match: bool = False
     expect_denied: bool = False
     expected_skills: tuple[str, ...] = ()
+    forbidden_skills: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ("tool",)
 
 
@@ -136,6 +141,11 @@ def _parse_case(raw: object, lineno: int) -> EvalCase:
     skills = raw.get("expected_skills", [])
     if not isinstance(skills, list) or not all(isinstance(t, str) and t for t in skills):
         raise DatasetError(f"line {lineno}: 'expected_skills' must be a list of skill names")
+    forbidden_skills = raw.get("forbidden_skills", [])
+    if not isinstance(forbidden_skills, list) or not all(
+        isinstance(t, str) and t for t in forbidden_skills
+    ):
+        raise DatasetError(f"line {lineno}: 'forbidden_skills' must be a list of skill refs")
     kinds_raw = raw.get("kinds")
     if kinds_raw is None:
         kinds = tuple(k for k, v in (("tool", raw.get("expected_tools")), ("skill", skills)) if v)
@@ -155,6 +165,7 @@ def _parse_case(raw: object, lineno: int) -> EvalCase:
         expect_no_match=flags["expect_no_match"],
         expect_denied=flags["expect_denied"],
         expected_skills=tuple(skills),
+        forbidden_skills=tuple(forbidden_skills),
         kinds=kinds,
     )
     if case.expect_no_match and (case.expected_tools or case.expected_skills):
