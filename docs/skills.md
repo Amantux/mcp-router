@@ -1,8 +1,8 @@
-# Agent Skills — operator guide (v0.4)
+# Agent Skills — operator guide
 
 MCP Router routes [Agent Skills](https://agentskills.io/specification) through the
 same machinery as MCP tools: discover → catalog → classify → route (budget +
-policy) → expose → audit → analytics. Design record: [`skills-plan.md`](skills-plan.md).
+policy) → expose → audit → analytics. Design record: [`history/skills-plan.md`](history/skills-plan.md).
 Security posture: [`security-model.md` §Skills](security-model.md#skills-wave-4-s3).
 
 ```mermaid

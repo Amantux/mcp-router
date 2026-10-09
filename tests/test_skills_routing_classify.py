@@ -61,7 +61,7 @@ def _apply(db, sid: str, op: str) -> tuple[bool, str]:  # noqa: ANN001
     with db() as s:
         ok = apply_skill_classification(s, sid, Classification(operation=op, domain=None))
         s.commit()
-        return ok, s.get(SkillRecord, sid).operation  # type: ignore[union-attr]
+        return ok, s.get(SkillRecord, sid).operation
 
 
 def test_first_classification_any_value(db) -> None:  # noqa: ANN001

@@ -26,6 +26,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    MetaData,
     String,
     Text,
     UniqueConstraint,
@@ -169,7 +170,9 @@ class PolicyRule(Base):
     # Wave 4: which catalog this rule governs. Existing rows are tool rules; skill
     # rules are explicit (deny-by-default => no skill rule, no skills). For skill
     # rules, server_id holds the skill SOURCE id and tool_name the skill-name glob.
-    resource_kind: Mapped[str] = mapped_column(String(8), default="tool")  # tool | skill
+    resource_kind: Mapped[str] = mapped_column(
+        String(8), default="tool", server_default="tool"
+    )  # tool | skill (server default: migration 0001)
 
 
 class RoutingDecisionRecord(Base):
@@ -213,7 +216,9 @@ class ExecutionRecord(Base):
     # itself ("admin" = admin impersonation via REST). NULL = the agent.
     initiated_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # Wave 4: skill ACTIVATIONS (body served to an agent) are audited here too.
-    resource_kind: Mapped[str] = mapped_column(String(8), default="tool")  # tool | skill
+    resource_kind: Mapped[str] = mapped_column(
+        String(8), default="tool", server_default="tool"
+    )  # tool | skill (server default: migration 0001)
     skill_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
 
@@ -262,7 +267,7 @@ class ServerCredentialRecord(Base):
     A separate table on purpose: secrets stay out of the `mcp_servers` row that
     every serializer touches. Values are never logged or returned by the API
     (only variable NAMES). Stored plaintext at rest — encryption-at-rest is an
-    open gap (docs/INTEGRATION_NOTES-integration.md).
+    open gap (docs/history/INTEGRATION_NOTES-integration.md).
     """
 
     __tablename__ = "mcp_server_credentials"
@@ -414,3 +419,32 @@ class RouteFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+
+
+# --------------------------------------------------------- side metadatas
+class _SettingsBase(DeclarativeBase):
+    pass
+
+
+class AppSetting(_SettingsBase):
+    """First-run wizard key/value flags (non-secret). Moved here from
+    api/routes_setup.py (P-608); still on its OWN metadata (single-Base merge
+    deferred), re-exported from routes_setup."""
+
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(String(2000))
+
+
+# Imported at the bottom on purpose: neither module imports mcprouter.models,
+# so there is no cycle, and every MetaData the app owns is listed in ONE place
+# (migrations, init_db and the test cleanup helper all read this).
+from mcprouter.eval.store import eval_metadata  # noqa: E402
+from mcprouter.execution.models import SecurityBase  # noqa: E402
+
+ALL_METADATA: tuple[MetaData, ...] = (
+    Base.metadata,
+    SecurityBase.metadata,
+    eval_metadata,
+    AppSetting.metadata,
+)

@@ -16,7 +16,7 @@ from mcp.server import Server
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ListToolsResult, PaginatedRequestParams, Tool
 from testbed.fleet import generate_fleet
-from testbed.harness import http_fleet, sse_server, stdio_command_for_index, stdio_env
+from testbed.harness import dead_port, http_fleet, sse_server, stdio_command_for_index, stdio_env
 from testbed.servers import build_server
 
 from mcprouter.mcpclient import (
@@ -32,10 +32,6 @@ from mcprouter.mcpclient import (
     validate_http_url,
 )
 from mcprouter.mcpclient import connector as connector_mod
-
-HTTP_PORT = 8602  # inside this workstream's 8600-8619 allocation
-DEAD_PORT = 8609  # nothing listens here
-SSE_PORT = 8605
 
 
 # ------------------------------------------------------------ URL validation
@@ -111,7 +107,7 @@ async def test_stdio_round_trip() -> None:
 
 
 async def test_streamable_http_round_trip() -> None:
-    with http_fleet(2, port_base=HTTP_PORT) as urls:
+    with http_fleet(2) as urls:
         target = ServerTarget(transport="streamable-http", endpoint=urls["jenkins"])
         async with Connector(target) as c:
             assert (await c.initialize()).name == "jenkins"
@@ -121,7 +117,7 @@ async def test_streamable_http_round_trip() -> None:
 
 
 async def test_legacy_sse_round_trip() -> None:
-    with sse_server(generate_fleet(2)[1], port=SSE_PORT) as url:
+    with sse_server(generate_fleet(2)[1]) as url:
         async with Connector(
             ServerTarget(transport="sse", endpoint=url), connect_timeout_s=10
         ) as c:
@@ -131,7 +127,9 @@ async def test_legacy_sse_round_trip() -> None:
 
 # ------------------------------------------------------------ curated errors
 async def test_unreachable_http_is_curated() -> None:
-    target = ServerTarget(transport="streamable-http", endpoint=f"http://127.0.0.1:{DEAD_PORT}/mcp")
+    target = ServerTarget(
+        transport="streamable-http", endpoint=f"http://127.0.0.1:{dead_port()}/mcp"
+    )
     with pytest.raises(ServerUnreachableError) as ei:
         await Connector(target, connect_timeout_s=5).connect()
     assert ei.value.message == "server is unreachable"

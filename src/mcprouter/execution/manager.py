@@ -38,7 +38,7 @@ import anyio
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.api.deps_auth import DEV_AGENT_ID
+from mcprouter.auth.config import DEV_AGENT_ID
 from mcprouter.execution.models import (
     APPROVAL_DENIED,
     APPROVAL_EXECUTED,
@@ -48,10 +48,11 @@ from mcprouter.execution.models import (
     APPROVAL_PENDING,
     ApprovalRequest,
 )
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
+from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.execution.redaction import redact, redact_value, scrub_log
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.interfaces import ToolCallResult, ToolInvocationError, ToolInvoker
+from mcprouter.limits import LimiterRegistry, make_limiters
 from mcprouter.models import (
     AgentPrincipal,
     ExecutionRecord,
@@ -169,7 +170,7 @@ class ExecutionManager:
         invoker: ToolInvoker,
         *,
         timeout_s: float,
-        limiter: SlidingWindowLimiter,
+        limiter: KeyedLimiter,
         clock: Callable[[], datetime] = utcnow,
         approval_ttl: timedelta = APPROVAL_TTL,
     ) -> None:
@@ -182,13 +183,21 @@ class ExecutionManager:
 
     @classmethod
     def from_settings(
-        cls, settings: Settings, session_factory: sessionmaker[Session], invoker: ToolInvoker
+        cls,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        invoker: ToolInvoker,
+        *,
+        limiters: LimiterRegistry | None = None,
     ) -> ExecutionManager:
+        """`limiters` = the app's registry (app.state.limiters, D10); a private
+        one when omitted, so the budget is never shared across apps."""
+        registry = limiters if limiters is not None else make_limiters(settings)
         return cls(
             session_factory,
             invoker,
             timeout_s=settings.default_tool_timeout_s,
-            limiter=SlidingWindowLimiter(settings.rate_limit_per_agent_per_min, 60.0),
+            limiter=registry.surface("execute"),
         )
 
     # ----------------------------------------------------------- loading
@@ -659,15 +668,18 @@ class ExecutionManager:
         """agent_id given => only that agent's approval is visible."""
         return await anyio.to_thread.run_sync(self._get, approval_id, agent_id)
 
-    def _list(self, status: str | None) -> list[ApprovalView]:
+    def _list(self, status: str | None, limit: int = 200) -> list[ApprovalView]:
         with self._factory() as s:
-            q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc()).limit(200)
+            q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc()).limit(limit)
             if status:
                 q = q.where(ApprovalRequest.status == status)
             return [_view(r) for r in s.scalars(q).all()]
 
-    async def list_approvals(self, status: str | None = None) -> list[ApprovalView]:
-        return await anyio.to_thread.run_sync(self._list, status)
+    async def list_approvals(
+        self, status: str | None = None, limit: int = 200
+    ) -> list[ApprovalView]:
+        """Newest first, at most `limit` rows (the route bounds it)."""
+        return await anyio.to_thread.run_sync(self._list, status, limit)
 
 
 def _view(row: ApprovalRequest) -> ApprovalView:

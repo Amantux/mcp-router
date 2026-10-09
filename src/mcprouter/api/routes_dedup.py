@@ -12,6 +12,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from mcprouter.api.acting import admin_actor
+from mcprouter.api.deps import get_session
+from mcprouter.api.errors import curated_errors
 from mcprouter.dedup.detect import DEFAULT_THRESHOLD, run_dedup
 from mcprouter.dedup.review import (
     accept_suggestion,
@@ -19,10 +22,10 @@ from mcprouter.dedup.review import (
     list_suggestions,
     to_out,
 )
-from mcprouter.registry.api_deps import curated_errors, get_session, require_admin
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.wire import (
+    AcceptIn,
     DedupRunIn,
     DedupRunOut,
     DismissIn,
@@ -33,7 +36,7 @@ from mcprouter.registry.wire import (
 router = APIRouter(prefix="/api/v1/dedup", tags=["dedup"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
-AdminDep = Annotated[str, Depends(require_admin)]
+AdminDep = Annotated[str, Depends(admin_actor)]
 
 
 @router.get("/suggestions", response_model=SuggestionPageOut)
@@ -67,13 +70,18 @@ def run_suggestions(
         created=result.created,
         refreshed=result.refreshed,
         skipped_decided=result.skipped_decided,
+        truncated=result.truncated,
     )
 
 
 @router.post("/suggestions/{suggestion_id}/accept", response_model=SuggestionOut)
-def accept(suggestion_id: str, session: SessionDep, admin: AdminDep) -> SuggestionOut:
+def accept(
+    suggestion_id: str, session: SessionDep, admin: AdminDep, body: AcceptIn | None = None
+) -> SuggestionOut:
+    """Empty body keeps the scanner's preferred tool (D12, backward compatible)."""
+    preferred = body.preferred_tool_id if body is not None else None
     with curated_errors():
-        sug = accept_suggestion(session, suggestion_id, actor=admin)
+        sug = accept_suggestion(session, suggestion_id, actor=admin, preferred_tool_id=preferred)
         session.commit()
         return to_out(session, sug)
 

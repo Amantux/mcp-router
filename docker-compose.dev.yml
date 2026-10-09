@@ -2,7 +2,12 @@
 # expects (tests/conftest.py defaults to localhost:5434). Never use in prod —
 # the base compose file deliberately keeps the database off the host.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#   POSTGRES_PASSWORD=mcprouter \
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#
+# The dev password comes from that command (or .env): the base file requires
+# POSTGRES_PASSWORD, and compose interpolates each file before merging, so an
+# override cannot supply a default for it.
 services:
   db:
     ports:

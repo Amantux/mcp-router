@@ -15,9 +15,9 @@ from sqlalchemy import select, update
 
 from mcprouter.gateway.skills import SkillAccessError
 from mcprouter.models import ExecutionRecord, SkillRecord, SkillSourceRecord
-from tests.test_gateway_mcp import _ctx, sec_db_fixture, world  # noqa: F401 — fixtures
-from tests.test_gateway_skills import _route
-from tests.test_skills_exposure_activation import FakePolicy, _exp, _seed
+from tests.support.gateway import _ctx, world  # noqa: F401 — fixtures
+from tests.support.gateway_skills import _route
+from tests.support.skills_exposure import FakePolicy, _exp, _seed
 
 pytestmark = pytest.mark.anyio
 
@@ -133,7 +133,7 @@ async def test_clear_also_hides_skills(real: dict[str, Any]) -> None:
     assert gw._routed_skills("alice")[0] == (real["a"],)
     gw.exposure.clear("alice")
     assert gw._routed_skills("alice") == ((), None)
-    assert "alice" not in gw._skill_ids
+    assert gw.exposure.get("alice") is None  # skills live in the same snapshot
     with pytest.raises(MCPError):
         await _read(real, "guide.md")
 

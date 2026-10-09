@@ -12,18 +12,12 @@ from mcp import types
 
 from mcprouter.analytics import feedback as fb
 from mcprouter.gateway.server import FEEDBACK_TOOL, META_TOOL
+from tests.support.analytics import NOW, add_decision
+from tests.support.gateway import _ctx, _names, world  # noqa: F401 — fixture
 
 from .conftest import requires_db
-from .test_analytics_support import NOW, add_decision
-from .test_execution_support import sec_db_fixture  # noqa: F401 — registers sec_db
-from .test_gateway_mcp import _ctx, _names, world  # noqa: F401 — fixture
 
 pytestmark = requires_db
-
-
-@pytest.fixture(autouse=True)
-def _clear_limiter() -> None:
-    fb.LIMITER._hits.clear()
 
 
 async def _call(w: dict[str, Any], agent: str, args: dict[str, Any]) -> types.CallToolResult:

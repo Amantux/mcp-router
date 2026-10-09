@@ -2,7 +2,7 @@
 
 Thin router: everything comes from InferenceEngine.health(). The engine is
 read from `app.state.inference_engine` (wired at integration; see
-docs/INTEGRATION_NOTES-inference.md). The probe never loads models; it may
+docs/history/INTEGRATION_NOTES-inference.md). The probe never loads models; it may
 perform the battery-mode lazy idle check. Output carries backend names, model
 repo ids, pinned revisions, device, mode, memory and semaphore stats — never
 filesystem paths, settings values like the DB URL or API keys, or upstream

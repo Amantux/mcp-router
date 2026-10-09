@@ -193,7 +193,7 @@ class RuleBasedClassifier:
 
 # ------------------------------------------------------------------ skills
 # Agent Skills risk class on the same read < write < execute scale
-# (docs/skills-plan.md "Risk class"). Conservative like the tool classifier.
+# (docs/history/skills-plan.md "Risk class"). Conservative like the tool classifier.
 SKILL_BODY_PREFIX_CHARS = 2048
 _SKILL_EXEC_TOOL = re.compile(r"(?i)\b(bash|sh|zsh|shell|exec\w*|run\w*|terminal|command)\b")
 _SKILL_WRITE_VERBS = _inflect({"send", "write", "create", "delete", "deploy"})

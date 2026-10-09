@@ -17,10 +17,9 @@ from mcprouter.analytics.rollup import recompute_day
 from mcprouter.analytics.tokens import tool_token_map
 from mcprouter.analytics.window import midnight, parse_window
 from mcprouter.models import ExecutionRecord, PolicyRule, SkillRecord, SkillSourceRecord
+from tests.support.analytics import NOW, add_decision, add_exec
 
 from .conftest import requires_db
-from .test_analytics_support import NOW, add_decision, add_exec
-from .test_execution_support import sec_db_fixture  # noqa: F401 — registers the fixture
 
 pytestmark = requires_db
 
@@ -191,7 +190,7 @@ def test_tool_table_kind_filter_and_skill_detail(db: sessionmaker[Session]) -> N
 
 
 def test_route_accepts_skill_ids_and_kind(sec_db: sessionmaker[Session]) -> None:
-    from .test_analytics_api import H_ADMIN, _app
+    from tests.support.analytics_app import H_ADMIN, _app
 
     sid = _skill(sec_db)
     c = TestClient(_app(sec_db))

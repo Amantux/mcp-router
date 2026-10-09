@@ -1,6 +1,6 @@
 """REST execute: POST /api/v1/tools/{toolId}/execute (wave-2 integration).
 
-Contract (docs/INTEGRATION_NOTES-wave2-ui.md W1): 200 with `status` for every
+Contract (docs/history/INTEGRATION_NOTES-wave2-ui.md W1): 200 with `status` for every
 manager outcome; HTTP codes only for transport/auth. Agent key -> runs as
 itself; admin token -> must name agentId and runs under THAT agent's policy
 (never wider), audited as impersonation and never attributed.
@@ -25,16 +25,15 @@ from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.models import ExecutionRecord
 from mcprouter.settings import Settings
-
-from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import (
+from tests.support.execution import (
     KEYS,
     Catalog,
     FakeInvoker,
     add_rule,
-    sec_db_fixture,  # noqa: F401 — registers the fixture
     seed,
 )
+
+from .conftest import TEST_DB_URL, requires_db
 
 pytestmark = requires_db
 

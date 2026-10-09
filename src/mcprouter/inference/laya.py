@@ -1,7 +1,7 @@
 """Adapter: convaiinnovations/laya -> the DecisionModel protocol.
 
 Empirically established 2026-10-08 (model card + installed `laya==0.4.0`
-source + a CPU run; see docs/INTEGRATION_NOTES-inference.md):
+source + a CPU run; see docs/history/INTEGRATION_NOTES-inference.md):
 
 * Laya ships its OWN pip package (`pip install laya`, Apache-2.0). The runtime
   lives in the package; the Hub repo supplies only weights/config/tokenizer
@@ -38,6 +38,7 @@ import time
 import warnings
 from typing import Any
 
+from mcprouter.execution.redaction import scrub_log
 from mcprouter.inference.errors import DecisionRuntimeError, ModelUnavailableError
 from mcprouter.interfaces import ChoiceResult, ScoreResult
 
@@ -53,8 +54,8 @@ _PARSE_ERRORS = (KeyError, TypeError, ValueError, AttributeError, IndexError)
 
 
 def _scrub(text: str) -> str:
-    """CR/LF-scrub library-supplied text before logging (log forging)."""
-    return text.replace("\r", " ").replace("\n", " ")
+    """Library-supplied text before logging: the one strong sanitiser (P-610)."""
+    return scrub_log(text)
 
 
 def _renormalise(probs: list[float]) -> list[float]:

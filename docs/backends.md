@@ -8,13 +8,14 @@ and falls back to the deterministic model on any typed backend error.
 
 | `MCPR_DECISION_BACKEND` | Where it runs | Wire | Notes |
 |---|---|---|---|
-| `laya` (default) | local, in-process | — | GPU if present, CPU otherwise |
-| `deterministic` | local | — | no model; always available; the fallback |
+| `deterministic` (default) | local | — | no model; always available; the fallback |
+| `laya` | local, in-process | — | needs the `[inference]` extra (or the inference image); GPU if present, CPU otherwise |
 | `remote` | hosted Jev (AIML API) **or** another MCP Router | `POST https://api.aimlapi.com/v1/decisions` / `POST https://<router>/api/v1/decision/systemone` | System One decision shape |
 | `aoai` | Azure OpenAI (v1 API) | `POST {endpoint}/openai/v1/chat/completions` | strict JSON-schema output |
 
-Embeddings: local (default) or `MCPR_EMBEDDING_BACKEND=aoai` →
-`POST {endpoint}/openai/v1/embeddings`.
+Embeddings (`MCPR_EMBEDDING_BACKEND`): `hash` (default; zero-ML hash projection),
+`bge` (local BGE-small, needs `[inference]`) or `aoai` →
+`POST {endpoint}/openai/v1/embeddings`. Any other value stops startup.
 
 ## Configuration
 

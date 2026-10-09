@@ -5,68 +5,25 @@ it returns exactly what the direct deterministic model returns."""
 from __future__ import annotations
 
 import dataclasses
-import threading
-import time
 from collections.abc import Iterator
-from contextlib import contextmanager
 
 import httpx
 import pytest
-import uvicorn
-from sqlalchemy import delete
 
-from mcprouter.api.app import create_app
-from mcprouter.db import make_engine, make_session_factory
 from mcprouter.inference.deterministic import DeterministicDecisionModel
 from mcprouter.inference.remote_systemone import RemoteAuthError, RemoteSystemOneModel
-from mcprouter.models import AgentPrincipal
-from mcprouter.settings import Settings
+from tests.support.edge import KEY
+from tests.support.edge_app import PATH, served_edge
 
-PORT_A, PORT_LOOP = 8761, 8762
-KEY = "edge-test-key-0123456789abcdef"
 STATE = "user wants to read a file from the repository and summarize it"
 OPTS = ["read_file", "send_email", "delete_repo"]
 LEVELS = ["none", "low", "medium", "high"]
 
 
-@contextmanager
-def _serve(settings: Settings, port: int) -> Iterator[None]:
-    app = create_app(settings, env={"MCPR_AGENT_KEYS": f"edgebot:{KEY}"})
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    deadline = time.time() + 20
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
-    assert server.started, "uvicorn did not start"
-    try:
-        yield
-    finally:
-        server.should_exit = True
-        t.join(timeout=10)
-        _drop_principal(settings)
-
-
-def _drop_principal(settings: Settings) -> None:
-    """The bootstrapped principal would take later tests out of dev mode."""
-    eng = make_engine(settings)
-    try:
-        with make_session_factory(eng)() as session:
-            session.execute(delete(AgentPrincipal).where(AgentPrincipal.agent_id == "edgebot"))
-            session.commit()
-    finally:
-        eng.dispose()
-
-
-def _settings(**kw: object) -> Settings:
-    base = Settings.from_env()
-    return dataclasses.replace(base, agent_keys=f"edgebot:{KEY}", **kw)  # type: ignore[arg-type]
-
-
 @pytest.fixture(scope="module")
 def edge() -> Iterator[str]:
-    with _serve(_settings(decision_backend="deterministic", embedding_backend="hash"), PORT_A):
-        yield f"http://127.0.0.1:{PORT_A}/api/v1/decision/systemone"
+    with served_edge() as (_, base_url):
+        yield f"{base_url}{PATH}"
 
 
 def test_remote_client_round_trips_deterministic_answers(edge: str) -> None:
@@ -142,15 +99,17 @@ def test_body_caps(edge: str, body: dict[str, object], code: int) -> None:
 
 
 def test_loop_guard_refuses_self_pointing_remote() -> None:
-    url = f"http://localhost:{PORT_LOOP}/api/v1/decision/systemone"
-    s = _settings(decision_backend="remote", decision_endpoint=url, decision_api_key=KEY)
-    with _serve(s, PORT_LOOP):
+    remote = {"decision_backend": "remote", "decision_api_key": KEY}
+    with served_edge(**remote, decision_endpoint="http://localhost:9/x") as (app, base_url):
+        # Point our own remote backend at the port we were actually given
+        # (settings are read per request; the port is OS-assigned).
+        port = base_url.rsplit(":", 1)[1]
+        app.state.settings = dataclasses.replace(
+            app.state.settings, decision_endpoint=f"http://localhost:{port}{PATH}"
+        )
         body = {"state": "s", "questions": {"q0": {"type": "noul", "instructions": "x"}}}
         r = httpx.post(
-            f"http://127.0.0.1:{PORT_LOOP}/api/v1/decision/systemone",
-            json=body,
-            headers={"Authorization": f"Bearer {KEY}"},
-            timeout=10,
+            f"{base_url}{PATH}", json=body, headers={"Authorization": f"Bearer {KEY}"}, timeout=10
         )
         assert r.status_code == 503
         assert "points at this router" in r.json()["detail"]

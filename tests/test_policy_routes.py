@@ -17,16 +17,15 @@ from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.models import AgentPrincipal, ExecutionRecord, PolicyRule
 from mcprouter.settings import Settings
-
-from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import (
+from tests.support.execution import (
     KEYS,
     Catalog,
     FakeInvoker,
     add_rule,
-    sec_db_fixture,  # noqa: F401 — registers the fixture
     seed,
 )
+
+from .conftest import TEST_DB_URL, requires_db
 
 pytestmark = requires_db
 
@@ -267,3 +266,30 @@ def test_missing_execution_manager_is_503(sec_db: sessionmaker[Session]) -> None
     configure_security(app, {"MCPR_ADMIN_TOKEN": ADMIN})
     app.include_router(router)
     assert TestClient(app).get("/api/v1/approvals", headers=H_ADMIN).status_code == 503
+
+
+def test_rotate_key_survives_a_failing_stream_hook(
+    env: tuple[TestClient, FakeInvoker, Catalog], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Closing the revoked credential's MCP streams is best effort: if the hook
+    raises AFTER the commit, the one-time new key must still be returned."""
+
+    class _BrokenGateway:
+        def end_stale_streams_threadsafe(self, agent_id: str) -> None:
+            raise RuntimeError("password=hunter2 must never be logged")
+
+    c, _, cat = env
+    c.app.state.gateway = _BrokenGateway()
+    try:
+        pid = cat.principals["alice"].id
+        with caplog.at_level("WARNING"):
+            r = c.post(f"/api/v1/principals/{pid}/rotate-key", headers=H_ADMIN)
+        assert r.status_code == 200
+        new_key = r.json()["apiKey"]
+        assert (
+            c.get("/api/v1/me", headers={"Authorization": f"Bearer {new_key}"}).status_code == 200
+        )
+        assert "revoke_streams_failed" in caplog.text
+        assert "hunter2" not in caplog.text
+    finally:
+        del c.app.state.gateway

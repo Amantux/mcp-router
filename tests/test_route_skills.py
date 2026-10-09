@@ -18,15 +18,15 @@ from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.routing.scope import AllowAllScope
 from mcprouter.routing.trace import RouteTrace
 from mcprouter.settings import Settings
-
-from .conftest import TEST_DB_URL, requires_db
-from .test_routing_fakes import (
+from tests.support.routing_fakes import (
     FakeHashEmbedder,
     ScriptedDecisionModel,
     add_server,
     add_skill,
     add_tool,
 )
+
+from .conftest import TEST_DB_URL, requires_db
 
 SF = sessionmaker[Session]
 Q = "fill pdf form"

@@ -5,7 +5,7 @@ POST <endpoint> with ``Authorization: Bearer <key>`` and
 ``{"model", "state", "questions": {key: {"type", "instructions", "criteria"}}}``;
 the response carries ``{"model", "answers": {key: ...}, "usage"}``.
 
-Mapping decisions (documented in docs/INTEGRATION_NOTES-wave3-remote.md):
+Mapping decisions (documented in docs/history/INTEGRATION_NOTES-wave3-remote.md):
 - choice: criteria = {option: option} -- the option string is both key and
   description, so the answer key IS the option verbatim.
 - score: criteria = the ordered levels list; ScoreResult.level is the argmax of

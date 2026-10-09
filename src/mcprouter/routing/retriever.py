@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import EmbeddingBackend, ToolCandidate
 from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
+from mcprouter.registry.schema import index_exists
 from mcprouter.routing.cache import QueryEmbeddingCache
 
 RRF_K = 60
@@ -139,7 +140,8 @@ def ensure_skill_keyword_index(engine: Engine) -> None:
         f"USING GIN (({_SKILL_DOC_TEMPLATE.format(p='')}))"
     )
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        if not index_exists(conn, SKILL_KEYWORD_INDEX):  # in migration 0001: zero DDL
+            conn.execute(text(ddl))
 
 
 def skill_eligibility_filters() -> list[ColumnElement[bool]]:
@@ -165,7 +167,8 @@ def ensure_keyword_index(engine: Engine) -> None:
         f"USING GIN (({_DOC_TEMPLATE.format(p='')}))"
     )
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        if not index_exists(conn, KEYWORD_INDEX):  # in migration 0001: zero DDL
+            conn.execute(text(ddl))
 
 
 def eligibility_filters() -> list[ColumnElement[bool]]:

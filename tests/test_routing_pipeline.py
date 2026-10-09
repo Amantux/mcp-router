@@ -13,9 +13,7 @@ from mcprouter.routing.pipeline import RELEVANCE_LEVELS, RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.routing.scope import AllowAllScope
 from mcprouter.settings import Settings
-
-from .conftest import requires_db
-from .test_routing_fakes import (
+from tests.support.routing_fakes import (
     ExplodingDecisionModel,
     FakeHashEmbedder,
     ScriptedDecisionModel,
@@ -23,6 +21,8 @@ from .test_routing_fakes import (
     add_tool,
     pick,
 )
+
+from .conftest import requires_db
 
 pytestmark = requires_db
 

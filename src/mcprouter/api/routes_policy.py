@@ -11,6 +11,7 @@ Nothing else ever returns a key or its hash.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -21,16 +22,21 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from mcprouter.api.deps import get_manager, session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
     generate_key,
     get_principal,
     hash_key,
     require_admin,
+    security_of,
 )
-from mcprouter.execution.manager import ApprovalError, ApprovalView, ExecutionManager
+from mcprouter.execution.manager import ApprovalError, ApprovalView
+from mcprouter.execution.redaction import scrub_log
 from mcprouter.generation import bump_policy
 from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule, SkillSourceRecord
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["policy"])
 
@@ -132,15 +138,10 @@ class ApprovalDecision(_Wire):
 
 # ----------------------------------------------------------------- helpers
 def _session(request: Request) -> Session:
-    s: Session = request.app.state.session_factory()
-    return s
+    return session_factory(request)()
 
 
-def _manager(request: Request) -> ExecutionManager:
-    mgr = getattr(request.app.state, "execution_manager", None)
-    if not isinstance(mgr, ExecutionManager):
-        raise HTTPException(status_code=503, detail="execution manager not configured")
-    return mgr
+_manager = get_manager  # P-206: one spelling, in api/deps.py
 
 
 def _p_out(p: AgentPrincipal) -> PrincipalOut:
@@ -217,8 +218,26 @@ def list_principals(request: Request) -> list[PrincipalOut]:
         return [_p_out(p) for p in rows]
 
 
-@router.post("/principals", status_code=201, response_model=PrincipalCreated, dependencies=[Admin])
+# D11 (A1-008): in dev mode the admin API is open only while zero principals
+# exist, so creating the first one with no admin token would 403 every admin
+# route forever. Refuse instead; the setup wizard shows this message.
+FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = (
+    "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode."
+)
+
+
+@router.post(
+    "/principals",
+    status_code=201,
+    response_model=PrincipalCreated,
+    dependencies=[Admin],
+    responses={409: {"description": "agentId exists, or dev mode without MCPR_ADMIN_TOKEN"}},
+)
 def create_principal(body: PrincipalIn, request: Request) -> PrincipalCreated:
+    config, _ = security_of(request)
+    if config.admin_token_hash is None:
+        # require_admin let us through without a token => dev mode is active.
+        raise HTTPException(status_code=409, detail=FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN)
     key = generate_key()
     with _session(request) as s:
         p = AgentPrincipal(
@@ -251,6 +270,26 @@ def get_principal_by_id(principal_id: str, request: Request) -> PrincipalOut:
         return _p_out(_get_principal_row(s, principal_id))
 
 
+def _end_stale_streams(request: Request, agent_id: str) -> None:
+    """After a committed rotate/disable/delete: close the agent's MCP streams
+    opened with a credential that is no longer current (E3 P-310 hook). Sync
+    routes run on an anyio worker thread, so the threadsafe entry applies."""
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is None:  # apps built without the MCP gateway (tests)
+        return
+    # Best effort: the credential change is already committed and per-request
+    # auth refuses the revoked key regardless. A failure here must not turn a
+    # successful rotate into a 500 that discards the one-time new key.
+    try:
+        gateway.end_stale_streams_threadsafe(agent_id)
+    except Exception as exc:  # noqa: BLE001 — boundary; class name only
+        log.warning(
+            "policy.revoke_streams_failed agent=%s err=%s",
+            scrub_log(agent_id),
+            type(exc).__name__,
+        )
+
+
 @router.patch("/principals/{principal_id}", response_model=PrincipalOut, dependencies=[Admin])
 def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -> PrincipalOut:
     with _session(request) as s:
@@ -265,7 +304,10 @@ def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -
             p.max_skills = body.max_skills
         s.commit()
         bump_policy()  # route cache (wave 2)
-        return _p_out(p)
+        out = _p_out(p)
+    if body.enabled is False:
+        _end_stale_streams(request, out.agent_id)
+    return out
 
 
 @router.post(
@@ -277,7 +319,9 @@ def rotate_key(principal_id: str, request: Request) -> KeyRotated:
         p = _get_principal_row(s, principal_id)
         p.key_hash = hash_key(key)
         s.commit()
-        return KeyRotated(id=p.id, agent_id=p.agent_id, api_key=key)
+        out = KeyRotated(id=p.id, agent_id=p.agent_id, api_key=key)
+    _end_stale_streams(request, out.agent_id)
+    return out
 
 
 @router.delete("/principals/{principal_id}", status_code=204, dependencies=[Admin])
@@ -287,9 +331,11 @@ def delete_principal(principal_id: str, request: Request) -> Response:
         # Delete the agent's rules too: a later principal re-using this
         # agent_id must not silently inherit old grants.
         s.execute(delete(PolicyRule).where(PolicyRule.agent_id == p.agent_id))
+        agent_id = p.agent_id
         s.delete(p)
         s.commit()
         bump_policy()  # route cache (wave 2)
+    _end_stale_streams(request, agent_id)
     return Response(status_code=204)
 
 
@@ -359,9 +405,19 @@ def delete_rule(rule_id: str, request: Request) -> Response:
 
 
 # --------------------------------------------------------------- approvals
+ApprovalStatus = Literal["pending", "executing", "executed", "failed", "denied", "expired"]
+APPROVALS_MAX_LIMIT = 500
+
+
 @router.get("/approvals", response_model=list[ApprovalOut], dependencies=[Admin])
-async def list_approvals(request: Request, status: str | None = None) -> list[ApprovalOut]:
-    return [_a_out(v) for v in await _manager(request).list_approvals(status)]
+async def list_approvals(
+    request: Request,
+    status: ApprovalStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=APPROVALS_MAX_LIMIT)] = 200,
+) -> list[ApprovalOut]:
+    """Newest first, at most `limit` (default 200, the old silent cap). The
+    response stays a bare list; an unknown `status` is 422, not `[]`."""
+    return [_a_out(v) for v in await _manager(request).list_approvals(status, limit)]
 
 
 @router.post(

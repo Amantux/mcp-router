@@ -24,13 +24,17 @@ from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.routing.scope import AllowAllScope
 from mcprouter.settings import Settings
+from tests.support.execution import add_rule
+from tests.support.gateway import _names
+from tests.support.gateway import world as world  # noqa: F401
+from tests.support.routing_fakes import (
+    FakeHashEmbedder,
+    ScriptedDecisionModel,
+    add_server,
+    add_tool,
+)
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import add_rule
-from .test_execution_support import sec_db_fixture as sec_db_fixture  # noqa: F401
-from .test_gateway_mcp import _names
-from .test_gateway_mcp import world as world  # noqa: F401
-from .test_routing_fakes import FakeHashEmbedder, ScriptedDecisionModel, add_server, add_tool
 
 
 def _p(max_tools: int = 8, max_servers: int | None = None) -> AgentPrincipal:
@@ -289,8 +293,7 @@ async def test_gateway_passes_last_route_request_id_when_supported(world: dict[s
     from mcprouter.execution.manager import ExecutionManager, ExecutionResult
     from mcprouter.execution.ratelimit import SlidingWindowLimiter
     from mcprouter.gateway.server import ROUTE_REQUEST_ID_KWARG, _accepts_kwarg
-
-    from .test_gateway_mcp import _ctx
+    from tests.support.gateway import _ctx
 
     gw, cat, db, route = world["gw"], world["cat"], world["db"], world["route"]
     add_rule(db, "alice", max_operation="read")

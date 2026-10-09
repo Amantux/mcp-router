@@ -189,7 +189,7 @@ def test_create_app_does_not_start_sync_loop_by_default(db: SF) -> None:
 
 # ------------------------------------- review SF-1: unattended widening
 def _seed_ticket(db: SF, description: str, operation: str, source: str | None) -> str:
-    from .test_routing_fakes import add_server, add_tool
+    from tests.support.routing_fakes import add_server, add_tool
 
     with db() as s:
         srv = add_server(s, "tickets")

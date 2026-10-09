@@ -21,10 +21,10 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@fluentui/react-components";
-import { AddRegular, ArrowSyncRegular, BookRegular } from "@fluentui/react-icons";
-import { createSkillSource, listSkillSources, setSkillSourceEnabled, syncSkillSource } from "../api/client";
+import { AddRegular, ArrowSyncRegular, BookRegular, DeleteRegular } from "@fluentui/react-icons";
+import { createSkillSource, deleteSkillSource, listSkillSources, setSkillSourceEnabled, syncSkillSource } from "../api/client";
 import type { SkillSource, SkillSourceKind, SyncReport } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -67,6 +67,15 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
   const [pending, setPending] = useState(false);
   const locError = validateSourceLocation(kind, location);
   const nameError = name.trim() ? null : "Enter a name.";
+  // Every close (added or cancelled) starts the next open blank, errors hidden.
+  const close = () => {
+    setKind("directory");
+    setName("");
+    setLocation("");
+    setGitRef("");
+    setTouched(false);
+    onClose();
+  };
 
   const submit = async () => {
     setTouched(true);
@@ -76,7 +85,7 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
       await createSkillSource({ name: name.trim(), kind, location: location.trim(), ...(kind === "git" && gitRef.trim() ? { gitRef: gitRef.trim() } : {}) });
       notify.success(`Added skill source “${name.trim()}”. Sync it to catalog its skills.`);
       onAdded();
-      onClose();
+      close();
     } catch (e) {
       notify.error(`Add skill source “${name.trim()}”`, e);
     } finally {
@@ -85,40 +94,50 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
   };
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && close()}>
       <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Add skill source</DialogTitle>
-          <DialogContent style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Name" validationMessage={touched ? nameError : undefined}>
-              <Input value={name} onChange={(_, d) => setName(d.value)} />
-            </Field>
-            <Field label="Kind">
-              <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as SkillSourceKind)}>
-                <Radio value="directory" label="Directory" />
-                <Radio value="git" label="Git (https)" />
-              </RadioGroup>
-            </Field>
-            <Field
-              label={kind === "git" ? "Repository URL" : "Directory path"}
-              hint={kind === "git" ? "https only, e.g. https://github.com/org/skills" : "Absolute path on the router host"}
-              validationMessage={touched ? locError : undefined}
-            >
-              <Input value={location} onChange={(_, d) => setLocation(d.value)} />
-            </Field>
-            {kind === "git" && (
-              <Field label="Ref" hint="Branch, tag or commit. Leave blank for the default branch.">
-                <Input value={gitRef} onChange={(_, d) => setGitRef(d.value)} />
+        <form
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          <DialogBody>
+            <DialogTitle>Add skill source</DialogTitle>
+            <DialogContent style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Name" validationMessage={touched ? nameError : undefined}>
+                <Input value={name} onChange={(_, d) => setName(d.value)} />
               </Field>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" disabled={pending} onClick={() => void submit()}>
-              {pending ? "Adding…" : "Add source"}
-            </Button>
-          </DialogActions>
-        </DialogBody>
+              <Field label="Kind">
+                <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as SkillSourceKind)}>
+                  <Radio value="directory" label="Directory" />
+                  <Radio value="git" label="Git (https)" />
+                </RadioGroup>
+              </Field>
+              <Field
+                label={kind === "git" ? "Repository URL" : "Directory path"}
+                hint={kind === "git" ? "https only, e.g. https://github.com/org/skills" : "Absolute path on the router host"}
+                validationMessage={touched ? locError : undefined}
+              >
+                <Input value={location} onChange={(_, d) => setLocation(d.value)} />
+              </Field>
+              {kind === "git" && (
+                <Field label="Ref" hint="Branch, tag or commit. Leave blank for the default branch.">
+                  <Input value={gitRef} onChange={(_, d) => setGitRef(d.value)} />
+                </Field>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={close} disabled={pending}>
+                Cancel
+              </Button>
+              <Button appearance="primary" type="submit" disabled={pending}>
+                {pending ? "Adding…" : "Add source"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </form>
       </DialogSurface>
     </Dialog>
   );
@@ -162,6 +181,22 @@ export function SkillSourcesPage() {
   const [reports, setReports] = useState<Record<string, SyncReport>>({});
   const [toggling, setToggling] = useState<string | null>(null);
   const [confirmDisable, setConfirmDisable] = useState<SkillSource | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<SkillSource | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const doDelete = async (s: SkillSource) => {
+    setDeleting(true);
+    try {
+      await deleteSkillSource(s.id);
+      notify.success(`Deleted skill source “${s.name}”`);
+      setConfirmDelete(null);
+      sources.refresh();
+    } catch (e) {
+      notify.error(`Delete skill source “${s.name}”`, e);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const doSync = async (s: SkillSource) => {
     setSyncing(s.id);
@@ -205,6 +240,8 @@ export function SkillSourcesPage() {
       />
       {sources.loading && !sources.data ? (
         <LoadingRow label="Loading skill sources…" />
+      ) : sources.failed && !sources.data ? (
+        <ErrorState what="Skill sources" onRetry={sources.reload} />
       ) : list.length === 0 && !sources.failed ? (
         <EmptyState
           icon={<BookRegular />}
@@ -254,9 +291,12 @@ export function SkillSourcesPage() {
                   />
                 </TableCell>
                 <TableCell>
-                  <Button size="small" icon={<ArrowSyncRegular />} disabled={syncing === s.id} onClick={() => void doSync(s)}>
-                    {syncing === s.id ? "Syncing…" : "Sync"}
-                  </Button>
+                  <span style={{ display: "flex", gap: 4 }}>
+                    <Button size="small" icon={<ArrowSyncRegular />} disabled={syncing === s.id} onClick={() => void doSync(s)}>
+                      {syncing === s.id ? "Syncing…" : "Sync"}
+                    </Button>
+                    <Button size="small" appearance="subtle" icon={<DeleteRegular />} aria-label={`Delete ${s.name}`} onClick={() => setConfirmDelete(s)} />
+                  </span>
                 </TableCell>
               </TableRow>
             ))}
@@ -273,6 +313,21 @@ export function SkillSourcesPage() {
         pending={toggling !== null}
         onConfirm={() => confirmDisable && void doToggle(confirmDisable, false)}
         onCancel={() => setConfirmDisable(null)}
+      />
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={`Delete skill source “${confirmDelete?.name ?? ""}”?`}
+        body={
+          <>
+            Its {confirmDelete?.skillCount != null ? `${fmtInt(confirmDelete.skillCount)} ` : ""}skills leave the catalog with it. The files at the
+            source are not touched. The backend refuses while policy rules reference the source; delete or retarget those rules first.
+          </>
+        }
+        confirmLabel="Delete source"
+        pendingLabel="Deleting…"
+        pending={deleting}
+        onConfirm={() => confirmDelete && void doDelete(confirmDelete)}
+        onCancel={() => setConfirmDelete(null)}
       />
     </>
   );

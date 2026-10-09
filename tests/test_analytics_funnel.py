@@ -21,9 +21,9 @@ from mcprouter.models import (
     MCPToolRecord,
     ToolStatsDaily,
 )
+from tests.support.analytics import NOW, World, add_decision, add_exec, build_world
 
 from .conftest import requires_db
-from .test_analytics_support import NOW, World, add_decision, add_exec, build_world
 
 pytestmark = requires_db
 
@@ -75,7 +75,7 @@ def test_window_excludes_older_decisions(db: sessionmaker[Session], world: World
 def test_null_attribution_only_world_is_graceful(db: sessionmaker[Session]) -> None:
     """Legacy-only executions (route_request_id NULL): nothing selected, no
     crash, coverage 0 — never mistaken for attributed traffic."""
-    from .test_execution_support import seed
+    from tests.support.execution import seed
 
     cat = seed(db, [("github", "list_issues", "read")])
     a = cat.tools["github.list_issues"].id

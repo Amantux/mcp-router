@@ -54,7 +54,3 @@ def midnight(d: date) -> datetime:
 def live_horizon(now: datetime) -> date:
     """First UTC day that is ALWAYS computed live (never from rollups)."""
     return (now.astimezone(UTC) - timedelta(hours=LIVE_HOURS)).date()
-
-
-def utc_today(now: datetime) -> date:
-    return now.astimezone(UTC).date()

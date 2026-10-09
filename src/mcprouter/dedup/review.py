@@ -6,7 +6,7 @@ acting on an accepted suggestion (e.g. disabling the non-preferred tool) is a
 separate, explicit admin action via POST /api/v1/tools/{id}/disable.
 
 The resolution (actor + justification) is appended to `rationale` because the
-model has no resolution columns yet (see INTEGRATION_NOTES-registry.md).
+model has no resolution columns yet (see docs/history/INTEGRATION_NOTES-registry.md).
 """
 
 from __future__ import annotations
@@ -31,7 +31,12 @@ from mcprouter.models import (
 )
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
-from mcprouter.registry.errors import InvalidArgument, InvalidTransition, SuggestionNotFound
+from mcprouter.registry.errors import (
+    InvalidArgument,
+    InvalidTransition,
+    RegistryError,
+    SuggestionNotFound,
+)
 from mcprouter.registry.wire import (
     SuggestionEvidence,
     SuggestionOut,
@@ -163,14 +168,40 @@ def _one_line(s: str) -> str:
     return " ".join(s.split())
 
 
-def accept_suggestion(session: Session, suggestion_id: str, *, actor: str) -> DuplicateSuggestion:
+class InvalidPreference(RegistryError):
+    """D12: the preferred tool must be one side of the pair."""
+
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("preferredToolId must be toolA or toolB of this suggestion.")
+
+
+def accept_suggestion(
+    session: Session,
+    suggestion_id: str,
+    *,
+    actor: str,
+    preferred_tool_id: str | None = None,
+) -> DuplicateSuggestion:
+    """Accept a suggestion. `preferred_tool_id` (D12) records the reviewer's
+    pick; None keeps the scanner's pick (backward compatible)."""
     sug = _load_open(session, suggestion_id)
+    if preferred_tool_id is not None:
+        if preferred_tool_id not in (sug.tool_a_id, sug.tool_b_id):
+            raise InvalidPreference()
+        sug.preferred_tool_id = preferred_tool_id
     sug.status = "accepted"
     sug.resolved_by = _one_line(actor)[:120]
     sug.resolved_at = utcnow()
     sug.rationale = f"{sug.rationale}\nAccepted by {_one_line(actor)}."
     session.flush()
-    audit("dedup.accept", actor=actor, suggestion_id=sug.id)
+    audit(
+        "dedup.accept",
+        actor=actor,
+        suggestion_id=sug.id,
+        preferred_tool_id=sug.preferred_tool_id,
+    )
     return sug
 
 

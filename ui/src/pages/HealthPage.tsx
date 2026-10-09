@@ -12,7 +12,7 @@ import {
 } from "@fluentui/react-components";
 import { getHealthz, getModelsHealth, METRICS_URL } from "../api/client";
 import type { ModelsHealth } from "../api/types";
-import { fmtInt, fmtMs, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { fmtInt, fmtMs, LoadingRow, PageHeader, useCommonStyles, ErrorState } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
 
@@ -154,7 +154,7 @@ export function HealthPage() {
       <Subtitle2 as="h2" className={s.section} block>
         System
       </Subtitle2>
-      {health.loading && !h ? <LoadingRow label="Loading model health…" /> : h ? <SystemCards h={h} /> : <Caption1>Model health unavailable.</Caption1>}
+      {health.loading && !h ? <LoadingRow label="Loading model health…" /> : h ? <SystemCards h={h} /> : <ErrorState what="Model health" onRetry={health.reload} />}
       <Subtitle2 as="h2" className={s.section} block>
         Loaded models
       </Subtitle2>

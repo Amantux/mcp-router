@@ -16,9 +16,9 @@ from mcprouter.analytics.feedback_stats import (
 )
 from mcprouter.analytics.window import parse_window
 from mcprouter.models import RouteFeedback
+from tests.support.analytics import NOW, add_decision
 
 from .conftest import requires_db
-from .test_analytics_support import NOW, add_decision
 
 
 def _fb(

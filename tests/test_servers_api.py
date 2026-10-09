@@ -277,3 +277,11 @@ def test_patch_enables_and_disables_a_server(client: TestClient, fleet: InprocFl
     assert client.patch(f"/api/v1/servers/{srv['id']}", json={"name": "x"}).status_code == 422
     missing = "00000000-0000-0000-0000-000000000000"
     assert client.patch(f"/api/v1/servers/{missing}", json={"enabled": True}).status_code == 404
+
+
+def test_create_server_unknown_field_is_422(client: TestClient) -> None:
+    """P-203: a typo such as `transprt` is refused, not silently dropped."""
+    body = {"name": "typo", "transprt": "stdio", "transport": "stdio", "command": ["x"]}
+    r = client.post("/api/v1/servers", json=body)
+    assert r.status_code == 422
+    assert client.get("/api/v1/servers").json() == []

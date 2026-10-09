@@ -23,17 +23,16 @@ from mcprouter.models import (
     MCPToolRecord,
     PolicyRule,
 )
-
-from .conftest import requires_db
-from .test_execution_support import (
+from tests.support.execution import (
     STRICT_SCHEMA,
     Catalog,
     FakeInvoker,
     add_rule,
     schema_hash,
-    sec_db_fixture,  # noqa: F401 — registers the fixture
     seed,
 )
+
+from .conftest import requires_db
 
 pytestmark = requires_db
 

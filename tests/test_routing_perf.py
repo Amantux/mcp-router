@@ -9,7 +9,7 @@ overhead (SQL retrieval legs, fusion, pruning, persistence). Budget: p95 <
 The catalog is ANALYZEd after bulk seeding: a steady-state catalog has
 planner statistics (autovacuum). Without them the planner estimates ~4 rows
 and picks a plan ~7x slower on the vector leg — measured, see
-docs/INTEGRATION_NOTES-routing.md (registry should ANALYZE after bulk sync).
+docs/history/INTEGRATION_NOTES-routing.md (registry should ANALYZE after bulk sync).
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ from mcprouter.models import MCPServerRecord, MCPToolRecord
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever, ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope
+from tests.support.routing_fakes import FakeHashEmbedder, ScriptedDecisionModel
 
 from .conftest import requires_db
-from .test_routing_fakes import FakeHashEmbedder, ScriptedDecisionModel
 
 # Opt-in (MCPR_RUN_SLOW=1): wall-clock budgets flake on an oversubscribed
 # shared host, and a flaky default gate is worse than an explicit perf run.
@@ -146,7 +146,7 @@ def test_pipeline_overhead_p95_under_50ms(db: sessionmaker[Session], settings: A
     _seed_large(db, emb)
     t_emb = _Timed(emb)
     t_model = _Timed(ScriptedDecisionModel(choice_fn=_confident_choice, score_fn=_graded_score))
-    pipeline = RoutePipeline(db, HybridRetriever(db, t_emb), t_model, settings)  # type: ignore[arg-type]
+    pipeline = RoutePipeline(db, HybridRetriever(db, t_emb), t_model, settings)
 
     rng = random.Random(99)
     queries = [

@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.dedup.review import accept_suggestion, list_suggestions
 from mcprouter.models import DuplicateSuggestion
+from tests.support.analytics import World, build_world
 
 from .conftest import requires_db
-from .test_analytics_support import World, build_world
 
 pytestmark = requires_db
 

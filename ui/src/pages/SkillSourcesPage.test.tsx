@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { SkillSourcesPage } from "./SkillSourcesPage";
 
@@ -41,4 +42,51 @@ describe("SkillSourcesPage", () => {
     expect(within(report).getByText("invalid frontmatter")).toBeTruthy();
     expect(within(report).getByText("bad/SKILL.md")).toBeTruthy();
   });
+
+  it("reopens the add dialog blank after an add and after a cancel; Enter submits", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/skill-sources": () => ({ json: [] }),
+      "POST /api/v1/skill-sources": (b) => ({ json: { ...SRC, ...(b as object) } }),
+    });
+    renderWithProviders(<SkillSourcesPage />);
+    await user.click((await screen.findAllByRole("button", { name: "Add source" }))[0]);
+    let dlg = await screen.findByRole("dialog");
+    await user.type(within(dlg).getByLabelText("Name"), "team");
+    await user.type(within(dlg).getByLabelText(/Directory path/), "/srv/skills{Enter}");
+    await waitFor(() => expect(calls.filter((c) => c.method === "POST")).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click((await screen.findAllByRole("button", { name: "Add source" }))[0]);
+    dlg = await screen.findByRole("dialog");
+    expect((within(dlg).getByLabelText("Name") as HTMLInputElement).value).toBe("");
+    expect((within(dlg).getByLabelText(/Directory path/) as HTMLInputElement).value).toBe("");
+    // Touch the form so errors show, then cancel: the next open must not start in an error state.
+    await user.click(within(dlg).getByRole("button", { name: "Add source" }));
+    expect(within(dlg).getByText("Enter a name.")).toBeTruthy();
+    await user.click(within(dlg).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click((await screen.findAllByRole("button", { name: "Add source" }))[0]);
+    dlg = await screen.findByRole("dialog");
+    expect(within(dlg).queryByText("Enter a name.")).toBeNull();
+  });
+
+  it("disabling a source asks first and PATCHes {enabled:false}; enabling needs no confirmation", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/skill-sources": () => ({ json: [SRC, { ...SRC, id: "s2", name: "old-skills", enabled: false }] }),
+      "PATCH /api/v1/skill-sources/s1": (b) => ({ json: { ...SRC, ...(b as object) } }),
+      "PATCH /api/v1/skill-sources/s2": (b) => ({ json: { ...SRC, id: "s2", ...(b as object) } }),
+    });
+    renderWithProviders(<SkillSourcesPage />);
+    await user.click(await screen.findByRole("switch", { name: "Disable team-skills" }));
+    const dlg = await screen.findByRole("dialog");
+    expect(within(dlg).getByText("Disable skill source “team-skills”?")).toBeTruthy();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    await user.click(within(dlg).getByRole("button", { name: "Disable source" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toEqual([["/api/v1/skill-sources/s1", { enabled: false }]]));
+    await user.click(await screen.findByRole("switch", { name: "Enable old-skills" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toContainEqual(["/api/v1/skill-sources/s2", { enabled: true }]));
+  });
 });
+

@@ -7,33 +7,39 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import threading
-import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import anyio
 import mcp_types as types
 import pytest
-import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.exceptions import MCPError
 from sqlalchemy import select, update
 
-from mcprouter.gateway.server import ACTIVATE_SKILL_TOOL, META_TOOL, READ_SKILL_RESOURCE_TOOL
+from mcprouter.gateway.server import (
+    ACTIVATE_SKILL_TOOL,
+    MCP_PATH,
+    META_TOOL,
+    READ_SKILL_RESOURCE_TOOL,
+)
 from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult
 from mcprouter.models import ExecutionRecord, SkillRecord, SkillSourceRecord
-from tests.test_execution_support import add_rule
-from tests.test_gateway_mcp import _client, sec_db_fixture, world  # noqa: F401 — fixtures
-from tests.test_skills_exposure_activation import _exp, _seed
+from tests.support.execution import add_rule
+from tests.support.gateway import (  # noqa: F401 — fixtures
+    WireRecorder,
+    _client,
+    notify_stream_ready,
+    world,
+)
+from tests.support.serve import run_app
+from tests.support.skills_exposure import _exp, _seed
 
 pytestmark = pytest.mark.anyio
 
-PORT = 8803
-URL = f"http://127.0.0.1:{PORT}/mcp"
 PDF = "local/pdf-tools"
 OTHER = "local/other-skill"
 FILES: dict[str, bytes] = {
@@ -50,6 +56,11 @@ class OnlyAlice:
         self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
     ) -> tuple[bool, str]:
         return agent_id == "alice", "rule e2e"
+
+    def check_many(
+        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
+    ) -> list[tuple[bool, str]]:
+        return [self.check(agent_id, sk, src) for sk, src in items]
 
 
 class SkillRoute:
@@ -90,18 +101,12 @@ def served(world: dict[str, Any], tmp_path: Path) -> Iterator[dict[str, Any]]:  
     gw._route_fn = route
     add_rule(db, "alice")
     add_rule(db, "bob")
-    server = uvicorn.Server(
-        uvicorn.Config(world["app"], host="127.0.0.1", port=PORT, log_level="warning")
-    )
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    deadline = time.time() + 10
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
-    assert server.started, "uvicorn did not start"
-    yield {**world, "a": a, "b": b, "route": route}
-    server.should_exit = True
-    t.join(10)
+    port, stop = run_app(WireRecorder(world["app"]))
+    try:
+        url = f"http://127.0.0.1:{port}{MCP_PATH}"
+        yield {**world, "a": a, "b": b, "route": route, "url": url}
+    finally:
+        stop()
 
 
 def _rows(db: Any, agent: str) -> list[ExecutionRecord]:
@@ -147,7 +152,7 @@ async def test_e2e_skills_routed_audited_isolated(served: dict[str, Any]) -> Non
     changes = Changes()
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w, message_handler=changes) as session,
     ):
         init = await session.initialize()
@@ -155,7 +160,7 @@ async def test_e2e_skills_routed_audited_isolated(served: dict[str, Any]) -> Non
         assert init.capabilities.resources is not None
         assert init.capabilities.resources.list_changed
         assert await _prompt_names(session) == []  # skills are opt-in via routing
-        await anyio.sleep(0.3)  # let the standalone GET stream attach
+        await notify_stream_ready(served["gw"], "alice")
 
         # 1 + 5: routing announces prompts AND resources list_changed; only the
         # routed skill is visible (other-skill exists, enabled, but unrouted).
@@ -218,7 +223,7 @@ async def test_e2e_skills_routed_audited_isolated(served: dict[str, Any]) -> Non
     # 4: a second agent can neither see nor fetch alice's skill.
     async with (
         _client("bob") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w) as bob,
     ):
         await bob.initialize()

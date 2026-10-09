@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -47,6 +48,14 @@ def validate_location(kind: str, location: str, git_ref: str | None) -> None:
     elif kind == "git":
         if not location.lower().startswith("https://"):
             raise SourceError("git sources must use https")
+        try:
+            parts = urlsplit(location)
+            userinfo = parts.username is not None or parts.password is not None
+        except ValueError:
+            raise SourceError("git source URL is malformed") from None
+        if userinfo or "@" in parts.netloc:
+            # Stored and echoed on every read: never accept embedded credentials.
+            raise SourceError("git source URLs must not embed credentials (user:token@)")
         try:
             gitsource.validate_ref(git_ref or "main")
         except gitsource.GitSourceError as exc:

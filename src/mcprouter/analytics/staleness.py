@@ -15,11 +15,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
+from psycopg.errors import QueryCanceled
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics.funnel import LIVE_DECISION_SQL
+from mcprouter.analytics.metrics import STATEMENT_TIMEOUT
 from mcprouter.analytics.window import midnight
 from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolStatsDaily
 
@@ -58,9 +62,38 @@ class NeverRoutedServer:
     created_at: datetime
 
 
+class StalenessTimeout(RuntimeError):
+    """Curated (safe to return; map to 503): the all-time scan was cut off."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "staleness report timed out on a large decision log; retry later or narrow "
+            "the window once rollups cover older days"
+        )
+
+
+def _raw_last_surfaced(session: Session) -> list[Any]:
+    """The JSON re-parse over the decision log, bounded by STATEMENT_TIMEOUT.
+    Runs in a SAVEPOINT with a transaction-local timeout restored afterwards,
+    so a cancelled scan neither poisons nor slows the caller's transaction."""
+    with session.begin_nested():
+        prev = session.execute(text("SELECT current_setting('statement_timeout')")).scalar()
+        session.execute(
+            text("SELECT set_config('statement_timeout', :t, true)"), {"t": STATEMENT_TIMEOUT}
+        )
+        try:
+            rows = list(session.execute(_LAST_SURFACED_SQL).all())
+        except OperationalError as exc:
+            if isinstance(exc.orig, QueryCanceled):
+                raise StalenessTimeout() from None
+            raise
+        session.execute(text("SELECT set_config('statement_timeout', :t, true)"), {"t": prev})
+    return rows
+
+
 def last_surfaced(session: Session) -> dict[str, datetime]:
     out: dict[str, datetime] = {
-        tid: ts for tid, ts in session.execute(_LAST_SURFACED_SQL).all() if ts is not None
+        tid: ts for tid, ts in _raw_last_surfaced(session) if ts is not None
     }
     D = ToolStatsDaily
     for tid, day in session.execute(

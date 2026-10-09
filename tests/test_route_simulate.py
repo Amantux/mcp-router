@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.api.app import create_app
 from mcprouter.models import AgentPrincipal, ExecutionRecord, PolicyRule, RoutingDecisionRecord
 from mcprouter.settings import Settings
+from tests.support.routing_fakes import add_server, add_tool
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_routing_fakes import add_server, add_tool
 
 pytestmark = requires_db
 

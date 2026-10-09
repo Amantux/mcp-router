@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
 
 import pytest
@@ -10,7 +11,7 @@ from sqlalchemy import create_engine, delete, inspect
 
 from mcprouter.api.app import create_app
 from mcprouter.api.routes_setup import SETUP_COMPLETED_KEY, AppSetting
-from tests.test_edge_roundtrip import KEY, _drop_principal, _settings
+from tests.support.edge import KEY, _drop_principal, _settings
 
 ADMIN = "setup-admin-token-0123456789abcdef"
 S = _settings(decision_backend="deterministic", embedding_backend="hash")
@@ -68,33 +69,66 @@ def test_admin_gate(client: TestClient, method: str, path: str) -> None:
     assert getattr(client, method)(path, headers=agent).status_code in (401, 403)
 
 
-def test_dev_mode_open_or_fail_closed() -> None:
-    app = create_app(S, env={})
-    with TestClient(app) as c:
-        r = c.get("/api/v1/setup/status")
-    if r.status_code == 403:  # shared DB already has principals: fail closed
-        return
-    body = r.json()
-    assert body["devMode"] is True and body["hasAdminToken"] is False
-    assert body["needsSetup"] == (body["counts"]["principals"] == 0 and body["completedAt"] is None)
+# S seeds `edgebot` from agent_keys; dev mode needs none configured at all.
+S_KEYLESS = dataclasses.replace(S, agent_keys="")
+
+
+def _zero_principals() -> None:
+    from mcprouter.models import AgentPrincipal
+
+    eng = create_engine(S.database_url)
+    with eng.begin() as conn:
+        conn.execute(delete(AgentPrincipal))
+    eng.dispose()
+
+
+def test_dev_mode_first_principal_without_admin_token_is_409(db: object) -> None:
+    """D11 / P-205: fresh DB, no token -> 409 with the curated message, nothing
+    created, and the admin API stays open (no lock-out)."""
+    from mcprouter.api.routes_policy import FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
+
+    _clear_flag()
+    _zero_principals()
+    with TestClient(create_app(S_KEYLESS, env={})) as c:
+        status = c.get("/api/v1/setup/status")
+        assert status.status_code == 200
+        assert status.json()["devMode"] is True and status.json()["needsSetup"] is True
+        r = c.post("/api/v1/principals", json={"agentId": "first"})
+        assert r.status_code == 409
+        assert r.json()["detail"] == FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
+        assert "MCPR_ADMIN_TOKEN" in FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
+        listed = c.get("/api/v1/principals")
+        assert listed.status_code == 200 and listed.json() == []  # still open
+
+
+def test_first_principal_with_admin_token_is_201_and_admin_still_works(db: object) -> None:
+    _clear_flag()
+    _zero_principals()
+    h = {"Authorization": f"Bearer {ADMIN}"}
+    try:
+        with TestClient(create_app(S_KEYLESS, env={"MCPR_ADMIN_TOKEN": ADMIN})) as c:
+            r = c.post("/api/v1/principals", json={"agentId": "first"}, headers=h)
+            assert r.status_code == 201 and r.json()["apiKey"]
+            listed = c.get("/api/v1/principals", headers=h)
+            assert listed.status_code == 200
+            assert [p["agentId"] for p in listed.json()] == ["first"]
+            assert c.get("/api/v1/setup/status", headers=h).status_code == 200
+    finally:
+        _zero_principals()
 
 
 def test_init_db_creates_app_settings_idempotently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """app_settings comes from the migrations (0001), not a per-boot create_all."""
     from mcprouter.db import init_db
 
-    calls: list[object] = []
-    real = AppSetting.metadata.create_all
+    def boom(*_a: object, **_kw: object) -> None:
+        raise AssertionError("init_db must not create_all; migrations own the schema")
 
-    def spy(bind: object, *a: object, **kw: object) -> None:
-        calls.append(bind)
-        real(bind, *a, **kw)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(AppSetting.metadata, "create_all", spy)
+    monkeypatch.setattr(AppSetting.metadata, "create_all", boom)
     eng = create_engine(S.database_url)
     try:
         init_db(eng)
         init_db(eng)  # re-running is a no-op, not an error
-        assert len(calls) == 2
         assert "app_settings" in inspect(eng).get_table_names()
     finally:
         eng.dispose()
@@ -120,7 +154,7 @@ def test_complete_survives_a_concurrent_winner(client: TestClient) -> None:
     def stale_get(self: Session, entity: object, ident: object, **kw: object) -> object:
         if entity is AppSetting:  # simulate the loser's stale "row absent" read
             return None
-        return real_get(self, entity, ident, **kw)  # type: ignore[call-overload]
+        return real_get(self, entity, ident, **kw)
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(Session, "get", stale_get)

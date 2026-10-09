@@ -1,22 +1,17 @@
 """FR-06 gateway: per-agent dynamic exposure over a real MCP endpoint.
 
 Handler-level tests drive the low-level Server handlers with a real
-ServerRequestContext; end-to-end tests run uvicorn on 127.0.0.1:8641 and talk
+ServerRequestContext; end-to-end tests run uvicorn on an OS-assigned port and talk
 to it with the installed mcp 2.x client (both protocol eras)."""
 
 from __future__ import annotations
 
-import threading
 import time
-import uuid
-from collections.abc import Iterator
 from typing import Any
 
 import anyio
 import mcp_types as types
 import pytest
-import uvicorn
-from fastapi import FastAPI
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.client.subscriptions import listen
@@ -24,112 +19,28 @@ from mcp.server.context import ServerRequestContext
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.api.deps_auth import configure_security
-from mcprouter.execution.manager import ExecutionManager
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.gateway.server import (
     FEEDBACK_TOOL,
     META_TOOL,
-    PRINCIPAL_SCOPE_KEY,
-    GatewayServer,
-    build_gateway,
 )
-from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult
+from mcprouter.interfaces import RouteRequest
 from mcprouter.models import ExecutionRecord, MCPServerRecord, MCPToolRecord
-from mcprouter.settings import Settings
-
-from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import (
-    KEYS,
-    Catalog,
-    FakeInvoker,
+from tests.support.execution import (
     add_rule,
-    sec_db_fixture,  # noqa: F401 — registers the fixture
-    seed,
 )
+from tests.support.gateway import (
+    _client,
+    _ctx,
+    _names,
+    notify_stream_ready,
+)
+from tests.support.gateway import live as live  # noqa: F401 — fixture
+from tests.support.gateway import world as world  # noqa: F401 — fixture
+
+from .conftest import requires_db
 
 pytestmark = requires_db
-
-PORT = 8641
-URL = f"http://127.0.0.1:{PORT}/mcp"
-
-
-class FakeRoute:
-    """In-fence RouteFn: returns a fixed selection (may include tools the agent
-    is NOT authorized for — the gateway must filter them)."""
-
-    def __init__(self, cat: Catalog, picks: list[str]) -> None:
-        self.cat = cat
-        self.picks = picks
-        self.requests: list[RouteRequest] = []
-        self.fail = False
-
-    def __call__(self, request: RouteRequest) -> RouteResult:
-        self.requests.append(request)
-        if self.fail:
-            raise RuntimeError("laya exploded: token=leakme")
-        return RouteResult(
-            request_id=str(uuid.uuid4()),
-            tools=[
-                RoutedTool(self.cat.tools[p].id, p.split(".")[0], p.split(".", 1)[1], 0.9)
-                for p in self.picks
-            ],
-            fallback_used=False,
-            latency_ms=1.0,
-            model_version="fake",
-        )
-
-
-TOOLS = [
-    ("github", "list_issues", "read"),
-    ("github", "create_issue", "write"),
-    ("github", "search_code", "read"),
-    ("shell", "run_command", "execute"),
-    ("files", "read_file", "read"),
-    ("mystery", "frobnicate", "unknown"),
-]
-COUNTS = {"files.read_file": 50, "github.search_code": 40, "github.list_issues": 10}
-
-
-@pytest.fixture()
-def world(sec_db: sessionmaker[Session]) -> Iterator[dict[str, Any]]:
-    cat = seed(sec_db, TOOLS, call_counts=COUNTS)
-    settings = Settings(database_url=TEST_DB_URL, max_exposed_tools=8)
-    app = FastAPI()
-    app.state.settings = settings
-    app.state.engine = sec_db.kw["bind"]
-    app.state.session_factory = sec_db
-    configure_security(app, {"MCPR_ADMIN_TOKEN": "admin_" + "z" * 30})
-    inv = FakeInvoker()
-    mgr = ExecutionManager(sec_db, inv, timeout_s=2.0, limiter=SlidingWindowLimiter(1000))
-    route = FakeRoute(cat, ["github.list_issues", "shell.run_command", "github.create_issue"])
-    gw = build_gateway(app, manager=mgr, route_fn=route)
-    yield {"cat": cat, "app": app, "gw": gw, "inv": inv, "route": route, "db": sec_db}
-
-
-def _ctx(gw: GatewayServer, cat: Catalog, agent: str, version: str = "2025-11-25") -> Any:
-    class Req:
-        def __init__(self) -> None:
-            self.scope = {
-                PRINCIPAL_SCOPE_KEY: cat.principals[agent],
-                "type": "http",
-                "headers": [],
-            }
-
-    return ServerRequestContext(
-        session=None,  # type: ignore[arg-type]
-        lifespan_context={},
-        protocol_version=version,
-        method="tools/list",
-        request=Req(),
-    )
-
-
-async def _names(gw: GatewayServer, cat: Catalog, agent: str) -> list[str]:
-    res = await gw._on_list_tools(_ctx(gw, cat, agent), None)
-    return [t.name for t in res.tools]
 
 
 # ----------------------------------------------------------- list_tools
@@ -293,7 +204,7 @@ async def test_pending_approval_is_reported_not_executed(world: dict[str, Any]) 
         _ctx(gw, cat, "alice"),
         types.CallToolRequestParams(name="github.list_issues", arguments={"repo": "a/b"}),
     )
-    assert res.is_error is True and "Approval required" in res.content[0].text  # type: ignore[union-attr]
+    assert res.is_error is True and "Approval required" in res.content[0].text
     assert inv.calls == []
 
 
@@ -309,7 +220,7 @@ async def test_find_tools_redacts_query_and_updates_exposure(world: dict[str, An
     assert res.is_error is False
     assert secret not in route.requests[-1].query
     assert route.requests[-1].agent_id == "alice"
-    text = res.content[0].text  # type: ignore[union-attr]
+    text = res.content[0].text
     assert "github.create_issue" in text and "shell.run_command" not in text
 
 
@@ -321,7 +232,7 @@ async def test_find_tools_router_failure_is_curated(world: dict[str, Any]) -> No
         types.CallToolRequestParams(name=META_TOOL, arguments={"query": "x"}),
     )
     assert res.is_error is True
-    assert "leakme" not in res.content[0].text  # type: ignore[union-attr]
+    assert "leakme" not in res.content[0].text
     assert gw.exposure.get("alice") is None
 
 
@@ -338,7 +249,9 @@ async def test_list_changed_bus_is_per_agent(world: dict[str, Any]) -> None:
     gw, route = world["gw"], world["route"]
     seen: dict[str, int] = {"alice": 0, "bob": 0}
     for agent in seen:
-        bus, _ = gw._bus(agent)
+        subject = gw._current_subject(agent)
+        assert subject is not None
+        bus, _ = gw._bus(agent, subject)
         bus.subscribe(lambda _e, a=agent: seen.__setitem__(a, seen[a] + 1))
     await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
     assert seen == {"alice": 1, "bob": 0}
@@ -349,31 +262,16 @@ async def test_list_changed_bus_is_per_agent(world: dict[str, Any]) -> None:
 
 # ------------------------------------------------------------ end-to-end
 @pytest.fixture()
-def served(world: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    config = uvicorn.Config(world["app"], host="127.0.0.1", port=PORT, log_level="warning")
-    server = uvicorn.Server(config)
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    deadline = time.time() + 10
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
-    assert server.started, "uvicorn did not start"
-    yield world
-    server.should_exit = True
-    t.join(10)
-
-
-def _client(agent: str | None) -> Any:
-    headers = {"Authorization": f"Bearer {KEYS[agent]}"} if agent else {}
-    return create_mcp_http_client(headers=headers)
+def served(live: dict[str, Any]) -> dict[str, Any]:
+    return live
 
 
 async def test_e2e_requires_authentication(served: dict[str, Any]) -> None:
     async with _client(None) as http:
-        r = await http.post(URL, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        r = await http.post(served["url"], json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         assert r.status_code == 401
     async with create_mcp_http_client(headers={"Authorization": "Bearer wrong"}) as http:
-        r = await http.post(URL, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        r = await http.post(served["url"], json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         assert r.status_code == 401
 
 
@@ -388,7 +286,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
 
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w, message_handler=on_message) as session,
     ):
         init = await session.initialize()
@@ -406,7 +304,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
         assert res.is_error is False and inv.calls == [("github", "list_issues", {"repo": "a/b"})]
         denied = await session.call_tool("shell.run_command", {"repo": "a/b"})
         assert denied.is_error is True and len(inv.calls) == 1
-        await anyio.sleep(0.3)  # let the standalone GET stream attach
+        await notify_stream_ready(served["gw"], "alice")
         await session.call_tool(META_TOOL, {"query": "file an issue"})
         with anyio.fail_after(5):
             await changed.wait()
@@ -419,7 +317,7 @@ async def test_e2e_session_is_bound_to_its_creator(served: dict[str, Any]) -> No
     add_rule(served["db"], "alice")
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w) as session,
     ):
         await session.initialize()
@@ -427,7 +325,7 @@ async def test_e2e_session_is_bound_to_its_creator(served: dict[str, Any]) -> No
         sid = next(iter(served["gw"]._legacy["alice"]))
         async with _client("bob") as bob:
             resp = await bob.post(
-                URL,
+                served["url"],
                 json={"jsonrpc": "2.0", "id": 9, "method": "tools/list"},
                 headers={
                     "mcp-session-id": sid,
@@ -443,7 +341,7 @@ async def test_e2e_modern_listen_receives_only_own_changes(served: dict[str, Any
     add_rule(served["db"], "alice", max_operation="write")
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w) as session,
     ):
         await session.discover()
@@ -525,3 +423,124 @@ async def test_stalled_sessions_are_notified_concurrently(world: dict[str, Any])
     await gw.notify_tools_changed("alice")
     assert time.perf_counter() - t0 < gw_mod.NOTIFY_TIMEOUT_S * 2
     assert not gw._legacy["alice"]  # all pruned as dead
+
+
+async def test_notify_failure_prunes_session_and_never_fails_find_tools(
+    world: dict[str, Any],
+) -> None:
+    """P-303: a session whose send raises a non-Broken* exception is pruned,
+    the other sessions are still notified, and router.find_tools succeeds."""
+    from collections import OrderedDict
+
+    sent: list[str] = []
+
+    class Raising:
+        async def send_tool_list_changed(self) -> None:
+            raise RuntimeError("no back channel")
+
+    class Healthy:
+        async def send_tool_list_changed(self) -> None:
+            sent.append("healthy")
+
+    gw, cat, db = world["gw"], world["cat"], world["db"]
+    add_rule(db, "alice", max_operation="write")
+    gw._legacy["alice"] = OrderedDict([("bad", Raising()), ("good", Healthy())])
+    res = await gw._on_call_tool(
+        _ctx(gw, cat, "alice"),
+        types.CallToolRequestParams(name=META_TOOL, arguments={"query": "file an issue"}),
+    )
+    assert res.is_error is False
+    assert sent == ["healthy"]
+    assert list(gw._legacy["alice"]) == ["good"]
+    assert gw.exposure.get("alice") is not None
+
+
+# ------------------------------------------------ P-307 reserved names + meta args
+def _variant(world: dict[str, Any], *, routed: bool, skills: Any) -> Any:
+    from mcprouter.gateway.server import GatewayServer
+
+    app = world["app"]
+    return GatewayServer(
+        session_factory=world["db"],
+        security=app.state.security,
+        settings=app.state.settings,
+        manager=world["gw"]._manager,
+        route_fn=world["route"] if routed else None,
+        skills=skills,
+    )
+
+
+class _NoSkills:
+    """Skills stand-in: any use is a side effect the test forbids."""
+
+    def __getattr__(self, attr: str) -> Any:
+        raise AssertionError(f"skills touched: {attr}")
+
+
+@pytest.mark.parametrize("routed", [True, False])
+@pytest.mark.parametrize("with_skills", [True, False])
+async def test_reserved_catalog_names_are_never_listed(
+    world: dict[str, Any], routed: bool, with_skills: bool
+) -> None:
+    from mcprouter.gateway.server import RESERVED_TOOL_NAMES
+
+    db, cat = world["db"], world["cat"]
+    with db() as s:
+        srv = MCPServerRecord(name="router", transport="stdio")
+        s.add(srv)
+        s.flush()
+        for name in sorted(t.split(".", 1)[1] for t in RESERVED_TOOL_NAMES):
+            s.add(
+                MCPToolRecord(
+                    server_id=srv.id, name=name, schema_hash="h", operation="read", call_count=999
+                )
+            )
+        s.commit()
+    add_rule(db, "alice")
+    gw = _variant(world, routed=routed, skills=_NoSkills() if with_skills else None)
+    res = await gw._on_list_tools(_ctx(gw, cat, "alice"), None)
+    names = [t.name for t in res.tools]
+    assert len(names) == len(set(names)), names
+    assert not any(
+        t.name.startswith("router.") for t, _s, _a in gw.visible_tools(cat.principals["alice"])
+    )
+    expected_meta = ({META_TOOL, FEEDBACK_TOOL} if routed else set()) | (
+        {"router.activate_skill", "router.read_skill_resource"} if with_skills else set()
+    )
+    assert {n for n in names if n.startswith("router.")} == expected_meta
+
+
+BAD_META_ARGS = [
+    (META_TOOL, {"query": "x" * 2001}),
+    (META_TOOL, {"query": ""}),
+    (FEEDBACK_TOOL, {"items": []}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True, "kind": "bogus"}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x" * 301, "helpful": True}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True}] * 51}),
+    (FEEDBACK_TOOL, {"requestId": "r" * 37, "items": [{"name": "x", "helpful": True}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True, "extra": 1}]}),
+    ("router.activate_skill", {"name": ""}),
+    ("router.activate_skill", {"name": "a/b", "path": "x"}),
+    ("router.read_skill_resource", {"name": "a/b"}),
+    ("router.read_skill_resource", {"name": "a/b", "path": "p" * 1025}),
+]
+
+
+@pytest.mark.parametrize(("tool", "args"), BAD_META_ARGS, ids=lambda v: str(v)[:24])
+async def test_schema_violating_meta_args_are_refused_without_side_effect(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tool: str, args: dict[str, Any]
+) -> None:
+    from mcprouter.analytics import feedback as fb
+
+    def no_feedback(*_a: Any, **_k: Any) -> int:
+        raise AssertionError("feedback recorded")
+
+    monkeypatch.setattr(fb, "record_feedback", no_feedback)
+    gw = _variant(world, routed=True, skills=_NoSkills())
+    res = await gw._on_call_tool(
+        _ctx(gw, world["cat"], "alice"), types.CallToolRequestParams(name=tool, arguments=args)
+    )
+    assert res.is_error is True
+    assert res.content[0].text.startswith("Refused: invalid arguments")
+    assert world["route"].requests == []
+    assert "x" * 50 not in res.content[0].text  # values never echoed

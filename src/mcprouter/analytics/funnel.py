@@ -8,7 +8,7 @@ Definitions (all anchored on the DECISION's time, not the execution's):
   score desc, ties by server/tool name, truncated to max_tools).
 * retrieved — NOT AVAILABLE: retrieval candidates are not persisted, so the
   funnel starts at `surfaced` (proposal for the routing track in
-  docs/INTEGRATION_NOTES-wave2-analytics.md).
+  docs/history/INTEGRATION_NOTES-wave2-analytics.md).
 * selected  — distinct (decision, tool) pairs with at least one attributed
   ExecutionRecord (`route_request_id` = decision id) for a tool that decision
   surfaced. Any terminal outcome counts as a selection (ok, error, timeout,

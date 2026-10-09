@@ -10,7 +10,7 @@ Deterministic transitions (pure function ``next_status``):
     - otherwise                -> degraded   (one blip doesn't take a server out)
 
 The failure streak is process-local (``HealthTracker``): there is no column
-for it (see INTEGRATION_NOTES). After a restart the first failure of a
+for it (see docs/history/INTEGRATION_NOTES-*). After a restart the first failure of a
 previously-healthy server therefore reads as ``degraded``, never worse.
 """
 

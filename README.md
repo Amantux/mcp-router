@@ -14,12 +14,15 @@ edge** on a laptop GPU or CPU, point it at a **hosted endpoint** (Jev, or
 another MCP Router serving its local model), or use **Azure OpenAI** with a URL
 and key. See [Backends](#backends).
 
-- **Default decision engine:** [Laya](https://huggingface.co/convaiinnovations/laya) —
-  a 421M open-weight, Jev-compatible decision model (Apache 2.0). Because a
-  decision model can only *select among options supplied by deterministic
-  code*, it structurally cannot invent tool names or execute anything.
-- **Retrieval:** BGE-small embeddings in PostgreSQL + pgvector, fused with
-  Postgres full-text keyword search (reciprocal-rank fusion).
+- **Recommended decision engine:** [Laya](https://huggingface.co/convaiinnovations/laya) —
+  a 421M open-weight, Jev-compatible decision model (Apache 2.0), opt-in through
+  the `[inference]` extra. Because a decision model can only *select among
+  options supplied by deterministic code*, it structurally cannot invent tool
+  names or execute anything. Out of the box the router runs the zero-ML
+  `deterministic` backend.
+- **Retrieval:** embeddings in PostgreSQL + pgvector (hash projection by
+  default, BGE-small with `[inference]`), fused with Postgres full-text keyword
+  search (reciprocal-rank fusion).
 - **Security:** a deterministic, deny-by-default policy engine and execution
   manager. Model scores are relevance data — they can never widen access.
 - **Exposure budgets + route cache:** per-request, per-agent and global caps on
@@ -42,7 +45,7 @@ and key. See [Backends](#backends).
   or timeout degrades to deterministic retrieval ranking, flagged
   `fallback_used`.
 
-### Skills (v0.4)
+### Skills
 
 [Agent Skills](https://agentskills.io/specification) are routed like tools,
 through one pipeline and one policy engine:
@@ -66,17 +69,18 @@ through one pipeline and one policy engine:
 - Operator guide with flow diagram: [`docs/skills.md`](docs/skills.md).
 
 Target hardware: a single laptop GPU (RTX 4060 Laptop, 8GB) with full CPU
-fallback. Runs entirely offline; no external inference services.
+fallback. Runs entirely offline; no external inference services are needed.
 
 ## Backends
 
-The decision model is pluggable via `MCPR_DECISION_BACKEND`:
+The decision model is pluggable via `MCPR_DECISION_BACKEND` (default `deterministic`):
 
-- `laya` (default) — local model, GPU if available.
-- `deterministic` — no model; also the automatic fallback on any backend error.
+- `deterministic` (default) — no model; also the automatic fallback on any backend error.
+- `laya` — local model, GPU if available. Needs the `[inference]` extra or the inference image.
 - `remote` — hosted Jev (AIML API) or **another MCP Router's** `POST /api/v1/decision/systemone` edge endpoint.
 - `aoai` — Azure OpenAI v1 (decision), plus `MCPR_EMBEDDING_BACKEND=aoai` for embeddings.
 
+Embeddings use `MCPR_EMBEDDING_BACKEND` (default `hash`; `bge` with `[inference]`; `aoai`).
 Outbound endpoints are https-only (http only to localhost), link-local/metadata targets are refused, keys are never logged, and every call has a total deadline. Full matrix, env examples, wire shapes and the edge topology: [docs/backends.md](docs/backends.md).
 
 ## Architecture
@@ -87,7 +91,7 @@ flowchart TD
     GW --> REG[(Tool Registry<br/>PostgreSQL + pgvector)]
     GW --> POL[Policy Engine<br/>deny-by-default · deterministic]
     Q[task / query] --> RET[Hybrid retrieval<br/>vector + keyword, RRF]
-    RET --> LAYA[Laya decision model<br/>domain choice · candidate scoring · no-match]
+    RET --> LAYA[Decision model<br/>domain choice · candidate scoring · no-match]
     LAYA --> RANK[Ranked candidates]
     RANK --> POL2[Authorization filter<br/>scores never widen access]
     POL2 --> EXP[Dynamic tool exposure<br/>3–8 tools, budget-clamped]
@@ -107,7 +111,7 @@ sequenceDiagram
     participant API as /api/v1/route
     participant Scope as Policy scope filter
     participant Ret as Hybrid retriever
-    participant Laya
+    participant Laya as Decision model
     participant Exec as Gateway /mcp
 
     Agent->>API: query (authenticated; agent_id = principal)
@@ -125,41 +129,87 @@ sequenceDiagram
 A hierarchical cascade — never one big classification over the whole catalog.
 Any model exception or deadline overrun falls back to deterministic retrieval
 ranking; a sub-threshold "does anything fit?" probability returns an honest
-`no_match` instead of garbage.
+`no_match` instead of garbage. More: [docs/architecture.md](docs/architecture.md).
 
 ## Run it (Docker)
 
+Prerequisites: Docker with Compose v2. Run every command from the repository root.
+
+1. `cp .env.example .env`
+2. Generate secrets and put them in `.env`:
+   ```bash
+   openssl rand -hex 32   # -> MCPR_ADMIN_TOKEN=...
+   openssl rand -hex 32   # -> POSTGRES_PASSWORD=...
+   ```
+3. `docker compose up -d --build --wait`
+   (if the build stalls at `npm ci`, see [Troubleshooting](docs/deploy.md#troubleshooting))
+4. `curl -fsS http://localhost:8400/healthz`
+5. Browse to http://localhost:8400/ and follow [First run](#first-run).
+
+The API listens on `127.0.0.1:8400` only. From v0.6 the container refuses to
+listen beyond loopback without `MCPR_ADMIN_TOKEN`, and other hosts need
+`MCPR_ALLOWED_HOSTS` and `MCPR_BIND` ([deploy.md](docs/deploy.md)). Every
+setting: [configuration reference](docs/reference/configuration.md).
+
+Check a running stack end to end:
+
 ```bash
-cp .env.example .env    # add MCPR_ADMIN_TOKEN=... and MCPR_AGENT_KEYS=agent:key
-docker compose up -d --build --wait
-curl -fsS localhost:8400/healthz && open http://localhost:8400/
+BASE=http://127.0.0.1:8400 COMPOSE="docker compose" \
+  MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEY=<an agent key> scripts/smoke.sh
 ```
-Non-root image, internal-only Postgres, `scripts/smoke.sh` end-to-end check; flavors and GPU: [docs/deploy.md](docs/deploy.md).
 
-## Quickstart
+### First run
+
+1. Open http://localhost:8400/, click **Connect** and paste your
+   `MCPR_ADMIN_TOKEN` (kept in this browser tab's session only).
+2. Then one of two paths:
+   - **Setup wizard (recommended).** With no agents yet, the dashboard opens
+     `/setup`: add servers and skill sources, create an agent (its key is shown
+     once), optionally grant read-only starter rules, then copy the client
+     snippet. **Skip setup** returns to the dashboard.
+   - **Agents from `.env`.** If you set `MCPR_AGENT_KEYS=agent:key` before
+     starting, that agent already exists, so the wizard is skipped. Add servers
+     and policy rules from the dashboard or the API
+     ([INSTALL.md §2–3](docs/INSTALL.md#2-create-an-agent-identity)).
+3. Point your coding agent at `http://localhost:8400/mcp` with its agent key:
+   [docs/INSTALL.md](docs/INSTALL.md) has verified configs for Claude Code,
+   GitHub Copilot CLI, Codex CLI, Cursor, VS Code and Gemini CLI.
+
+Imported `mcpServers` entries that start with `npx` run inside the container
+(Node 22 is in the image from v0.6); `uvx` entries need an extended image
+([stdio servers in Docker](docs/deploy.md#stdio-servers-in-docker)).
+
+## Run from source
+
+Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22
+(`.nvmrc`), Docker Compose v2 for the database. From the repository root:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db  # dev-only: pgvector on 127.0.0.1:5434
+POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db  # dev-only: pgvector on 127.0.0.1:5434
 uv venv --python 3.12 .venv
 uv pip install -e '.[dev]'                  # zero-ML core
-# optional, for real embeddings + Laya:
-uv pip install -e '.[inference]'
+uv pip install -e '.[inference]'            # optional: real embeddings + Laya
+(cd ui && npm ci && npm run build)          # dashboard; build it before starting the server
 
-export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
-export MCPR_AGENT_KEYS="my-agent:$(openssl rand -hex 24)"
+export MCPR_ADMIN_TOKEN=$(openssl rand -hex 32)
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
-
-cd ui && npm ci && npm run build            # dashboard served at :8400/
 ```
 
-Register servers via the dashboard or `POST /api/v1/servers` (admin token),
-import an existing Claude-Desktop-style `mcpServers` config via
-`POST /api/v1/servers/import`, then point your agent at `http://host:8400/mcp`
-with its API key.
+The server serves `ui/dist` relative to the working directory, so start it
+from the repository root. Contributor setup, gates and tests:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-**Install into your coding agent:** see [docs/INSTALL.md](docs/INSTALL.md) for
-verified configs for Claude Code, GitHub Copilot CLI, Codex CLI, Cursor,
-VS Code and Gemini CLI, plus identity and policy setup and troubleshooting.
+### Try it with a synthetic fleet
+
+```bash
+.venv/bin/python -m testbed.seed --servers 10 --tools 40
+```
+
+This registers ten synthetic servers with overlapping tools across five
+domains straight into the database, so routing, the agent lens and analytics
+have something to work with. To execute tools too, serve live fleet servers
+with `.venv/bin/python -m testbed.serve` and register their URLs
+([CLI reference](docs/reference/cli.md)).
 
 Analytics rollups: set `MCPR_ANALYTICS_ROLLUP_ENABLED=true` to recompute
 the daily funnel rollups inside the app (a pass at startup, then every 24h),
@@ -168,27 +218,18 @@ cron once a day. Either way, days that were never rolled up are computed live
 from raw rows — rollups only make old windows faster. Run `ANALYZE` after
 bulk imports.
 
-Want a synthetic fleet to play with? `python -m testbed.serve --servers 10`
-spins up realistic MCP servers with overlapping tools across five domains.
-
-### First run
-
-1. Open http://localhost:8400.
-2. Click **Connect** and paste your `MCPR_ADMIN_TOKEN` (kept in this browser tab's session only).
-3. On a fresh install you are taken to `/setup` once per session: add servers and skill
-   sources, create an agent (its key is shown once), optionally grant it read-only starter
-   rules, then copy the client snippet. **Skip setup** returns to the dashboard.
-
 ## Status — honest ledger
+
+Stamped 2026-10-09 on branch `wave6/e7` (code at `cd551f5`, plus the docs meta-test); re-stamp after each full run.
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| 1339 backend (+5 skipped) + 131 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
-| Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 |
-| 100 servers / 1,000 tools full refresh in 6.1s (target: <60s) | <4GB VRAM claim |
+| 1363 backend tests passed (9 skipped: slow, live-model and `[inference]`-only) + 131 UI tests (static count); e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 — **at risk**: CPU measurements put it out of reach; see [hardware-validation.md](docs/hardware-validation.md) |
+| 100 servers / 1,000 tools full refresh in 6.0s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |
 | Skills e2e (`tests/test_e2e_skills.py`): source sync → classify → route → MCP prompt → bundle → analytics; synthetic baseline (fallback): skills top-1 1.0 / top-5 1.0, mixed 0.75, 0 unauthorized skill exposures | |
-| 100+ security guards mutation-checked (break guard → named test fails) | |
+| Security guards mutation-checked (break guard → named test fails) | |
 
 The GPU validation runbook is [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
@@ -203,9 +244,30 @@ redacted before logs, audit rows and model inputs. Details:
 [`docs/security-model.md`](docs/security-model.md).
 
 > ⚠️ Registering a **stdio** server means the platform will run that command.
-> Server registration is therefore admin-only and the admin API fails closed
-> when no `MCPR_ADMIN_TOKEN` is configured. Don't expose the API beyond
-> localhost without auth configured.
+> Server registration is therefore admin-only, and the admin API fails closed
+> when agents exist but no `MCPR_ADMIN_TOKEN` is configured. From v0.6 the
+> container listens on loopback only until a token is set. Don't expose the
+> API beyond localhost without auth configured.
+
+## Documentation
+
+| Doc | For |
+|---|---|
+| [docs/INSTALL.md](docs/INSTALL.md) | Connecting coding agents, identities and policy, API conventions |
+| [docs/deploy.md](docs/deploy.md) | Docker deployment, security posture, limits, troubleshooting |
+| [docs/upgrade.md](docs/upgrade.md) | Upgrades, downgrades, backups |
+| [docs/reference/configuration.md](docs/reference/configuration.md) | Every `MCPR_*` setting (generated) |
+| [docs/reference/api.md](docs/reference/api.md) | Every REST route with its auth class (generated) |
+| [docs/reference/cli.md](docs/reference/cli.md) | `testbed`, `bench` and `scripts/` commands |
+| [docs/architecture.md](docs/architecture.md) | How the router is built |
+| [docs/security-model.md](docs/security-model.md) | Identities, policy, execution, redaction |
+| [docs/backends.md](docs/backends.md) | Embedding and decision backends, edge topology |
+| [docs/skills.md](docs/skills.md) | Agent Skills operator guide |
+| [docs/analytics.md](docs/analytics.md) | The funnel, savings estimates, rollups |
+| [docs/hardware-validation.md](docs/hardware-validation.md) | GPU validation runbook |
+| [docs/SPEC.md](docs/SPEC.md), [docs/scoping.md](docs/scoping.md) | Design baseline (amended) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup and gates |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
 
 ## Repository map
 
@@ -222,14 +284,14 @@ src/mcprouter/
   execution/   validation · approvals · rate limits · redaction · audit
   gateway/     per-agent MCP endpoint with dynamic tool exposure
   analytics/   funnel · attribution · context economy · profiles · rollups · metrics
-  eval/        routing-quality framework + synthetic dataset (77 cases)
+  eval/        routing-quality framework + synthetic dataset (111 cases)
   skills/      skill sources (directory · git) · ingest/validate · safe serving · bundle export
 ui/            React + Vite + Fluent UI v9 dashboard: catalog, playground,
                approvals, agent lens, analytics funnel
 testbed/       synthetic MCP server fleet with ground-truth labels
   skills/      deterministic Agent Skills generator (near-duplicates, invalid cases, git)
 bench/         latency/VRAM benchmark harness + committed CPU baselines
-docs/          spec · scoping · security model · skills guide · hardware validation runbook
+docs/          operator guides, references, design baseline; history/ is archival
 ```
 
 ## License

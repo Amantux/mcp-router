@@ -17,4 +17,4 @@ def test_public_cap_and_fail_closed() -> None:
     assert _scope(3).principal_max_skills() == 3
     assert principal_skill_cap(_scope(None)) is None
     assert principal_skill_cap(_scope("x")) == 0
-    assert principal_skill_cap(SimpleNamespace(_principal=SimpleNamespace(max_skills=9))) == 0  # type: ignore[arg-type]
+    assert principal_skill_cap(SimpleNamespace(_principal=SimpleNamespace(max_skills=9))) == 0

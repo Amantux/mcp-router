@@ -2,14 +2,21 @@
 # sentence-transformers, laya) on the CPU torch wheel index.
 # Build the base first:  docker build -t mcp-router:local .
 # then:                  docker build -f Dockerfile.inference -t mcp-router:local-inference .
+# Rebuild the base whenever you pull: this file layers on whatever
+# mcp-router:local is, so a stale base ships stale code (docs/upgrade.md).
 # For CUDA, pass --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 # (the CUDA wheel is several GB; UNPROVEN in CI — no GPU there).
 ARG BASE_IMAGE=mcp-router:local
 FROM ${BASE_IMAGE}
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# One torch version for both pip calls: the constraint stops the second call
+# from re-resolving torch from PyPI (which would pull a different build).
+ARG TORCH_VERSION=2.14.1
 USER root
-RUN pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" torch \
- && pip install --no-cache-dir "/srv[inference]"
+RUN echo "torch==${TORCH_VERSION}" > /tmp/constraints.txt \
+ && pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" --constraint /tmp/constraints.txt "torch==${TORCH_VERSION}" \
+ && pip install --no-cache-dir --constraint /tmp/constraints.txt "/srv[inference]" \
+ && rm /tmp/constraints.txt
 USER app
 ENV MCPR_EMBEDDING_BACKEND=bge \
     MCPR_DECISION_BACKEND=laya

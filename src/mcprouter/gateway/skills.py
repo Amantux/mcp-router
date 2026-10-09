@@ -13,7 +13,7 @@ Order on every activation/read (each step mutation-checked in tests):
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,9 +21,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from mcprouter.execution.manager import ExecutionManager
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
+from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.models import SkillRecord, SkillSourceRecord
-from mcprouter.skills.bundle import BundleError, _build_bundle
+from mcprouter.skills.bundle import BundleError, build_bundle
 from mcprouter.skills.serve import (
     ResourceContent,
     SkillFiles,
@@ -41,6 +41,12 @@ class SkillPolicy(Protocol):
         self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
     ) -> tuple[bool, str]: ...
 
+    def check_many(
+        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
+    ) -> list[tuple[bool, str]]:
+        """One verdict per item, in order (bundle: one policy load, not N)."""
+        ...
+
 
 class DenyAllSkillPolicy:
     """Fail-closed default until S2's engine is wired."""
@@ -49,6 +55,11 @@ class DenyAllSkillPolicy:
         self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
     ) -> tuple[bool, str]:
         return False, "no skill policy configured"
+
+    def check_many(
+        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
+    ) -> list[tuple[bool, str]]:
+        return [self.check(agent_id, sk, src) for sk, src in items]
 
 
 class SkillAccessError(Exception):
@@ -81,7 +92,7 @@ class SkillExposure:
         session_factory: sessionmaker[Session],
         manager: ExecutionManager,
         policy: SkillPolicy,
-        limiter: SlidingWindowLimiter,
+        limiter: KeyedLimiter,
         *,
         cache_dir: str,
         body_max_bytes: int,
@@ -128,7 +139,7 @@ class SkillExposure:
         # A prompt name is exactly "<source>/<skill>". Skill names cannot hold
         # "/" (spec regex) but a source name could, which would make the split
         # ambiguous -- refuse rather than guess. Ingest should reject "/" in
-        # source names (integrator note in INTEGRATION_NOTES-wave4-exposure.md).
+        # source names (integrator note in docs/history/INTEGRATION_NOTES-wave4-exposure.md).
         if name_or_id.count("/") > 1:
             raise SkillAccessError("invalid_name", "Invalid skill name.")
         for sk, src in self.load_routed(routed_ids):
@@ -287,8 +298,8 @@ class SkillExposure:
             )
             raise SkillAccessError("rate_limited", "Too many skill activations; retry later.")
         allowed = []
-        for sk, src in routed:  # 3. policy re-check
-            ok, reason = self._policy.check(agent_id, sk, src)
+        verdicts = self._policy.check_many(agent_id, routed)  # 3. policy re-check
+        for (sk, src), (ok, reason) in zip(routed, verdicts, strict=True):
             if ok:
                 allowed.append((sk, SkillFiles(source_root(src, self._cache_dir), self._res_max)))
             else:
@@ -303,7 +314,7 @@ class SkillExposure:
         if not allowed:
             raise SkillAccessError("denied", "Skill activation denied by policy.")
         try:
-            data, skipped = _build_bundle(allowed)
+            data, skipped = build_bundle(allowed)
         except BundleError as exc:
             self._manager.record_skill_activation(
                 agent_id,

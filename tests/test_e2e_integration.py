@@ -24,14 +24,11 @@ route-cache hit counts as real traffic.
 from __future__ import annotations
 
 import json
-import threading
-import time
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
-import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
@@ -50,15 +47,12 @@ from mcprouter.inference.hash_backend import HashEmbeddingBackend
 from mcprouter.inference.pipeline import embed_pending_tools
 from mcprouter.models import ExecutionRecord, MCPToolRecord
 from mcprouter.settings import Settings
+from tests.support.serve import run_app
 
 from .conftest import TEST_DB_URL, requires_db
 
 pytestmark = requires_db
 
-FLEET_PORT = 8700
-APP_PORT = 8710
-BASE = f"http://127.0.0.1:{APP_PORT}"
-MCP_URL = f"{BASE}/mcp"
 ADMIN = "e2e-admin-token-" + "a" * 24
 AGENT_KEY = "e2e-agent1-key-" + "b" * 24
 ADMIN_H = {"Authorization": f"Bearer {ADMIN}"}
@@ -67,25 +61,16 @@ AGENT_H = {"Authorization": f"Bearer {AGENT_KEY}"}
 
 @pytest.fixture()
 def stack(db: sessionmaker[Session]) -> Iterator[dict[str, Any]]:
-    with http_fleet(3, port_base=FLEET_PORT) as urls:
+    with http_fleet(3) as urls:
         app = create_app(
             Settings(database_url=TEST_DB_URL, agent_keys=f"agent1:{AGENT_KEY}"),
             env={"MCPR_ADMIN_TOKEN": ADMIN},
         )
-        server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
-        )
-        t = threading.Thread(target=server.run, daemon=True)
-        t.start()
-        deadline = time.time() + 20
-        while not server.started and time.time() < deadline:
-            time.sleep(0.05)
-        assert server.started, "uvicorn did not start"
+        port, stop = run_app(app)
         try:
-            yield {"urls": urls, "db": db, "app": app}
+            yield {"urls": urls, "db": db, "app": app, "base": f"http://127.0.0.1:{port}"}
         finally:
-            server.should_exit = True
-            t.join(15)
+            stop()
 
 
 def _audit(db: sessionmaker[Session], tool_id: str) -> list[str]:
@@ -115,7 +100,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
     db: sessionmaker[Session] = stack["db"]
     assert len(urls) >= 3
 
-    async with httpx.AsyncClient(base_url=BASE, timeout=30) as http:
+    async with httpx.AsyncClient(base_url=stack["base"], timeout=30) as http:
         # -- management API refuses anyone without the admin token -------------
         evil = {"name": "evil", "transport": "stdio", "command": ["/bin/sh", "-c", "id"]}
         assert (await http.post("/api/v1/servers", json=evil)).status_code == 401
@@ -189,7 +174,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
     # -- MCP gateway: exposure = routed authorized subset; execute end-to-end --
     async with (
         create_mcp_http_client(headers=AGENT_H) as mcp_http,
-        streamable_http_client(MCP_URL, http_client=mcp_http) as (read, write),
+        streamable_http_client(stack["base"] + "/mcp", http_client=mcp_http) as (read, write),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -226,7 +211,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         tool = s.get(MCPToolRecord, _tool_id(db, ids[server1], "search_issues"))
         assert tool is not None and tool.call_count == 1
 
-    async with httpx.AsyncClient(base_url=BASE, timeout=30) as http:
+    async with httpx.AsyncClient(base_url=stack["base"], timeout=30) as http:
         r = await http.get("/api/v1/executions", params={"agentId": "agent1"}, headers=ADMIN_H)
         assert r.status_code == 200
         outcomes = sorted(i["outcome"] for i in r.json()["items"])
@@ -247,7 +232,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         ).all()
     assert attributed == [rid], attributed
 
-    async with httpx.AsyncClient(base_url=BASE, timeout=30) as http:
+    async with httpx.AsyncClient(base_url=stack["base"], timeout=30) as http:
         overview = (await http.get("/api/v1/analytics/overview", headers=ADMIN_H)).json()
         assert overview["executions"]["attributionCoverage"] > 0, overview["executions"]
         assert overview["funnel"]["surfaced"] >= len(routed["tools"])

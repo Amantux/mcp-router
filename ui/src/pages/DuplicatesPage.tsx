@@ -24,7 +24,8 @@ import {
 import { BranchForkRegular } from "@fluentui/react-icons";
 import { acceptDedup, dismissDedup, getSkill, getTool, listDedupSuggestions, runDedupScan } from "../api/client";
 
-// CONTRACT: wave-4 dedup suggestions may reference a skill as "skill:<id>" in toolAId/toolBId (no S2 notes yet).
+// A side may be a skill, referenced as "skill:<id>"; the backend also reports kindA/kindB.
+// CONTRACT: suggestions report each side's kind verified: meta.test.ts › dedup.kinds
 const SKILL_PREFIX = "skill:";
 const isSkillRef = (id: string) => id.startsWith(SKILL_PREFIX);
 function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): Promise<MCPTool | SkillDetail> {
@@ -32,7 +33,9 @@ function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): 
   return embedded ? Promise.resolve(embedded) : getTool(id, sig);
 }
 import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
-import { EmptyState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+
+const PAGE_SIZE = 50;
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -54,10 +57,10 @@ const useStyles = makeStyles({
   actions: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalS, flexWrap: "wrap" },
 });
 
-function ToolSide({ tool, label, preferred, kind }: { tool: MCPTool | SkillDetail | undefined; label: string; preferred: boolean; kind?: "tool" | "skill" }) {
+function ToolSide({ tool, failed, label, preferred, kind }: { tool: MCPTool | SkillDetail | undefined; failed?: boolean; label: string; preferred: boolean; kind?: "tool" | "skill" }) {
   const s = useStyles();
   const c = useCommonStyles();
-  if (!tool) return <div className={s.side}>Loading {label}…</div>;
+  if (!tool) return <div className={s.side}>{failed ? `${label} couldn't be loaded. It may have been removed; reload the page to retry.` : `Loading ${label}…`}</div>;
   if (kind === "skill" && "sourceId" in tool)
     return (
       <div className={preferred ? `${s.side} ${s.preferred}` : s.side} aria-label={`${label}: ${tool.name}`}>
@@ -199,10 +202,11 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
 
   const accept = async () => {
     setAccepting(true);
-    const prefName = preferred === sug.toolAId ? nameA : nameB;
     try {
-      await acceptDedup(sug.id, preferred);
-      notify.success(`Marked “${prefName}” as preferred over its duplicate`);
+      // The toast reports what the backend stored, not what the radio says.
+      const saved = (await acceptDedup(sug.id, preferred)).preferredToolId;
+      const savedName = saved === sug.toolAId ? nameA : saved === sug.toolBId ? nameB : undefined;
+      notify.success(savedName ? `Marked “${savedName}” as preferred over its duplicate` : `Accepted suggestion ${pairLabel}`);
       onResolved();
     } catch (e) {
       notify.error(`Accept suggestion ${pairLabel}`, e);
@@ -231,8 +235,8 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
         <Body1>{sug.rationale || <span className={c.muted}>No rationale recorded.</span>}</Body1>
       </div>
       <div className={s.pair}>
-        <ToolSide tool={a.data} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} kind={kinds?.[0]} />
-        <ToolSide tool={b.data} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} kind={kinds?.[1]} />
+        <ToolSide tool={a.data} failed={a.failed} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} kind={kinds?.[0]} />
+        <ToolSide tool={b.data} failed={b.failed} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} kind={kinds?.[1]} />
       </div>
       <div className={s.actions}>
         <RadioGroup layout="horizontal" value={preferred} onChange={(_, d) => setPreferred(d.value)} aria-label="Preferred tool">
@@ -255,13 +259,16 @@ export function DuplicatesPage() {
   const s = useStyles();
   const c = useCommonStyles();
   const notify = useNotify();
-  const sugs = useLoader("Load duplicate suggestions", (sig) => listDedupSuggestions("open", sig), []);
+  const [offset, setOffset] = useState(0);
+  const sugs = useLoader("Load duplicate suggestions", (sig) => listDedupSuggestions({ status: "open", limit: PAGE_SIZE, offset }, sig), [offset]);
   const [scanning, setScanning] = useState(false);
   const scan = async () => {
     setScanning(true);
     try {
-      await runDedupScan();
-      notify.success("Duplicate scan finished");
+      const run = await runDedupScan();
+      const what = run.created === 0 ? "No new duplicates found" : `${fmtInt(run.created)} new duplicate suggestion${run.created === 1 ? "" : "s"}`;
+      const cut = run.truncated ? ". The scan stopped at its pair limit (MCPR_DEDUP_MAX_PAIRS), so some pairs were not compared" : "";
+      notify.success(`${what}${cut}.`);
       sugs.refresh();
     } catch (e) {
       notify.error("Run duplicate scan", e);
@@ -269,12 +276,12 @@ export function DuplicatesPage() {
       setScanning(false);
     }
   };
-  const list = sugs.data ?? [];
+  const list = sugs.data?.items ?? [];
   return (
     <>
       <PageHeader
         title="Duplicate review"
-        meta={sugs.data && <Caption1 className={c.muted}>{fmtInt(list.length)} open</Caption1>}
+        meta={sugs.data && <Caption1 className={c.muted}>{fmtInt(sugs.data.total)} open</Caption1>}
         actions={
           <Button appearance="primary" disabled={scanning} onClick={() => void scan()}>
             {scanning ? "Scanning…" : "Run duplicate scan"}
@@ -289,6 +296,8 @@ export function DuplicatesPage() {
       </MessageBar>
       {sugs.loading && !sugs.data ? (
         <LoadingRow label="Loading suggestions…" />
+      ) : sugs.failed && !sugs.data ? (
+        <ErrorState what="Duplicate suggestions" onRetry={sugs.reload} />
       ) : list.length === 0 && !sugs.failed ? (
         <div className={s.list}>
           <EmptyState
@@ -302,6 +311,7 @@ export function DuplicatesPage() {
           {list.map((sug) => (
             <PairCard key={sug.id} sug={sug} onResolved={() => sugs.refresh()} />
           ))}
+          {sugs.data && <Pager offset={sugs.data.offset} limit={PAGE_SIZE} total={sugs.data.total} onChange={setOffset} />}
         </div>
       )}
     </>

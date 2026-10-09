@@ -27,11 +27,10 @@ from mcprouter.gateway.skills import SkillExposure
 from mcprouter.models import ExecutionRecord, RoutingDecisionRecord, SkillRecord
 from mcprouter.settings import Settings
 from mcprouter.skills.serve import manifest_entries
+from tests.support.execution import KEYS, FakeInvoker, seed
+from tests.support.skills_exposure import FakePolicy, _clone, _seed
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import KEYS, FakeInvoker, seed
-from .test_execution_support import sec_db_fixture as sec_db_fixture  # registers fixture
-from .test_skills_exposure_activation import FakePolicy, _clone, _seed
 
 pytestmark = requires_db
 
@@ -296,9 +295,9 @@ def test_bundle_too_many_is_413(env: Env, monkeypatch: pytest.MonkeyPatch) -> No
     import functools
 
     from mcprouter.gateway import skills as gw
-    from mcprouter.skills.bundle import _build_bundle
+    from mcprouter.skills.bundle import build_bundle
 
-    monkeypatch.setattr(gw, "_build_bundle", functools.partial(_build_bundle, max_skills=1))
+    monkeypatch.setattr(gw, "build_bundle", functools.partial(build_bundle, max_skills=1))
     env.route("alice", env.a, env.b)
     r = env.client.get("/api/v1/skills/bundle", headers=H_ALICE)
     assert r.status_code == 413, r.text

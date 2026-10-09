@@ -28,6 +28,7 @@ import type { BudgetClamp, SimulateRequest, SimulateResponse } from "../api/type
 import { EmptyState, fmtMs, fmtScore, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { FeedbackThumbs } from "../components/FeedbackThumbs";
+import { useSearchParams } from "react-router";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 
@@ -298,10 +299,14 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
   const s = useStyles();
   const notify = useNotify();
   const principals = useLoader("Load agents", (sig) => listPrincipals(sig), []);
-  // read once on mount; tests render the lens without a router
-  const [params] = useState(() => new URLSearchParams(window.location.search));
+  // Router state, not window.location: "Open in lens" while already on /lens must re-read it.
+  const [params] = useSearchParams();
   const routeRequestId = params.get("routeRequestId");
-  const [agentId, setAgentId] = useState(params.get("agentId") ?? "");
+  const linkedAgent = params.get("agentId");
+  const [agentId, setAgentId] = useState(linkedAgent ?? "");
+  useEffect(() => {
+    if (linkedAgent) setAgentId(linkedAgent);
+  }, [linkedAgent]);
   const [query, setQuery] = useState("");
   const [maxTools, setMaxTools] = useState(8);
   const [maxServers, setMaxServers] = useState(0); // 0 = don't request a server cap

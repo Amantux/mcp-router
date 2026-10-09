@@ -14,7 +14,10 @@ from mcprouter.gateway.server import ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TO
 from mcprouter.gateway.skills import Activation, SkillAccessError
 from mcprouter.interfaces import RoutedTool, RouteResult
 from mcprouter.skills.serve import ResourceContent
-from tests.test_gateway_mcp import _ctx, sec_db_fixture, world  # noqa: F401 — fixtures
+from tests.support.gateway import _ctx, world  # noqa: F401 — fixtures
+from tests.support.gateway_skills import (
+    _route,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -61,11 +64,6 @@ class StubExposure:
         if path != "ref.md":
             raise SkillAccessError("invalid_path", "bad path ../../etc/passwd")
         return ResourceContent(path, "text/plain", text="hello")
-
-
-def _route(rid: str, skills: list[str]) -> RouteResult:
-    tools = [RoutedTool(s, "", "", 1.0, kind="skill") for s in skills]
-    return RouteResult(rid, tools, False, 1.0, "m")
 
 
 @pytest.fixture()
@@ -154,7 +152,9 @@ async def test_other_agent_cannot_activate(gw: Any, world: Any) -> None:  # noqa
 async def test_reroute_publishes_prompt_and_resource_changes_per_agent(gw: Any) -> None:
     seen: dict[str, list[str]] = {"alice": [], "bob": []}
     for agent in seen:
-        bus, _ = gw._bus(agent)
+        subject = gw._current_subject(agent)
+        assert subject is not None
+        bus, _ = gw._bus(agent, subject)
         bus.subscribe(lambda e, a=agent: seen[a].append(type(e).__name__))
     await gw.apply_route("alice", _route("rr-1", ["sk1"]))
     assert seen == {
@@ -169,9 +169,9 @@ async def test_apply_route_splits_kinds_between_stores(gw: Any, monkeypatch: Any
     seen: list[list[str]] = []
     real_set = gw.exposure.set
 
-    def spy(agent: str, ids: list[str], rid: Any) -> Any:
+    def spy(agent: str, ids: list[str], rid: Any, **kw: Any) -> Any:
         seen.append(list(ids))
-        return real_set(agent, ids, rid)
+        return real_set(agent, ids, rid, **kw)
 
     monkeypatch.setattr(gw.exposure, "set", spy)
     tools = [
@@ -181,4 +181,4 @@ async def test_apply_route_splits_kinds_between_stores(gw: Any, monkeypatch: Any
     ]
     await gw.apply_route("alice", RouteResult("rr-k", tools, False, 1.0, "m"))
     assert seen == [["t1"]]
-    assert gw._skill_ids["alice"] == ("sk1",)
+    assert gw.exposure.get("alice").skill_ids == ("sk1",)

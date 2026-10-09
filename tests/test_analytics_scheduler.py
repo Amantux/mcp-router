@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from datetime import timedelta
 from typing import Any
 
@@ -17,9 +16,10 @@ from mcprouter.analytics.window import midnight
 from mcprouter.api.app import create_app
 from mcprouter.models import ToolStatsDaily
 from mcprouter.settings import Settings
+from tests.support.analytics import NOW, add_decision, add_exec, build_world
+from tests.support.wait import wait_for
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_analytics_support import NOW, add_decision, add_exec, build_world
 
 SF = sessionmaker[Session]
 
@@ -97,10 +97,7 @@ def test_create_app_starts_and_stops_rollup_loop_when_enabled(
     with TestClient(app):
         loop: Any = app.state.rollup_loop
         assert isinstance(loop, RollupLoop) and loop.running
-        deadline = time.monotonic() + 10
-        while loop.passes < 1 and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert loop.passes >= 1  # the first pass runs at startup
+        wait_for(lambda: loop.passes >= 1, timeout=10)  # first pass runs at startup
     assert stopped == [True]
     assert not loop.running
 

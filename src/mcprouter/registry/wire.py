@@ -240,6 +240,15 @@ class DedupRunOut(Wire):
     created: int
     refreshed: int
     skipped_decided: int
+    # D9/P-603: True when the scan hit MCPR_DEDUP_MAX_PAIRS (DedupRun.truncated).
+    truncated: bool
+
+
+class AcceptIn(Wire):
+    """D12: optional reviewer pick; must be toolA or toolB of the pair (422)."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
+    preferred_tool_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class DismissIn(Wire):

@@ -12,8 +12,7 @@ from pathlib import Path
 import pytest
 
 from mcprouter.models import SkillRecord
-from mcprouter.skills.bundle import MARKER, BundleError
-from mcprouter.skills.bundle import _build_bundle as build_bundle
+from mcprouter.skills.bundle import MARKER, BundleError, build_bundle
 from mcprouter.skills.serve import SkillFiles, SkillServeError, normalize_relpath, read_body
 
 _SHA = {

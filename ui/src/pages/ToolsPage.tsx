@@ -20,7 +20,7 @@ import { useNavigate } from "react-router";
 import { listServers, listToolFunnels, listTools } from "../api/client";
 import { DOMAINS, OPERATIONS, type MCPTool, type Operation, type ToolFunnel } from "../api/types";
 import { FunnelBars } from "../components/analytics";
-import { EmptyState, fmtInt, fmtMs, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 import { ToolDetailDrawer } from "./ToolDetailDrawer";
@@ -221,6 +221,8 @@ export function ToolsPage() {
 
       {tools.loading && !page ? (
         <LoadingRow label="Loading tools…" />
+      ) : tools.failed && !tools.data ? (
+        <ErrorState what="Tools" onRetry={tools.reload} />
       ) : items.length === 0 && !tools.failed ? (
         filtered ? (
           <EmptyState
@@ -253,7 +255,11 @@ export function ToolsPage() {
                   key={rowId}
                   style={{ cursor: "pointer" }}
                   onClick={() => setOpenId(item.id)}
-                  onKeyDown={(e: KeyboardEvent) => e.key === "Enter" && setOpenId(item.id)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                    e.preventDefault(); // Space would scroll the page
+                    setOpenId(item.id);
+                  }}
                 >
                   {({ renderCell, columnId }) => (
                     <DataGridCell className={NUMERIC_COLS.has(String(columnId)) ? c.num : undefined}>{renderCell(item)}</DataGridCell>

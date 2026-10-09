@@ -11,12 +11,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.analytics import feedback as fb
+from mcprouter.limits import FEEDBACK_LIMIT_PER_MIN
 from mcprouter.models import RouteFeedback
+from tests.support.analytics import NOW, add_decision
+from tests.support.analytics_app import ADMIN, _app
+from tests.support.execution import KEYS, seed
 
 from .conftest import requires_db
-from .test_analytics_api import ADMIN, _app
-from .test_analytics_support import NOW, add_decision
-from .test_execution_support import KEYS, sec_db_fixture, seed  # noqa: F401 — registers the fixture
 
 ALICE = {"Authorization": f"Bearer {KEYS['alice']}"}
 BOB = {"Authorization": f"Bearer {KEYS['bob']}"}
@@ -26,7 +27,6 @@ pytestmark = requires_db
 
 @pytest.fixture()
 def env(sec_db: sessionmaker[Session]) -> Iterator[tuple[TestClient, sessionmaker[Session]]]:
-    fb.LIMITER._hits.clear()
     seed(sec_db, [])
     yield TestClient(_app(sec_db)), sec_db
 
@@ -97,7 +97,7 @@ def test_rate_limited(env: tuple[TestClient, sessionmaker[Session]]) -> None:
     d = add_decision(f, "alice", NOW, ["t.a"])
     codes = [
         c.post(_url(d), json={"items": [{"id": "t.a", "helpful": True}]}, headers=ALICE).status_code
-        for _ in range(fb.LIMITER.limit + 1)
+        for _ in range(FEEDBACK_LIMIT_PER_MIN + 1)
     ]
     assert codes[-1] == 429 and codes[0] == 200
 
@@ -107,7 +107,7 @@ def test_404_probing_is_rate_limited(env: tuple[TestClient, sessionmaker[Session
     body = {"items": [{"id": "t.a", "helpful": True}]}
     codes = [
         c.post(_url(f"nope-{i}"), json=body, headers=BOB).status_code
-        for i in range(fb.LIMITER.limit + 1)
+        for i in range(FEEDBACK_LIMIT_PER_MIN + 1)
     ]
     assert codes[0] == 404 and codes[-1] == 429
 

@@ -13,25 +13,33 @@ the linked page if a flag gets rejected.
 
 ## 1. Run the router
 
-**Docker Compose (db + api):**
+**Docker Compose (db + api)**, configured through `.env`:
 
 ```bash
-export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
-export MCPR_AGENT_KEYS="copilot:$(openssl rand -hex 24),claude:$(openssl rand -hex 24)"
-docker compose up -d            # db (pgvector, internal only) + api (:8400)
+cp .env.example .env
+# in .env:
+#   MCPR_ADMIN_TOKEN=<openssl rand -hex 32>
+#   POSTGRES_PASSWORD=<openssl rand -hex 32>
+#   MCPR_AGENT_KEYS=copilot:<openssl rand -hex 32>,claude:<openssl rand -hex 32>
+docker compose up -d --build --wait   # db (pgvector, internal only) + api (127.0.0.1:8400)
 ```
 
-Full container guide (env table, inference/GPU flavors, upgrades, verified
-smoke transcript): [docs/deploy.md](deploy.md).
+Full container guide (environment, open surfaces, stdio servers, limits,
+reverse proxy, troubleshooting): [deploy.md](deploy.md).
 
-**Bare metal** (same commands as the [README Quickstart](../README.md#quickstart)):
+**From source** (the [README source install](../README.md#run-from-source)):
 
 ```bash
-docker compose up -d db
+POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db   # dev only: 127.0.0.1:5434
 uv venv --python 3.12 .venv && uv pip install -e '.[dev]'   # add '.[inference]' for real embeddings
+(cd ui && npm ci && npm run build)                           # dashboard, before the server starts
 export MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEYS=...
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 ```
+
+The dev override publishes the database on the port the source install
+expects by default (`MCPR_DATABASE_URL`, see
+[configuration.md](reference/configuration.md)). Never use it in production.
 
 - **Run a single worker only.** Approvals, rate limits, sessions and routing
   all live in one process ([security-model.md](security-model.md)). Do not
@@ -43,9 +51,10 @@ export MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEYS=...
   `cd ui && npm ci && npm run build`; the server reads `ui/dist` (override with
   `MCPR_UI_DIST`). `npm run dev` (port :5180, proxies to :8400) is for UI work only.
   With no principals yet, the dashboard opens the setup wizard (`/setup`).
-- Reaching `/mcp` from another machine: the gateway keeps DNS-rebinding
+- Reaching the router from another machine: it keeps DNS-rebinding
   protection on and by default accepts only `localhost`/`127.0.0.1`/`[::1]`
-  Host headers (anything else gets HTTP 421). Set
+  Host headers (anything else gets HTTP 421; on `/mcp` only before v0.6, on
+  every path from v0.6). Set
   `MCPR_ALLOWED_HOSTS=router.lan,10.0.0.5:8400` (comma list; a bare host means
   any port) to allow named hosts. Tradeoff: every name you add is one a
   malicious web page could point at your router via DNS rebinding, so list
@@ -111,6 +120,12 @@ curl -s -X POST localhost:8400/api/v1/servers/import -H "$ADMIN" \
   -H 'Content-Type: application/json' \
   -d @claude_desktop_config.json        # {"mcpServers": {...}}
 ```
+
+> **Stdio servers in Docker.** Imported entries usually run `npx …` or
+> `uvx …`, and with Docker they run *inside the api container*. From v0.6 the
+> image has Node 22, so `npx` servers work; `uvx` servers do not unless you
+> extend the image. See [Stdio servers in Docker](deploy.md#stdio-servers-in-docker).
+> A server whose command is missing shows as `unhealthy` after the import.
 
 To add one server, use `POST /api/v1/servers` or the dashboard's **Servers**
 page. After that, add the policy rules from section 2 that reference the new
@@ -310,13 +325,40 @@ curl -s localhost:8400/api/v1/models/health -H "$ADMIN"     # admin-only; infere
    policy decision), **Analytics** (the routing funnel) and **Agent lens**
    (what a given agent is shown, and why).
 
-## 6. Troubleshooting
+## 6. API conventions
+
+- **Reference.** The live OpenAPI UI is at `/docs` and the schema at
+  `/openapi.json` (both open: the schema holds no data). A generated route
+  table with the auth class of every route is in
+  [reference/api.md](reference/api.md).
+- **Auth classes.** Admin routes take `Authorization: Bearer $MCPR_ADMIN_TOKEN`;
+  agent routes take an agent key; a few take either. An agent key is never an
+  admin credential.
+- **Casing.** JSON is camelCase in and out, and request bodies also accept
+  snake_case. Two responses are snake_case for historical reasons:
+  `POST /api/v1/route` (with a camelCase `bodyTokensEst` inside) and
+  `POST /api/v1/decision/systemone`. `POST /api/v1/route/simulate` is camelCase.
+- **Tool execution returns 200.** `POST /api/v1/tools/{id}/execute` answers
+  200 for policy denials, rate limits, unavailable servers and invalid
+  arguments alike. Read the `status` field; do not treat 2xx as success.
+- **Skill source sync returns 200.** `POST /api/v1/skill-sources/{id}/sync`
+  reports a git or filesystem failure in its `error` field. Check it.
+- **400 vs 422.** 422 is a body or query that fails schema validation. 400 is
+  a well-formed request the router refuses (an unknown `allowed_servers` entry,
+  an invalid registration). Error bodies carry `detail`.
+- **Body cap.** Requests over 1 MiB get 413 on every route.
+- **Paged lists** take `limit` and `offset` and return `total`;
+  `GET /api/v1/servers` returns a plain array.
+
+## 7. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
 | `401` on `/mcp` | Missing or wrong `Authorization: Bearer <agent key>`. An invalid key is never downgraded to dev mode. Rotate the key and update the client. |
-| `403` on `/api/v1/*` | You used an agent key (it is never an admin credential), or `MCPR_ADMIN_TOKEN` is unset outside dev mode (fails closed). |
-| `421 Invalid Host header` | The `/mcp` endpoint has DNS-rebinding protection, which the MCP SDK enables automatically because the gateway is built with `host="127.0.0.1"`. It accepts only `localhost`, `127.0.0.1` and `[::1]` Host headers (any port). On `master` there is no env setting for this. Reach the router through `localhost` (for a remote host, use `ssh -L 8400:localhost:8400`) instead of an IP or DNS name. Allowing other hosts means passing `transport_security` to `build_gateway`, which is a code change. |
+| `401` on `/api/v1/*` | No bearer, a wrong admin token, or an agent key on an admin route (an agent key is never an admin credential). |
+| `403 admin token not configured` | `MCPR_ADMIN_TOKEN` is unset and the router is not in dev mode (agent keys or principals exist), so the admin API fails closed. Set the token and restart. |
+| `409` on the first `POST /api/v1/principals` | From v0.6: in dev mode with no admin token, creating the first agent would lock you out of the admin API. Set `MCPR_ADMIN_TOKEN` first. |
+| `421` (Invalid Host header) | The `Host` you used is not `localhost`, `127.0.0.1`, `[::1]` or in `MCPR_ALLOWED_HOSTS`. Add the exact name you use, or tunnel (`ssh -L 8400:localhost:8400`) and use `localhost`. |
 | Empty tool list, or only `router.find_tools` | The agent has no policy rules yet (deny-by-default), no servers are registered, or no route has run yet. Add rules (section 2), then call `router.find_tools`. |
 | Tools never change after `find_tools` | The client caches its tool list. Refresh it as described for that client in section 4. Calling an authorized tool by name still works. |
 | `auth.dev_mode` warning in logs | No agent keys, no admin token and no principals are configured, so the admin API is open. Use this only on localhost. Set `MCPR_ADMIN_TOKEN` and `MCPR_AGENT_KEYS` before any real use. |

@@ -143,13 +143,18 @@ def fetch(
     base.mkdir(parents=True, exist_ok=True)
     final, tmp = base / source_id, base / f".{source_id}.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
-    runner(clone_argv(url, ref or "main", tmp))
-    if _tree_size(tmp) > max_bytes:
+    try:
+        runner(clone_argv(url, ref or "main", tmp))
+        # The cap is checked after the clone completes: until then a hostile
+        # repo can fill the cache dir up to its size (documented window).
+        if _tree_size(tmp) > max_bytes:
+            raise GitTooLargeError("git source exceeds the size cap")
+        if not (tmp / ".git").is_dir():
+            raise GitNotRepositoryError("not a git repository")
+        shutil.rmtree(final, ignore_errors=True)
+        tmp.rename(final)
+    finally:
+        # Any failure (runner error, timeout, cap, not-a-repo) leaves no
+        # partial .<id>.tmp behind; after a successful rename it is gone anyway.
         shutil.rmtree(tmp, ignore_errors=True)
-        raise GitTooLargeError("git source exceeds the size cap")
-    if not (tmp / ".git").is_dir():
-        shutil.rmtree(tmp, ignore_errors=True)
-        raise GitNotRepositoryError("not a git repository")
-    shutil.rmtree(final, ignore_errors=True)
-    tmp.rename(final)
     return final, _head_commit(final)

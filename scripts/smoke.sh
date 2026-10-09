@@ -1,27 +1,47 @@
 #!/usr/bin/env bash
 # End-to-end smoke of a running compose stack. Usage:
-#   MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEY=... [BASE=http://127.0.0.1:8450] \
+#   MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEY=... [BASE=http://127.0.0.1:<MCPR_HOST_PORT>] \
 #   [COMPOSE="docker compose -p mcprsmoke"] scripts/smoke.sh
-# Exits non-zero on the first failed check.
+# (`make smoke` sets all of it up.) Exits non-zero on the first failed check.
+# The LAST check stops the api container (graceful-stop timing); re-`up` to reuse.
 set -euo pipefail
-BASE="${BASE:-http://127.0.0.1:8450}"
+from_env_file() { sed -n "s/^$1=//p" .env 2>/dev/null | tail -1; }
+# Same port compose published: env, else .env, else compose's default 8400.
+port="${MCPR_HOST_PORT:-$(from_env_file MCPR_HOST_PORT)}"
+BASE="${BASE:-http://127.0.0.1:${port:-8400}}"
 COMPOSE="${COMPOSE:-docker compose -p mcprsmoke}"
 : "${MCPR_ADMIN_TOKEN:?set MCPR_ADMIN_TOKEN}"
 : "${MCPR_AGENT_KEY:?set MCPR_AGENT_KEY (the key part of MCPR_AGENT_KEYS=id:key)}"
+# Compose requires POSTGRES_PASSWORD (D3) for every command it interpolates,
+# including the restart/exec below: take it from .env, else mint one.
+if [ -z "${POSTGRES_PASSWORD:-}" ]; then
+  POSTGRES_PASSWORD=$(from_env_file POSTGRES_PASSWORD)
+  [ -n "$POSTGRES_PASSWORD" ] || POSTGRES_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
+fi
+export POSTGRES_PASSWORD
 ADM=(-H "Authorization: Bearer ${MCPR_ADMIN_TOKEN}")
 AGT=(-H "Authorization: Bearer ${MCPR_AGENT_KEY}")
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 ok() { echo "PASS $*"; }
 fail() { echo "FAIL $*" >&2; exit 1; }
+code_of() { curl -s -o "$TMP/body" -w '%{http_code}' "$@"; }
 start=$(date +%s)
 
-# 1. container healthy (Docker HEALTHCHECK), bounded wait
-cid=$($COMPOSE ps -q api)
-[ -n "$cid" ] || fail "no api container"
-for _ in $(seq 1 60); do
-  st=$(docker inspect -f '{{.State.Health.Status}}' "$cid")
-  [ "$st" = healthy ] && break; sleep 2
-done
-[ "$st" = healthy ] || fail "api health=$st"; ok "HEALTHCHECK healthy"
+wait_healthy() {  # bounded wait on the Docker HEALTHCHECK
+  local cid st=""
+  cid=$($COMPOSE ps -q api)
+  [ -n "$cid" ] || fail "no api container"
+  for _ in $(seq 1 60); do
+    st=$(docker inspect -f '{{.State.Health.Status}}' "$cid")
+    [ "$st" = healthy ] && return 0
+    sleep 2
+  done
+  fail "api health=$st"
+}
+
+# 1. container healthy
+wait_healthy; ok "HEALTHCHECK healthy"
 
 # 2. dashboard at /
 html=$(curl -fsS "$BASE/") || fail "GET /"
@@ -30,23 +50,31 @@ grep -q '<div id="root">' <<<"$html" || fail "GET / lacks app root"; ok "GET / 2
 # 3. /healthz
 curl -fsS "$BASE/healthz" | grep -q '"ok"' || fail "/healthz"; ok "GET /healthz $(curl -fsS "$BASE/healthz")"
 
-# 4. models health (admin)
+# 4. auth is enforced: admin API, /mcp and /metrics (D14) reject a missing key
+c=$(code_of "$BASE/api/v1/principals"); [ "$c" = 401 ] || fail "admin API without key -> $c (want 401)"
+ok "GET /api/v1/principals without key -> 401"
+c=$(code_of -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' "$BASE/mcp")
+[ "$c" = 401 ] || fail "/mcp without key -> $c (want 401)"; ok "POST /mcp without key -> 401"
+c=$(code_of -L "$BASE/metrics"); [ "$c" = 401 ] || fail "/metrics without key -> $c (want 401)"
+c=$(code_of -L "${ADM[@]}" "$BASE/metrics"); [ "$c" = 200 ] || fail "/metrics with admin -> $c (want 200)"
+ok "/metrics 401 without key, 200 with admin"
+
+# 5. models health (admin)
 mh=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/models/health") || fail "models/health"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); k=d["decisionBackend"]["kind"]; assert k=="deterministic",k; print("PASS models/health decisionBackend.kind="+k)' "$mh"
 
-# 5. setup status before any principal exists
+# 6. setup status: MCPR_AGENT_KEYS seeds a principal at startup, so a keyed
+# stack is already "set up" (needsSetup true only on a keyless first run).
 ss=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/setup/status") || fail "setup/status"
-# MCPR_AGENT_KEYS seeds a principal at startup, so a keyed stack is already
-# "set up": needsSetup must be false with principals >= 1 (true only on a
-# keyless first run).
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); n=d["counts"]["principals"]; assert n>=1 and d["needsSetup"] is False,d; print("PASS setup/status needsSetup=false principals=%d (env-seeded)" % n)' "$ss"
 
-# 6. create a principal via admin -> key returned
+# 7. create a principal via admin -> key returned
 pc=$(curl -fsS "${ADM[@]}" -H 'Content-Type: application/json' \
   -d '{"agentId":"smoke-created"}' "$BASE/api/v1/principals") || fail "POST principals"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d.get("apiKey"),d; print("PASS POST /principals apiKey returned (len %d)" % len(d["apiKey"]))' "$pc"
 
-# 7. MCP handshake with the agent key (SDK client inside the api container)
+# 8. MCP handshake with the agent key (SDK client inside the api container)
 $COMPOSE exec -T -e K="$MCPR_AGENT_KEY" api python - <<'PY' || fail "MCP handshake"
 import asyncio, os
 from mcp import ClientSession
@@ -66,14 +94,45 @@ async def main():
 asyncio.run(main())
 PY
 
-# 8. route as the agent (no_match acceptable on an empty catalog)
-code=$(curl -s -o /tmp/mcpr-smoke-route.json -w '%{http_code}' "${AGT[@]}" \
-  -H 'Content-Type: application/json' -d '{"query":"list my files","maxTools":3}' "$BASE/api/v1/route")
-[ "$code" = 200 ] || fail "POST /route -> $code $(cat /tmp/mcpr-smoke-route.json)"
-ok "POST /api/v1/route 200 $(head -c 160 /tmp/mcpr-smoke-route.json)"
+# 9. route as the agent (no_match acceptable on an empty catalog)
+c=$(code_of "${AGT[@]}" -H 'Content-Type: application/json' \
+  -d '{"query":"list my files","maxTools":3}' "$BASE/api/v1/route")
+[ "$c" = 200 ] || fail "POST /route -> $c $(cat "$TMP/body")"
+ok "POST /api/v1/route 200 $(head -c 160 "$TMP/body")"
 
-# 9. non-root
+# 10. non-root
 uid=$($COMPOSE exec -T api id -u | tr -d '\r')
 [ "$uid" != 0 ] || fail "api runs as root"; ok "api uid=$uid (non-root)"
+
+# 11. the image runs the checked-out version (D6)
+want=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+got=$($COMPOSE exec -T api python -c 'import mcprouter; print(mcprouter.__version__)' | tr -d '\r')
+[ "$got" = "$want" ] || fail "container __version__=$got, checkout pyproject=$want"
+ok "container __version__=$got == pyproject"
+
+# 12. npx is on the image (D16: imported npx stdio servers must start)
+nv=$($COMPOSE exec -T api npx --version | tr -d '\r') || fail "npx missing in the image"
+ok "npx --version $nv"
+
+# 13. state survives a restart (principal created in 7 is still listed)
+$COMPOSE restart api >/dev/null
+wait_healthy
+pl=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/principals") || fail "GET principals after restart"
+python3 -c 'import json,sys; ids={p["agentId"] for p in json.loads(sys.argv[1])}; assert "smoke-created" in ids, ids; print("PASS principal survives compose restart")' "$pl"
+
+# 14. graceful stop: SIGTERM -> lifespan shutdown completes well inside the
+# 30 s grace period. uvicorn >= 0.29 re-raises the captured SIGTERM after a
+# clean shutdown, so the exit code is 143; 137 (SIGKILL) or a missing
+# "Application shutdown complete" means the shutdown was not graceful.
+cid=$($COMPOSE ps -q api)
+t0=$(date +%s)
+docker stop -t 30 "$cid" >/dev/null
+took=$(( $(date +%s) - t0 ))
+rc=$(docker inspect -f '{{.State.ExitCode}}' "$cid")
+case "$rc" in 0|143) ;; *) fail "api exit code after docker stop = $rc (want 0 or 143)" ;; esac
+docker logs --since "${t0}" "$cid" 2>&1 | grep -q "Application shutdown complete" \
+  || fail "no 'Application shutdown complete' after docker stop (lifespan cut short?)"
+[ "$took" -lt 25 ] || fail "docker stop took ${took}s (want < 25 s: SIGTERM ignored?)"
+ok "docker stop -t 30 -> graceful shutdown, exit $rc in ${took}s"
 
 echo "SMOKE OK in $(( $(date +%s) - start ))s"

@@ -18,7 +18,7 @@ import { Link as RouterLink } from "react-router";
 import { listExecutions } from "../api/client";
 import { FeedbackThumbs, kindOfId } from "../components/FeedbackThumbs";
 import type { ExecutionOutcome } from "../api/types";
-import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, OutcomeBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, fmtTime, LoadingRow, OutcomeBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 
@@ -82,6 +82,8 @@ export function ExecutionsPage() {
       </div>
       {execs.loading && !page ? (
         <LoadingRow label="Loading executions…" />
+      ) : execs.failed && !execs.data ? (
+        <ErrorState what="Executions" onRetry={execs.reload} />
       ) : items.length === 0 && !execs.failed ? (
         filtered ? (
           <EmptyState icon={<FilterDismissRegular />} title="No executions match these filters" action={<Button onClick={clear}>Clear filters</Button>} />

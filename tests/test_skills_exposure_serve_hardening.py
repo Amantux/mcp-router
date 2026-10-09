@@ -39,7 +39,7 @@ def test_symlink_swapped_in_after_manifest_build_is_refused(tmp_path: Path) -> N
         with pytest.raises(SkillServeError) as ei:
             files.read_resource(sk, "a.md")
     finally:
-        os.path.realpath = real_realpath  # type: ignore[assignment]
+        os.path.realpath = real_realpath
     assert ei.value.code == "invalid_path"
 
 

@@ -19,6 +19,7 @@ from mcprouter.analytics.feedback import (
     FeedbackRateLimited,
     record_feedback,
 )
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of
 
 router = APIRouter(prefix="/api/v1/route", tags=["feedback"])
@@ -47,7 +48,8 @@ class FeedbackOut(_In):
 
 @router.post("/{request_id}/feedback", response_model=FeedbackOut)
 def post_feedback(request_id: str, body: FeedbackIn, request: Request) -> FeedbackOut:
-    config, factory = security_of(request)
+    config, _ = security_of(request)
+    factory = session_factory(request)
     auth = request.headers.get("authorization")
     if is_admin_bearer(config, auth):
         source: Literal["agent", "human"] = "human"
@@ -65,6 +67,7 @@ def post_feedback(request_id: str, body: FeedbackIn, request: Request) -> Feedba
                 source=source,
                 agent_id=agent_id,
                 principal=principal,
+                limiter=request.app.state.limiters.surface("feedback"),
             )
     except FeedbackNotFound as exc:
         raise HTTPException(404, str(exc)) from None

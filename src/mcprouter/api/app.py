@@ -16,7 +16,7 @@ through the one ExecutionManager; analytics routes + metrics collector are
 installed by install_analytics.
 
 Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
-routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
+routing are in-process state (docs/history/INTEGRATION_NOTES-gateway.md).
 """
 
 from __future__ import annotations
@@ -29,12 +29,17 @@ from datetime import UTC, datetime
 
 import anyio.to_thread
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
+from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
-from mcprouter.api import routes_dedup, routes_skill_sources, routes_skills, routes_tools
+from mcprouter.api import hardening, routes_dedup, routes_skill_sources, routes_skills, routes_tools
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
+from mcprouter.api.errors import install_error_handlers
 from mcprouter.api.routes_analytics import install_analytics
 from mcprouter.api.routes_decision import router as decision_router
 from mcprouter.api.routes_execute import router as execute_router
@@ -49,7 +54,6 @@ from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.discovery import DiscoveryService, SyncLoop
 from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.execution.manager import ExecutionManager
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.gateway.server import build_gateway, gateway_transport_security
 from mcprouter.gateway.skills import SkillExposure
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
@@ -60,12 +64,15 @@ from mcprouter.lifecycle import (
     run_due_skill_syncs,
     run_skill_post_sync,
 )
+from mcprouter.limits import make_limiters
+from mcprouter.logging import configure_logging
 from mcprouter.policy.scope import policy_scope_resolver
 from mcprouter.policy.skill_bridge import EngineSkillPolicy
 from mcprouter.registry.schema import init_registry
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever, ensure_skill_keyword_index
 from mcprouter.settings import Settings
+from mcprouter.singleton import claim_loop_owner, release_loop_owner
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +91,13 @@ def _quiet_client_loggers() -> None:
 def create_app(
     settings: Settings | None = None, *, env: Mapping[str, str] | None = None
 ) -> FastAPI:
-    """`env` carries secrets that never enter Settings (MCPR_ADMIN_TOKEN);
-    defaults to os.environ. Tests pass an explicit mapping (pure)."""
+    """Auth reads the admin token from `settings.admin_token` (env or
+    MCPR_ADMIN_TOKEN_FILE, length-checked; auth.config.SecurityConfig.build).
+    `env` is only its fallback for Settings built without one; defaults to
+    os.environ. Tests pass an explicit mapping (pure)."""
     settings = settings or Settings.from_env()
     env = os.environ if env is None else env
+    configure_logging(settings)
     _quiet_client_loggers()
 
     inference = InferenceEngine(
@@ -103,7 +113,9 @@ def create_app(
         loop: SyncLoop | None = None
         rollups: RollupLoop | None = None
         try:
-            if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
+            # Only the loop owner runs background loops (E6; always True for now).
+            owner = claim_loop_owner(_app.state.engine)
+            if owner and settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
                 attempts: dict[str, datetime] = {}
 
                 async def _skill_tick() -> object:
@@ -119,7 +131,7 @@ def create_app(
                 loop = SyncLoop(_app.state.discovery, skill_tick=_skill_tick)
                 await loop.start()
                 _app.state.sync_loop = loop
-            if settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
+            if owner and settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
                 rollups = RollupLoop(_app.state.session_factory)
                 await rollups.start()
                 _app.state.rollup_loop = rollups
@@ -130,9 +142,11 @@ def create_app(
                 await rollups.stop()
             if loop is not None:
                 await loop.stop()
+            release_loop_owner(_app.state.engine)  # E6 P-602: next process may own
             await anyio.to_thread.run_sync(inference.unload)
 
-    app = FastAPI(title="MCP Router", version="0.5.0", docs_url="/docs", lifespan=lifespan)
+    app = FastAPI(title="MCP Router", version=__version__, docs_url="/docs", lifespan=lifespan)
+    install_error_handlers(app)  # app-wide handlers (E2); /route 422 stays in routes_route
     engine = make_engine(settings)
     init_db(engine)  # Base + approval_requests + eval_results (Alembic deferred)
     init_registry(engine)  # FTS + dedup-pair indexes (idempotent)
@@ -141,6 +155,7 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory
+    app.state.limiters = make_limiters(settings)  # D10: one registry per app
 
     # Auth: dev mode only when agent keys, admin token AND principals are all
     # absent — deps_auth logs the per-request `auth.dev_mode` warning.
@@ -194,7 +209,9 @@ def create_app(
         # The gateway redacts the query before calling this (find_tools).
         return pipeline.route(request, scope_resolver(request.agent_id))
 
-    manager = ExecutionManager.from_settings(settings, factory, ConnectorToolInvoker(factory))
+    manager = ExecutionManager.from_settings(
+        settings, factory, ConnectorToolInvoker(factory), limiters=app.state.limiters
+    )
     app.state.execution_manager = manager
     app.include_router(policy_router)
     # REST execution (playground): a thin route over the SAME manager.
@@ -206,7 +223,7 @@ def create_app(
         factory,
         manager,
         EngineSkillPolicy(factory),
-        SlidingWindowLimiter(settings.rate_limit_per_agent_per_min, 60.0),
+        app.state.limiters.surface("skills"),
         cache_dir=settings.skills_cache_dir,
         body_max_bytes=settings.skill_body_max_bytes,
         resource_max_bytes=settings.skill_resource_max_bytes,
@@ -224,17 +241,45 @@ def create_app(
         transport_security=gateway_transport_security(settings.allowed_hosts),
     )  # /mcp; wraps the lifespan
 
-    @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        from sqlalchemy import text
+    def _db_ok() -> bool:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except SQLAlchemyError as exc:  # curated: the DSN never reaches the client or log
+            log.warning("health: database unreachable (%s)", type(exc).__name__)
+            return False
+        return True
 
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+    _DB_DOWN = {"status": "unavailable", "detail": "database unreachable"}
+
+    @app.get("/healthz", response_model=None)
+    def healthz() -> dict[str, str] | JSONResponse:
+        """Liveness (D14): the process serves and reaches its database."""
+        if not _db_ok():
+            return JSONResponse(_DB_DOWN, status_code=503)
         return {"status": "ok"}
 
-    app.mount("/metrics", make_asgi_app())
+    @app.get("/readyz", response_model=None)
+    def readyz() -> dict[str, object] | JSONResponse:
+        """Readiness (D14): database + inference engine. `degraded` = a
+        requested backend fell back (still serving, deterministically)."""
+        if not _db_ok():
+            return JSONResponse(_DB_DOWN, status_code=503)
+        health = inference.health(check_idle=False)
+        degraded = health["status"] == "degraded"
+        return {
+            "status": "degraded" if degraded else "ready",
+            "db": "ok",
+            "engineLoaded": bool(health["loaded"]),
+            "degraded": degraded,
+        }
+
+    # /metrics: admin bearer required whenever an admin token is configured.
+    app.mount("/metrics", hardening.MetricsGate(make_asgi_app(), security.admin_token_hash))
     # Dashboard + SPA fallback: registered LAST so API, /mcp and /metrics win.
     mount_ui(app, settings.ui_dist)
-    # Outermost: refuse oversized bodies before routing, auth or parsing.
+    # Refuse oversized bodies before routing, auth or parsing (inside HostGuard).
     app.add_middleware(BodySizeLimitMiddleware)
+    # LAST = outermost middleware slot, reserved for HostGuard et al. (E1, D2).
+    hardening.install(app, settings)
     return app

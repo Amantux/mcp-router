@@ -30,27 +30,28 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-import anyio.to_thread
 import mcp_types as types
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from sqlalchemy import select
 
-from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of
-from mcprouter.execution.manager import INITIATED_BY_ADMIN, ExecutionManager, ExecutionResult
+from mcprouter.api.acting import (
+    ADMIN_NEEDS_AGENT,
+    AGENT_DISABLED,
+    AGENT_ID_PATTERN,
+    act_as_agent,
+)
+from mcprouter.api.acting import principal_row as _principal_row
+from mcprouter.api.deps import get_manager
+from mcprouter.execution.manager import ExecutionManager, ExecutionResult
 from mcprouter.execution.redaction import scrub_log
-from mcprouter.models import AgentPrincipal
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["execution"])
 
-AGENT_ID_PATTERN = r"^[A-Za-z0-9_.\-]{1,120}$"
-ADMIN_NEEDS_AGENT = (
-    "Admin requests must name the agent to run as: pass agentId (query or body). "
-    "The call runs under that agent's policy."
-)
+# Re-exported for old importers (P-206): the rules live in api/acting.py.
+__all__ = ["ADMIN_NEEDS_AGENT", "AGENT_DISABLED", "AGENT_ID_PATTERN", "_principal_row", "router"]
 
 
 class _Wire(BaseModel):
@@ -81,13 +82,6 @@ class ExecuteOut(_Wire):
     errors: list[str] = Field(default_factory=list)
     result: ToolResultOut | None = None
     latency_ms: float | None = None
-
-
-def _manager(request: Request) -> ExecutionManager:
-    mgr = getattr(request.app.state, "execution_manager", None)
-    if not isinstance(mgr, ExecutionManager):
-        raise HTTPException(status_code=503, detail="execution manager not configured")
-    return mgr
 
 
 MALFORMED = "upstream returned malformed content"
@@ -125,20 +119,6 @@ def _out(res: ExecutionResult) -> ExecuteOut:
     )
 
 
-AGENT_DISABLED = "Agent is disabled."
-
-
-def _principal_row(request: Request, agent_id: str) -> AgentPrincipal | None:
-    _, factory = security_of(request)
-    with factory() as s:
-        row = s.scalars(
-            select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
-        ).one_or_none()
-        if row is not None:
-            s.expunge(row)
-        return row
-
-
 @router.post(
     "/tools/{tool_id}/execute",
     response_model=ExecuteOut,
@@ -148,6 +128,7 @@ def _principal_row(request: Request, agent_id: str) -> AgentPrincipal | None:
 async def execute_tool(
     request: Request,
     tool_id: Annotated[str, Path(min_length=1, max_length=64)],
+    mgr: Annotated[ExecutionManager, Depends(get_manager)],
     body: ExecuteIn | None = None,
     agent_id_q: Annotated[str | None, Query(alias="agentId", pattern=AGENT_ID_PATTERN)] = None,
 ) -> ExecuteOut:
@@ -155,36 +136,21 @@ async def execute_tool(
     if agent_id_q and body.agent_id and agent_id_q != body.agent_id:
         raise HTTPException(status_code=400, detail="agentId differs between query and body.")
     named = agent_id_q or body.agent_id
-    config, _ = security_of(request)
-    mgr = _manager(request)
-
-    if is_admin_bearer(config, request.headers.get("authorization")):
-        if not named:
-            raise HTTPException(status_code=400, detail=ADMIN_NEEDS_AGENT)
-        principal = await anyio.to_thread.run_sync(_principal_row, request, named)
-        if principal is None:
-            raise HTTPException(status_code=404, detail="Unknown agent.")
-        if not principal.enabled:
-            raise HTTPException(status_code=403, detail=AGENT_DISABLED)
+    acting = await act_as_agent(request, named)
+    if acting.is_admin:
         log.info(
             "execution.admin_impersonation agent=%s tool=%s",
-            scrub_log(principal.agent_id),
+            scrub_log(acting.agent_id),
             scrub_log(tool_id),
         )
         res = await mgr.execute(
-            principal,
+            acting.principal,
             tool_id,
             body.arguments,
-            initiated_by=INITIATED_BY_ADMIN,
+            initiated_by=acting.initiated_by,
         )
         return _out(res)
-
-    principal = await anyio.to_thread.run_sync(get_principal, request)  # 401 on a bad credential
-    if named and named != principal.agent_id:
-        raise HTTPException(
-            status_code=403, detail="An agent key can only execute as its own agent."
-        )
     res = await mgr.execute(
-        principal, tool_id, body.arguments, route_request_id=body.route_request_id
+        acting.principal, tool_id, body.arguments, route_request_id=body.route_request_id
     )
     return _out(res)

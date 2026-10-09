@@ -20,11 +20,11 @@ import {
 } from "@fluentui/react-components";
 import { ArrowDownloadRegular, BookRegular, DismissRegular, FilterDismissRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources, updateSkillClassification } from "../api/client";
+import { downloadSkillBundle, getSkill, getSkillBody, listPrincipals, listSkills, listSkillSources, listSkillVersions, updateSkillClassification } from "../api/client";
 import { ClassificationEditor } from "./ClassificationEditor";
 import { ToolFunnelPanel } from "./ToolDetailDrawer";
 import { DOMAINS, OPERATIONS, type Operation, type Skill, type SkillDetail } from "../api/types";
-import { EmptyState, fmtInt, fmtTime, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
@@ -57,14 +57,24 @@ export function SkillBodyText({ body }: { body: string }) {
 type Tri = "" | "true" | "false";
 const tri = (v: Tri) => (v === "" ? undefined : v === "true");
 
-function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: () => void }) {
-  const c = useCommonStyles();
-  const [tab, setTab] = useState("overview");
-  const detail = useLoader<SkillDetail | null>("Load skill", (sig) => (skillId ? getSkill(skillId, sig) : Promise.resolve(null)), [skillId]);
-  const body = useLoader<string | null>("Load skill body", (sig) => (skillId && tab === "body" ? getSkillBody(skillId, sig) : Promise.resolve(null)), [skillId, tab]);
-  const d = detail.data;
+export function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: () => void }) {
   return (
     <OverlayDrawer open={skillId !== null} position="end" size="large" onOpenChange={(_, o) => !o.open && onClose()}>
+      {/* Keyed on the id: a different skill never shows the previous one's data or tab. */}
+      {skillId !== null && <SkillDrawerContent key={skillId} skillId={skillId} onClose={onClose} />}
+    </OverlayDrawer>
+  );
+}
+
+function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: () => void }) {
+  const c = useCommonStyles();
+  const [tab, setTab] = useState("overview");
+  const detail = useLoader<SkillDetail>("Load skill", (sig) => getSkill(skillId, sig), [skillId]);
+  const body = useLoader<string | null>("Load skill body", (sig) => (tab === "body" ? getSkillBody(skillId, sig) : Promise.resolve(null)), [skillId, tab]);
+  const versions = useLoader("Load skill versions", (sig) => (tab === "versions" ? listSkillVersions(skillId, sig) : Promise.resolve(null)), [skillId, tab]);
+  const d = detail.data;
+  return (
+    <>
       <DrawerHeader>
         <DrawerHeaderTitle action={<Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} onClick={onClose} />}>{d?.name ?? "Skill"}</DrawerHeaderTitle>
         {d && <Link to={`/playground?skill=${encodeURIComponent(d.id)}`}>Try activation</Link>}
@@ -79,7 +89,11 @@ function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: ()
           <Tab value="funnel">Funnel</Tab>
         </TabList>
         {!d ? (
-          <LoadingRow label="Loading skill…" />
+          detail.failed ? (
+            <Caption1>Skill details couldn't be loaded.</Caption1>
+          ) : (
+            <LoadingRow label="Loading skill…" />
+          )
         ) : tab === "overview" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 12 }}>
             <span>{d.description}</span>
@@ -98,7 +112,7 @@ function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: ()
         ) : tab === "body" ? (
           <div style={{ paddingTop: 12 }}>
             <Caption1 className={c.muted}>Shown as plain text. Skill bodies come from third-party sources, so Markdown and HTML are not rendered here.</Caption1>
-            {body.data == null ? <LoadingRow label="Loading body…" /> : <SkillBodyText body={body.data} />}
+            {body.data == null ? body.failed ? <Caption1>The body couldn't be loaded.</Caption1> : <LoadingRow label="Loading body…" /> : <SkillBodyText body={body.data} />}
           </div>
         ) : tab === "resources" ? (
           <Table size="extra-small" aria-label="Resources">
@@ -124,16 +138,25 @@ function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: ()
             </TableBody>
           </Table>
         ) : (
-          <ol aria-label="Versions">
-            {(d.versions ?? []).map((v, i) => (
-              <li key={i}>
-                {v.version ?? "unversioned"} <Caption1 className={c.muted}>{fmtTime(v.createdAt)} {v.contentHash?.slice(0, 8)}</Caption1>
-              </li>
-            ))}
-          </ol>
+          versions.data == null ? (
+            versions.failed ? <Caption1>The version history couldn't be loaded.</Caption1> : <LoadingRow label="Loading versions…" />
+          ) : versions.data.length === 0 ? (
+            <Caption1>No versions recorded yet.</Caption1>
+          ) : (
+            <ol aria-label="Versions">
+              {[...versions.data].reverse().map((v) => (
+                <li key={v.version}>
+                  v{v.version} · {v.changeKind}{" "}
+                  <Caption1 className={c.muted}>
+                    {fmtTime(v.recordedAt)} <span className={c.mono}>{v.contentHash.slice(0, 8)}</span>
+                  </Caption1>
+                </li>
+              ))}
+            </ol>
+          )
         )}
       </DrawerBody>
-    </OverlayDrawer>
+    </>
   );
 }
 
@@ -230,6 +253,8 @@ export function SkillsPage() {
       </div>
       {skills.loading && !page ? (
         <LoadingRow label="Loading skills…" />
+      ) : skills.failed && !skills.data ? (
+        <ErrorState what="Skills" onRetry={skills.reload} />
       ) : page && page.items.length === 0 && !skills.failed ? (
         filtered ? (
           <EmptyState icon={<BookRegular />} title="No skills match these filters" body="Loosen or clear the filters to see more skills." />
@@ -257,7 +282,17 @@ export function SkillsPage() {
             </TableHeader>
             <TableBody>
               {(page?.items ?? []).map((s: Skill) => (
-                <TableRow key={s.id} onClick={() => setOpen(s.id)} style={{ cursor: "pointer" }}>
+                <TableRow
+                  key={s.id}
+                  tabIndex={0}
+                  onClick={() => setOpen(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                    e.preventDefault(); // Space would scroll the page
+                    setOpen(s.id);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <TableCell>
                     <strong>{s.name}</strong>
                     {s.hasScripts && <Badge size="small" appearance="outline" style={{ marginLeft: 4 }}>scripts</Badge>}

@@ -35,8 +35,8 @@ in the gateway workstream's report, and the tests are named after the rules.
 database. Callers without a key become the synthetic, unpersisted agent `dev`.
 That agent is **still deny-by-default**, so it needs policy rules like anyone
 else. A structured `auth.dev_mode` warning is logged once. Bind to localhost
-only: DNS-rebinding protection on `/mcp` assumes localhost, and dev mode has
-no credential to stop a rebinding page.
+only: dev mode has no credential to stop a DNS-rebinding page, so the Host
+allowlist (§6) is the only guard.
 
 ## 2. Policy (`policy/engine.evaluate`)
 
@@ -125,7 +125,10 @@ metadata because `models.py` is frozen.
   conditional `UPDATE … WHERE status='pending' AND expires_at > now
   RETURNING`, so concurrent approvals race in the database and exactly one
   wins. A test runs 8 concurrent approvals and sees one execution.
-- Approvals **expire after 10 minutes**.
+- Approvals **expire after 10 minutes**. An expired approval can no longer
+  be approved (410). Denying one still succeeds: `deny` answers 200 with
+  status `denied` and clears its arguments, so an admin can always close a
+  stale request.
 - The claimed call re-runs policy, availability, a **schema-hash equality
   check** and validation against *current* state. Revoking the rule or
   changing the tool's schema after the request voids it.
@@ -141,7 +144,16 @@ metadata because `models.py` is frozen.
   Non-HTTP scopes are rejected.
 - The wrapper sets `scope["user"]`, so the SDK **binds each MCP session to
   the credential that created it**. Another agent presenting that
-  `Mcp-Session-Id` gets 404.
+  `Mcp-Session-Id` gets 404. *(From v0.6)* the binding is to the credential,
+  not just the agent: after a key rotation the old key's sessions and
+  `subscriptions/listen` streams are closed, never notified. Rotating a key,
+  disabling a principal (`PATCH … enabled=false`) or deleting it closes them
+  at once; the next re-route re-checks as well.
+- *(From v0.6)* Session caps: `MCPR_MCP_MAX_SESSIONS` (1000) in total and
+  `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent **credential**, so a
+  rotated-away key's sessions never use up the new key's budget. The next
+  `initialize` over the cap gets 429. `/mcp` bodies are capped at 1 MiB like
+  every other route.
 - `tools/list` returns the agent's last route result, or a deterministic
   default when no route has run: the top-N most-used tools, with a stable-id
   tiebreak.
@@ -157,10 +169,15 @@ metadata because `models.py` is frozen.
   **redacted before it reaches the routing model**. The meta tool is
   rate-limited per agent, router failures are curated, and the previous
   exposure is kept on failure. A discovered tool cannot shadow its name.
+- *(From v0.6)* Meta-tool arguments (`router.find_tools`, `router.feedback`
+  and the skill tools) are validated against the schema each tool
+  advertises, with the execution pipeline's validator. A bad call gets an
+  `isError` result `Refused: invalid arguments (…)` that names the location
+  and keyword, never the values.
 - `tools/list_changed` is sent only to the agent whose exposure changed:
   - Handshake-era sessions get it on their standalone stream.
   - 2026-07-28-era clients get it via `subscriptions/listen` on a
-    **per-agent** bus.
+    bus **per agent and credential** *(from v0.6)*.
 
 ## 5. Redaction (`execution/redaction`)
 
@@ -187,7 +204,32 @@ tool descriptions shown to agents, and the routing query. It is **not**
 applied to tool results returned to the authorized caller, because a tool may
 legitimately return a credential the agent asked for.
 
-## 6. Known limitations (accepted for v0.1, flagged)
+## 6. Deployment posture and known limitations
+
+Reviewed for 0.6. Items marked *(from v0.6)* describe the 0.6.0 behaviour.
+
+**Posture**
+
+- **Fail-closed bind** *(from v0.6)*: without `MCPR_ADMIN_TOKEN` the container
+  listens on `127.0.0.1` only and logs a warning; `MCPR_ALLOW_OPEN_DEV=1`
+  overrides it for development. Compose publishes on
+  `${MCPR_BIND:-127.0.0.1}`.
+- **Host allowlist** *(from v0.6)*: one app-wide check, outermost, admits
+  `localhost`, `127.0.0.1`, `[::1]` and `MCPR_ALLOWED_HOSTS` (any port) and
+  answers anything else with **421**, on every path. The MCP SDK's own check
+  on `/mcp` stays as defence in depth. Before 0.6 only `/mcp` was checked.
+- **Open surfaces**: `/docs` and `/openapi.json` are unauthenticated (the
+  schema is not secret); `/healthz` and `/readyz` *(from v0.6)* are
+  unauthenticated and return no data beyond status. `/metrics` requires the
+  admin token when one is configured *(from v0.6)*.
+- **First principal** *(from v0.6)*: in dev mode with no admin token,
+  `POST /api/v1/principals` answers 409, because creating an agent would end
+  dev mode and leave no admin credential.
+- **Secrets at rest**: agent keys are hashed; the `env` of stdio servers is
+  stored in plaintext JSON (`mcp_server_credentials`), never returned or
+  logged. Protect the database and its backups.
+
+**Known limitations (accepted, flagged)**
 
 - **TOCTOU window.** Policy is evaluated on fresh state immediately before
   invoke. A rule revoked in the milliseconds between that check and the
@@ -225,7 +267,9 @@ agents. Posture:
   for MCP prompts/resources, meta-tools and REST): visibility (routed set only;
   another agent's skill is indistinguishable from a nonexistent one) → per-principal
   sliding-window rate limit (`skill:<agent>` key) → policy re-check (`SkillPolicy`;
-  fail-closed `DenyAllSkillPolicy` until wired) → `ExecutionRecord(resource_kind="skill")`
+  the app wires `EngineSkillPolicy` from `policy/skill_bridge.py`; the
+  fail-closed `DenyAllSkillPolicy` is the default only when no policy is
+  injected) → `ExecutionRecord(resource_kind="skill")`
   committed → body returned. Audit failure ⇒ no body. Denials/rate limits are
   audited with curated detail only (never the body; resource reads log the path).
 - **File access** (`skills/serve.py`): relative POSIX path only (no absolute,

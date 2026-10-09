@@ -1,6 +1,6 @@
-"""Registry-owned DDL that models.py does not express (models.py is the shared
-contract and stays untouched). Idempotent; call once at startup after
-`init_db(engine)` — see docs/INTEGRATION_NOTES-registry.md.
+"""Registry-owned indexes that models.py does not express. Since 0.6 they are
+created by migration 0001 (frozen copy of this DDL); `init_registry` only
+fills in a missing one — see docs/history/INTEGRATION_NOTES-registry.md.
 
 * `ix_tools_fts` — GIN expression index for keyword search over
   name (weight A) + description (B) + tags (C). The query in catalog.py is
@@ -13,7 +13,7 @@ contract and stays untouched). Idempotent; call once at startup after
 
 from __future__ import annotations
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 # `{t}` is the column qualifier: "" for the index DDL, "mcp_tools." for
 # queries that join other tables. Postgres matches the expression structurally,
@@ -37,14 +37,26 @@ def tsv_sql(qualifier: str = "") -> str:
     return _TSV_TEMPLATE.format(t=qualifier)
 
 
+def index_exists(conn: Connection, name: str) -> bool:
+    """Catalog read (no DDL): does an index (or any relation) named `name` exist?"""
+    return conn.execute(text("SELECT to_regclass(:n)"), {"n": name}).scalar() is not None
+
+
 def init_registry(engine: Engine) -> None:
+    """Both indexes ship in migration 0001; this only creates one that is
+    missing (a database built without migrations), so a normal boot issues
+    zero DDL."""
     with engine.begin() as conn:
-        conn.execute(
-            text(f"CREATE INDEX IF NOT EXISTS ix_tools_fts ON mcp_tools USING GIN ({tsv_sql()})")
-        )
-        conn.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_dup_pair "
-                "ON duplicate_suggestions (tool_a_id, tool_b_id)"
+        if not index_exists(conn, "ix_tools_fts"):
+            conn.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_tools_fts ON mcp_tools USING GIN ({tsv_sql()})"
+                )
             )
-        )
+        if not index_exists(conn, "ux_dup_pair"):
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_dup_pair "
+                    "ON duplicate_suggestions (tool_a_id, tool_b_id)"
+                )
+            )

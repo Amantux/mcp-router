@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -127,8 +127,8 @@ def test_runtime_embed_failure_is_typed(monkeypatch: pytest.MonkeyPatch) -> None
             raise RuntimeError("driver error /secret/path")
 
     be = BgeEmbeddingBackend(
-        Broken(), model_id="BAAI/bge-small-en-v1.5", revision=None, device="cpu"
-    )  # type: ignore[arg-type]
+        cast(Any, Broken()), model_id="BAAI/bge-small-en-v1.5", revision=None, device="cpu"
+    )
     with pytest.raises(EmbeddingRuntimeError) as ei:
         be.embed(["x"])
     assert "secret" not in str(ei.value)

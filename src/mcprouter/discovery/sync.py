@@ -460,7 +460,7 @@ class DiscoveryService:
     def _analyze(self) -> None:
         """Refresh planner statistics after a bulk catalog change. Without it
         the planner estimates ~4 rows and routing's vector leg runs ~7x slower
-        (docs/INTEGRATION_NOTES-routing.md). Best effort: a failure here never
+        (docs/history/INTEGRATION_NOTES-routing.md). Best effort: a failure here never
         fails the refresh."""
         try:
             with self._sf() as s:

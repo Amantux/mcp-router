@@ -2,8 +2,9 @@
 
 Another MCP Router (MCPR_DECISION_BACKEND=remote) can point at this endpoint
 and use our local decider (e.g. Laya). Auth: agent key or admin; per-principal
-sliding-window rate limit; body caps; runs through the engine's validated,
-deadline-bounded decider under the inference semaphore.
+sliding-window rate limit (MCPR_DECISION_RATE_LIMIT_PER_MIN); body caps; runs
+through the engine's validated, deadline-bounded decider under the inference
+semaphore.
 
 Loop guard (hop count): every outbound remote decision call carries
 `X-MCPR-Decision-Hop: n+1`, and this edge refuses any request that arrives with
@@ -25,18 +26,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mcprouter.api.deps_auth import get_principal
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.inference import serve
 from mcprouter.inference.adapters import DeadlineDecisionModel
 from mcprouter.inference.errors import InferenceError
 from mcprouter.inference.remote_systemone import DECISION_HOP, HOP_HEADER
 from mcprouter.models import AgentPrincipal
+from mcprouter.net_policy import LOOPBACK_HOSTS
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/decision", tags=["decision"])
 
-RATE_LIMIT_PER_MIN = 120
-_LOCAL_ALIASES = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]", "::"}
+# Loopback names (E1 P-109) plus the wildcard binds: a router bound to 0.0.0.0
+# answers on loopback too, so a remote endpoint naming either is a self-loop.
+_LOCAL_ALIASES = LOOPBACK_HOSTS | {"0.0.0.0", "::"}
 
 
 class SystemOneRequest(BaseModel):
@@ -62,12 +64,19 @@ def is_self_loop(endpoint: str, request: Request) -> bool:
     return ep_host == me_host or (ep_host in _LOCAL_ALIASES and me_host in _LOCAL_ALIASES)
 
 
-def _limiter(request: Request) -> SlidingWindowLimiter:
-    lim = getattr(request.app.state, "decision_edge_limiter", None)
-    if lim is None:
-        lim = SlidingWindowLimiter(RATE_LIMIT_PER_MIN, 60.0)
-        request.app.state.decision_edge_limiter = lim
-    return lim
+MAX_HOP_DIGITS = 3
+
+
+def parse_hop(raw: str | None) -> int:
+    """Absent -> 0. Up to 3 ASCII decimal digits -> their value. Anything else
+    (``"²"`` and ``"٣"`` pass ``isdigit``/``isdecimal`` but are not ASCII; 5000
+    digits exceed ``int()``'s limit; signs, spaces, dots) is malformed and
+    treated as already forwarded (1) — never a 500."""
+    if raw is None:
+        return 0
+    if raw.isascii() and raw.isdecimal() and len(raw) <= MAX_HOP_DIGITS:
+        return int(raw)
+    return 1
 
 
 @router.post("/systemone")
@@ -77,14 +86,12 @@ def systemone(
     settings = request.app.state.settings
     if settings.decision_backend == "remote" and is_self_loop(settings.decision_endpoint, request):
         raise HTTPException(503, "decision edge refused: the remote backend points at this router")
-    raw_hop = request.headers.get(HOP_HEADER)
-    hop = (
-        int(raw_hop) if raw_hop is not None and raw_hop.isdigit() else (0 if raw_hop is None else 1)
-    )
+    hop = parse_hop(request.headers.get(HOP_HEADER))
     if hop >= 1 and settings.decision_backend == "remote":
         raise HTTPException(503, "decision edge refused: request already forwarded by a router")
     DECISION_HOP.set(hop)
-    if not _limiter(request).try_acquire(f"principal:{principal.id}"):
+    # D10: the app registry's "decision" surface (pruned; one budget per principal).
+    if not request.app.state.limiters.try_acquire("decision", f"principal:{principal.id}"):
         raise HTTPException(429, "decision edge rate limit exceeded; retry later")
     try:
         parsed = serve.parse_questions(body.questions)

@@ -1,5 +1,5 @@
 """Analytics wire models (camelCase out; documented verbatim in
-docs/INTEGRATION_NOTES-wave2-analytics.md for the UI track)."""
+docs/history/INTEGRATION_NOTES-wave2-analytics.md for the UI track)."""
 
 from __future__ import annotations
 

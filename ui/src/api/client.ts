@@ -36,6 +36,10 @@ import type {
   CreatePrincipalRequest,
   CreateRuleRequest,
   CreatedPrincipal,
+  PrincipalPatch,
+  RotatedKey,
+  RulePatch,
+  SkillVersionRow,
   DedupStatus,
   DuplicateSuggestion,
   ExecutionQuery,
@@ -48,8 +52,6 @@ import type {
   PolicyRule,
   Principal,
   RegisterServerRequest,
-  RouteRequest,
-  RouteResponse,
   RoutedTool,
   RoutedSkill,
   AnalyticsKind,
@@ -235,9 +237,14 @@ export async function refreshServer(id: string): Promise<MCPServer> {
   return "server" in raw ? raw.server : raw;
 }
 
-// CONTRACT: enable/disable via PATCH /api/v1/servers/{id} {enabled}.
+// CONTRACT: PATCH /servers/{id} {enabled} verified: ServersPage.test.tsx › disabling asks first (naming the server and the consequence); cancelling sends nothing
 export function setServerEnabled(id: string, enabled: boolean): Promise<MCPServer> {
   return request("PATCH", `${API_BASE}/servers/${encodeURIComponent(id)}`, { body: { enabled } });
+}
+
+/** DELETE /servers/{id} (204). 409 while policy rules reference it or it has execution history. */
+export async function deleteServer(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/servers/${encodeURIComponent(id)}`);
 }
 
 // ------------------------------------------------------------------- tools
@@ -258,7 +265,7 @@ export function normaliseTool<T extends MCPTool>(raw: T & { stats?: BackendToolS
   };
 }
 
-// CONTRACT: query params q, domain, operation, serverId, enabled, available, limit, offset.
+// CONTRACT: query names q, domain, operation, serverId, enabled, available, limit, offset verified: ToolsPage.test.tsx › sends every filter under the backend's query names, debounces search, and clears
 export async function listTools(q: ToolQuery, signal?: AbortSignal): Promise<Page<MCPTool>> {
   const raw = await request<unknown>("GET", `${API_BASE}/tools`, {
     signal,
@@ -289,6 +296,11 @@ export function updateClassification(id: string, body: ClassificationUpdate): Pr
   return request("PATCH", `${API_BASE}/tools/${encodeURIComponent(id)}/classification`, { body });
 }
 
+/** POST /tools/{id}/enable | /disable: one tool, without disabling its server. */
+export function setToolEnabled(id: string, enabled: boolean): Promise<MCPTool> {
+  return request("POST", `${API_BASE}/tools/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`);
+}
+
 /** Skills mirror the tools PATCH (admin; sets classificationReviewed, human override wins). */
 export function updateSkillClassification(id: string, body: ClassificationUpdate): Promise<Skill> {
   return request("PATCH", `${API_BASE}/skills/${encodeURIComponent(id)}/classification`, { body });
@@ -308,30 +320,48 @@ function fullTool(t: (Partial<MCPTool> & { id: string }) | null | undefined): MC
   return t && t.operation !== undefined && t.inputSchema !== undefined ? normaliseTool(t as MCPTool) : undefined;
 }
 
-export async function listDedupSuggestions(status: DedupStatus = "open", signal?: AbortSignal): Promise<DuplicateSuggestion[]> {
-  const raw = toList<BackendSuggestion>(await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status } }));
+/** GET /dedup/suggestions is paged ({items,total,limit,offset}; default limit 50). */
+export async function listDedupSuggestions(
+  q: { status?: DedupStatus; limit: number; offset: number },
+  signal?: AbortSignal,
+): Promise<Page<DuplicateSuggestion>> {
+  const page = toPage<BackendSuggestion>(
+    await request("GET", `${API_BASE}/dedup/suggestions`, { signal, query: { status: q.status ?? "open", limit: q.limit, offset: q.offset } }),
+    q.limit,
+    q.offset,
+  );
   // Reconciled at integration: take ids from the embedded refs; when they are
   // slim refs (no description/schema) the page fetches the full tools by id.
-  return raw.map(({ toolA, toolB, ...s }) => ({
+  const items = page.items.map(({ toolA, toolB, ...s }) => ({
     ...s,
     toolAId: s.toolAId ?? toolA?.id ?? "",
     toolBId: s.toolBId ?? toolB?.id ?? "",
     toolA: fullTool(toolA),
     toolB: fullTool(toolB),
   }));
+  return { ...page, items };
 }
 
-// CONTRACT: POST /dedup/suggestions triggers a scan; response body ignored.
-export async function runDedupScan(): Promise<void> {
-  await request("POST", `${API_BASE}/dedup/suggestions`);
+/** What a scan did. `truncated`: the scan hit MCPR_DEDUP_MAX_PAIRS (null on backends that don't say). */
+export interface DedupRun {
+  pairsConsidered: number;
+  created: number;
+  refreshed: number;
+  skippedDecided: number;
+  truncated?: boolean | null;
 }
 
-// CONTRACT: accept body {preferredToolId}.
+/** POST /dedup/suggestions runs a scan and returns its counts (DedupRunOut). */
+export function runDedupScan(): Promise<DedupRun> {
+  return request("POST", `${API_BASE}/dedup/suggestions`);
+}
+
+// Accept body {preferredToolId} (D12): the backend persists it and echoes the stored id.
 export function acceptDedup(id: string, preferredToolId: string): Promise<DuplicateSuggestion> {
   return request("POST", `${API_BASE}/dedup/suggestions/${encodeURIComponent(id)}/accept`, { body: { preferredToolId } });
 }
 
-// CONTRACT: dismiss body {justification}; backend rejects empty (422).
+// CONTRACT: dismiss body {justification} (the backend 422s an empty one) verified: DuplicatesPage.test.tsx › shows pairs side by side, states nothing is auto-disabled, and sends the justification on dismiss
 export function dismissDedup(id: string, justification: string): Promise<DuplicateSuggestion> {
   return request("POST", `${API_BASE}/dedup/suggestions/${encodeURIComponent(id)}/dismiss`, { body: { justification } });
 }
@@ -348,7 +378,7 @@ function normaliseRoutedTool(raw: Record<string, unknown>): RoutedTool {
 }
 
 /** S2d item 2 (aligned): {source, skill, score, bodyTokensEst} (+ skillId on simulate). */
-export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
+function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
   return {
     skillId: (raw.skillId as string | undefined) ?? undefined,
     source: String(raw.source ?? raw.sourceName ?? ""),
@@ -356,15 +386,6 @@ export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill 
     score: Number(raw.score ?? 0),
     bodyTokensEst: Number(raw.bodyTokensEst ?? 0),
   };
-}
-
-// CONTRACT: no auth header is sent; the simulator assumes the dev/admin API is
-// reachable without an agent key (or that the backend authorises the UI separately).
-export async function simulateRoute(body: RouteRequest): Promise<RouteResponse> {
-  const raw = await request<RouteResponse & { tools: Record<string, unknown>[] }>("POST", `${API_BASE}/route`, { body });
-  const out: RouteResponse = { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
-  if (Array.isArray(raw.skills)) out.skills = (raw.skills as unknown as Record<string, unknown>[]).map(normaliseRoutedSkill);
-  return out;
 }
 
 // ------------------------------------------------------------ models/health
@@ -472,6 +493,30 @@ export function createRule(body: CreateRuleRequest): Promise<PolicyRule> {
   return request("POST", `${API_BASE}/policy-rules`, { body });
 }
 
+/** PATCH /principals/{id}. Omitted fields are unchanged; `maxServers: null` clears the cap. */
+export function updatePrincipal(id: string, patch: PrincipalPatch): Promise<Principal> {
+  return request("PATCH", `${API_BASE}/principals/${encodeURIComponent(id)}`, { body: patch });
+}
+
+/** POST /principals/{id}/rotate-key: the old key stops working; the new one is returned once. */
+export function rotatePrincipalKey(id: string): Promise<RotatedKey> {
+  return request("POST", `${API_BASE}/principals/${encodeURIComponent(id)}/rotate-key`);
+}
+
+/** DELETE /principals/{id} (204). The backend deletes the agent's rules with it. */
+export async function deletePrincipal(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/principals/${encodeURIComponent(id)}`);
+}
+
+/** PATCH /policy-rules/{id}. resourceKind is immutable after create. */
+export function updateRule(id: string, patch: RulePatch): Promise<PolicyRule> {
+  return request("PATCH", `${API_BASE}/policy-rules/${encodeURIComponent(id)}`, { body: patch });
+}
+
+export async function deleteRule(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/policy-rules/${encodeURIComponent(id)}`);
+}
+
 // -------------------------------------------------------------- identity
 /** Cheap admin-only call used by the Connect panel to verify the admin token. */
 export async function probeAdmin(signal?: AbortSignal): Promise<void> {
@@ -519,8 +564,9 @@ export async function listApprovals(status?: ApprovalStatus, signal?: AbortSigna
 
 /**
  * One approval's current state. With an agent key: GET /me/approvals/{id}
- * (agents see only their own). Without: the admin list, filtered by id (there
- * is no admin get-by-id endpoint). Undefined if it no longer exists.
+ * (agents see only their own). Without: there is no admin get-by-id endpoint, so
+ * poll the (small) pending list, and only when the id has left it look once in the
+ * unfiltered list for its final state. Undefined if it no longer exists.
  */
 export async function getApproval(id: string, asAgent: boolean, signal?: AbortSignal): Promise<Approval | undefined> {
   if (asAgent) {
@@ -531,6 +577,8 @@ export async function getApproval(id: string, asAgent: boolean, signal?: AbortSi
       throw e;
     }
   }
+  const pending = (await listApprovals("pending", signal)).find((a) => a.id === id);
+  if (pending) return pending;
   return (await listApprovals(undefined, signal)).find((a) => a.id === id);
 }
 
@@ -609,7 +657,7 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
  * Admin-only: route `query` under a named agent's scope and budgets without
  * publishing exposure (the agent's MCP tools/list is untouched).
  */
-// CONTRACT: POST /api/v1/route/simulate {agentId, query, maxTools?, maxServers?}; see SimulateResponse.
+// CONTRACT: POST /route/simulate {agentId, query, maxTools, maxServers?, maxSkills?} verified: LensPage.test.tsx › simulates for a picked principal, then re-queries (debounced) when a budget slider moves
 export async function simulateAgent(body: SimulateRequest, signal?: AbortSignal): Promise<SimulateResponse> {
   const raw = await request<Loose>("POST", `${API_BASE}/route/simulate`, { body, signal });
   return normaliseSimulation(raw ?? {}, body.agentId);
@@ -666,16 +714,24 @@ export async function syncSkillSource(id: string): Promise<SyncReport> {
   return { added: r.added ?? 0, changed: r.changed ?? 0, removed: r.removed ?? 0, skipped: r.skipped ?? [] };
 }
 // PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
+/** DELETE /skill-sources/{id} (204). 409 while policy rules reference it. */
+export async function deleteSkillSource(id: string): Promise<void> {
+  await request("DELETE", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`);
+}
 export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
   return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
 }
-// CONTRACT: query params q, domain, operation, sourceId, enabled, available, reviewed, hasScripts, limit, offset.
+// CONTRACT: query names incl. sourceId and hasScripts (D13) verified: SkillsPage.test.tsx › sends the Source and Scripts filters under the backend's query names
 export async function listSkills(q: SkillQuery, signal?: AbortSignal): Promise<Page<Skill>> {
   const raw = await request<unknown>("GET", `${API_BASE}/skills`, {
     signal,
     query: { q: q.q, domain: q.domain, operation: q.operation, sourceId: q.sourceId, enabled: q.enabled, available: q.available, reviewed: q.reviewed, hasScripts: q.hasScripts, limit: q.limit, offset: q.offset },
   });
   return toPage<Skill>(raw, q.limit, q.offset);
+}
+/** GET /skills/{id}/versions: the recorded version history, oldest first. */
+export async function listSkillVersions(id: string, signal?: AbortSignal): Promise<SkillVersionRow[]> {
+  return toList<SkillVersionRow>(await request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}/versions`, { signal }));
 }
 export function getSkill(id: string, signal?: AbortSignal): Promise<SkillDetail> {
   return request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}`, { signal });
@@ -705,9 +761,9 @@ export async function downloadSkillBundle(agentId: string): Promise<Blob> {
   return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
 }
 
-// CONTRACT: aligned with S3 INTEGRATION_NOTES-wave4-exposure.md (planned, not yet verified):
-// POST /skills/{id}/activate {agentId?, routeRequestId?} -> {body, resources[{path,size,kind}], recordId};
-// 403 denied, 404 not routed, 429 rate_limited. agentId is required for admin-initiated activation.
+// POST /skills/{id}/activate {agentId?, routeRequestId?}; 403 denied, 404 not routed, 429 rate_limited.
+// agentId is required for admin-initiated activation.
+// CONTRACT: response {body, resources[], recordId} verified: meta.test.ts › activate.result
 export async function activateSkill(id: string, opts: { agentId?: string } = {}, signal?: AbortSignal): Promise<SkillActivation> {
   const body: JsonObject = {};
   if (opts.agentId) body.agentId = opts.agentId;
@@ -738,7 +794,7 @@ export function importServers(config: unknown): Promise<unknown> {
   return request("POST", `${API_BASE}/servers/import`, { body: config });
 }
 
-// CONTRACT: POST /api/v1/route/{requestId}/feedback (admin bearer → source=human).
+// CONTRACT: POST /route/{requestId}/feedback {items} (admin bearer → source=human) verified: LensPage.test.tsx › prefills the agent from ?agentId= and rates against ?routeRequestId=
 export async function postRouteFeedback(requestId: string, items: FeedbackItem[]): Promise<FeedbackResult> {
   return request<FeedbackResult>("POST", `${API_BASE}/route/${encodeURIComponent(requestId)}/feedback`, {
     body: { items } as unknown as JsonObject,

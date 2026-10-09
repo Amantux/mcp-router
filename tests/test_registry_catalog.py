@@ -25,9 +25,9 @@ from mcprouter.registry.errors import InvalidArgument, ToolNotFound
 from mcprouter.registry.schema import init_registry
 from mcprouter.registry.stats import EMA_ALPHA, record_execution
 from mcprouter.registry.wire import tool_out
+from tests.support.registry_fixtures import make_server, make_tool
 
 from .conftest import requires_db
-from .test_registry_fixtures import make_server, make_tool
 
 pytestmark = requires_db
 
