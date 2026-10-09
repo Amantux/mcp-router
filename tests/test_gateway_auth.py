@@ -95,12 +95,15 @@ def test_key_length_cap_is_max_key_len() -> None:
 
 def test_rest_agent_id_validators_use_the_one_auth_pattern() -> None:
     """HS-C-010: key parsing and every REST agentId validator share one pattern."""
+    import typing
+
     from mcprouter.api import routes_policy
     from mcprouter.auth import AGENT_ID_PATTERN
     from mcprouter.auth.keys import AGENT_ID_RE
 
     assert AGENT_ID_RE.pattern == AGENT_ID_PATTERN
-    assert routes_policy.AgentId.__metadata__[0].metadata[0].pattern == AGENT_ID_PATTERN
+    field = typing.get_args(routes_policy.AgentId)[1]
+    assert field.metadata[0].pattern == AGENT_ID_PATTERN
 
 
 # ---------------------------------------------------------------- bootstrap
