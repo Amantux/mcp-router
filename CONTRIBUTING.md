@@ -152,4 +152,5 @@ version) never moves them.
 ## 12. Security reports
 
 Do not open a public issue for a vulnerability. Use the repository's
-**Security → Report a vulnerability** form.
+**Security → Report a vulnerability** form. Scope and what to include:
+[SECURITY.md](SECURITY.md).

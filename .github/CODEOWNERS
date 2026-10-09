@@ -1,0 +1,21 @@
+# Changes to these paths need a review from the owner: they carry the
+# router's authentication, authorization policy, deployment posture and CI
+# supply chain. Later lines win, so keep the specific entries below.
+
+# Authentication (agent keys, admin token, /metrics and Host guards)
+/src/mcprouter/auth/                 @Amantux
+/src/mcprouter/api/deps_auth.py      @Amantux
+/src/mcprouter/api/hardening.py      @Amantux
+
+# Policy engine and scoping (deny by default)
+/src/mcprouter/policy/               @Amantux
+
+# Deployment posture
+/docker-compose*.yml                 @Amantux
+/Dockerfile*                         @Amantux
+/scripts/docker-entrypoint.sh        @Amantux
+
+# CI, release and this file
+/.github/workflows/                  @Amantux
+/.github/CODEOWNERS                  @Amantux
+/SECURITY.md                         @Amantux
