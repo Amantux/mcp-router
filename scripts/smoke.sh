@@ -120,14 +120,19 @@ wait_healthy
 pl=$(curl -fsS "${ADM[@]}" "$BASE/api/v1/principals") || fail "GET principals after restart"
 python3 -c 'import json,sys; ids={p["agentId"] for p in json.loads(sys.argv[1])}; assert "smoke-created" in ids, ids; print("PASS principal survives compose restart")' "$pl"
 
-# 14. graceful stop: SIGTERM -> clean exit 0 well inside the 30 s grace period
+# 14. graceful stop: SIGTERM -> lifespan shutdown completes well inside the
+# 30 s grace period. uvicorn >= 0.29 re-raises the captured SIGTERM after a
+# clean shutdown, so the exit code is 143; 137 (SIGKILL) or a missing
+# "Application shutdown complete" means the shutdown was not graceful.
 cid=$($COMPOSE ps -q api)
 t0=$(date +%s)
 docker stop -t 30 "$cid" >/dev/null
 took=$(( $(date +%s) - t0 ))
 rc=$(docker inspect -f '{{.State.ExitCode}}' "$cid")
-[ "$rc" = 0 ] || fail "api exit code after docker stop = $rc (want 0)"
+case "$rc" in 0|143) ;; *) fail "api exit code after docker stop = $rc (want 0 or 143)" ;; esac
+docker logs --since "${t0}" "$cid" 2>&1 | grep -q "Application shutdown complete" \
+  || fail "no 'Application shutdown complete' after docker stop (lifespan cut short?)"
 [ "$took" -lt 25 ] || fail "docker stop took ${took}s (want < 25 s: SIGTERM ignored?)"
-ok "docker stop -t 30 -> exit 0 in ${took}s"
+ok "docker stop -t 30 -> graceful shutdown, exit $rc in ${took}s"
 
 echo "SMOKE OK in $(( $(date +%s) - start ))s"
