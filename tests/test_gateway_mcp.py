@@ -435,3 +435,33 @@ async def test_stalled_sessions_are_notified_concurrently(world: dict[str, Any])
     await gw.notify_tools_changed("alice")
     assert time.perf_counter() - t0 < gw_mod.NOTIFY_TIMEOUT_S * 2
     assert not gw._legacy["alice"]  # all pruned as dead
+
+
+async def test_notify_failure_prunes_session_and_never_fails_find_tools(
+    world: dict[str, Any],
+) -> None:
+    """P-303: a session whose send raises a non-Broken* exception is pruned,
+    the other sessions are still notified, and router.find_tools succeeds."""
+    from collections import OrderedDict
+
+    sent: list[str] = []
+
+    class Raising:
+        async def send_tool_list_changed(self) -> None:
+            raise RuntimeError("no back channel")
+
+    class Healthy:
+        async def send_tool_list_changed(self) -> None:
+            sent.append("healthy")
+
+    gw, cat, db = world["gw"], world["cat"], world["db"]
+    add_rule(db, "alice", max_operation="write")
+    gw._legacy["alice"] = OrderedDict([("bad", Raising()), ("good", Healthy())])
+    res = await gw._on_call_tool(
+        _ctx(gw, cat, "alice"),
+        types.CallToolRequestParams(name=META_TOOL, arguments={"query": "file an issue"}),
+    )
+    assert res.is_error is False
+    assert sent == ["healthy"]
+    assert list(gw._legacy["alice"]) == ["good"]
+    assert gw.exposure.get("alice") is not None

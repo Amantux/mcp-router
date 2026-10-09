@@ -642,7 +642,14 @@ class GatewayServer:
             return _text(
                 "Refused: routing is unavailable; the tool list is unchanged", is_error=True
             )
-        await self.apply_route(principal.agent_id, result)
+        try:
+            await self.apply_route(principal.agent_id, result)
+        except Exception as exc:  # noqa: BLE001 — exposure is already set; notify is best effort
+            log.warning(
+                "gateway.route_notify_failed agent=%s exc_type=%s",
+                scrub_log(principal.agent_id),
+                type(exc).__name__,
+            )
         rows = await anyio.to_thread.run_sync(self.visible_tools, principal)
         names = [stable_tool_id(server.name, tool.name) for tool, server, _ in rows]
         if not names:
@@ -880,7 +887,12 @@ class GatewayServer:
                     if self._skills is not None:
                         await session.send_prompt_list_changed()
                         await session.send_resource_list_changed()
-                except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+                except Exception as exc:  # noqa: BLE001 — one bad session must not fail the rest
+                    # Broken/Closed streams are the usual case; anything else
+                    # (e.g. a session the SDK already terminated) is pruned the
+                    # same way instead of escaping as an ExceptionGroup.
+                    if not isinstance(exc, (anyio.BrokenResourceError, anyio.ClosedResourceError)):
+                        log.warning("gateway.notify_failed exc_type=%s", type(exc).__name__)
                     dead.append(sid)
             if scope.cancelled_caught:
                 dead.append(sid)
