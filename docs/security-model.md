@@ -206,3 +206,36 @@ legitimately return a credential the agent asked for.
 - **Approval approve path** does not consume the agent's rate-limit budget.
 - **Tool `input_schema`** is shown to agents verbatim. Only descriptions are
   redacted.
+
+## Skills (wave 4, S3)
+
+Skill bodies and resource files are **untrusted author content** handed to
+agents. Posture:
+
+- **Never executed, never interpolated** into the router's own model prompts.
+  The routing track only embeds/classifies `description` + a ~1 KB body prefix.
+  Served bodies are returned verbatim; redaction is NOT applied (author content),
+  and ingest flags (secret-shaped strings, S1) are exposed via REST only —
+  prompt/resource descriptions stay verbatim.
+- **Prompt injection** is the agent's problem to contain, the router's job is to
+  make activation *deliberate, authorized and audited*: a skill is only visible
+  to an agent whose last route surfaced it (default exposure: none), and every
+  activation re-checks policy (defense in depth — routing already filtered).
+- **Activation order** (`gateway/skills.py::SkillExposure`, one implementation
+  for MCP prompts/resources, meta-tools and REST): visibility (routed set only;
+  another agent's skill is indistinguishable from a nonexistent one) → per-principal
+  sliding-window rate limit (`skill:<agent>` key) → policy re-check (`SkillPolicy`;
+  fail-closed `DenyAllSkillPolicy` until wired) → `ExecutionRecord(resource_kind="skill")`
+  committed → body returned. Audit failure ⇒ no body. Denials/rate limits are
+  audited with curated detail only (never the body; resource reads log the path).
+- **File access** (`skills/serve.py`): relative POSIX path only (no absolute,
+  drive, backslash, NUL, `..`); must be listed in the ingest `resource_manifest`;
+  realpath must stay inside the realpath of the skill dir (symlink escapes
+  refused); size capped by `MCPR_SKILL_RESOURCE_MAX_BYTES` at stat *and* after
+  read. Errors are typed (`SkillServeError.code`) with curated messages that
+  never contain filesystem paths.
+- **Bundle** (`skills/bundle.py`): entries are normalized relative paths
+  (zip-slip guard), top-level dir = validated single-segment skill name, ≤50
+  skills, ≤50 MiB total, per-file cap = resource cap; unreadable/escaping files
+  are skipped and reported, never followed. SKILL.md frontmatter is rebuilt with
+  JSON-quoted scalars so author text cannot inject YAML keys.
