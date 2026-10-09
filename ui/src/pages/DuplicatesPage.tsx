@@ -23,6 +23,12 @@ import {
 } from "@fluentui/react-components";
 import { BranchForkRegular } from "@fluentui/react-icons";
 import { acceptDedup, dismissDedup, getSkill, getTool, listDedupSuggestions, runDedupScan } from "../api/client";
+import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
+import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { useNotify } from "../components/Notifications";
+import { useLoader } from "../hooks/useLoader";
+
+const PAGE_SIZE = 50;
 
 // A side may be a skill, referenced as "skill:<id>"; the backend also reports kindA/kindB.
 // CONTRACT: suggestions report each side's kind verified: meta.test.ts › dedup.kinds
@@ -32,12 +38,6 @@ function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): 
   if (isSkillRef(id)) return getSkill(id.slice(SKILL_PREFIX.length), sig);
   return embedded ? Promise.resolve(embedded) : getTool(id, sig);
 }
-import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
-import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
-
-const PAGE_SIZE = 50;
-import { useNotify } from "../components/Notifications";
-import { useLoader } from "../hooks/useLoader";
 
 const useStyles = makeStyles({
   list: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM },
