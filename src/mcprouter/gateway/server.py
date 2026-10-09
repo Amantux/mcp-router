@@ -63,7 +63,7 @@ from mcp.server.subscriptions import (
 )
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
-from mcp_types.version import MODERN_PROTOCOL_VERSIONS
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, MODERN_PROTOCOL_VERSIONS
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -360,7 +360,56 @@ class _AuthASGI:
         scope["user"] = AuthenticatedUser(token)
         scope["auth"] = AuthCredentials([])
         scope[PRINCIPAL_SCOPE_KEY] = principal
-        await self._inner(scope, receive, send)
+        if not _opens_session(scope):
+            await self._inner(scope, receive, send)
+            return
+        if not self._gw._reserve_open(principal.agent_id):
+            await _json_response(
+                send,
+                429,
+                {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": types.INVALID_REQUEST, "message": TOO_MANY_SESSIONS},
+                },
+            )
+            return
+        try:
+            await self._inner(scope, receive, send)
+        finally:
+            self._gw._release_open(principal.agent_id)
+
+
+TOO_MANY_SESSIONS = "Too many open sessions for this agent; close one and retry."
+
+
+def _opens_session(scope: Scope) -> bool:
+    """A request the SDK would answer by minting a NEW handshake-era session:
+    a POST without ``Mcp-Session-Id`` whose protocol-version header is absent
+    or a handshake version (mcp 2.3.0 ``StreamableHTTPSessionManager.
+    _handle_request``: any other version goes to the stateless modern path)."""
+    if scope.get("method") != "POST":
+        return False
+    headers = Headers(scope=scope)
+    if headers.get("mcp-session-id") is not None:
+        return False
+    version = headers.get("mcp-protocol-version")
+    return version is None or version in HANDSHAKE_PROTOCOL_VERSIONS
+
+
+async def _json_response(send: Send, status: int, payload: dict[str, Any]) -> None:
+    body = json.dumps(payload).encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
 
 
 class GatewayServer:
@@ -390,6 +439,8 @@ class GatewayServer:
         self._buses: dict[str, tuple[InMemorySubscriptionBus, ListenHandler]] = {}
         self._legacy: dict[str, OrderedDict[str, ServerSession]] = {}
         self._lock = threading.Lock()
+        # Session-opening requests in flight per agent (see _reserve_open).
+        self._opening: dict[str, int] = {}
         self.server = _RouterMCPServer(
             "mcp-router",
             version=__version__,
@@ -408,7 +459,10 @@ class GatewayServer:
         # Innermost, so the SDK's OpenTelemetry middleware records the curated error.
         self.server.middleware.append(_CuratedErrors())
         self._starlette = self.server.streamable_http_app(
-            streamable_http_path=MCP_PATH, transport_security=transport_security, host=host
+            streamable_http_path=MCP_PATH,
+            transport_security=transport_security,
+            host=host,
+            max_sessions=settings.mcp_max_sessions,
         )
 
     # ------------------------------------------------------------ wiring
@@ -453,6 +507,38 @@ class GatewayServer:
             sessions.move_to_end(sid)
             while len(sessions) > MAX_TRACKED_SESSIONS_PER_AGENT:
                 sessions.popitem(last=False)
+
+    def _live_sessions(self, agent_id: str) -> int:
+        """Open handshake-era sessions created by ``agent_id``. Reads the SDK
+        session manager's owner map (mcp 2.3.0 ``_session_owners``: session id
+        -> (client_id, issuer, subject) of the creating credential); entries
+        leave it on DELETE, idle timeout or crash."""
+        owners = self.server.session_manager._session_owners
+        return sum(1 for owner in list(owners.values()) if owner["client_id"] == agent_id)
+
+    def _reserve_open(self, agent_id: str) -> bool:
+        """Admit a session-opening request unless the agent is at its cap.
+
+        Counts live sessions PLUS opening requests in flight, so concurrent
+        initializes can never overshoot ``mcp_max_sessions_per_agent`` (an
+        in-flight open that the SDK already registered is briefly counted
+        twice: the error is toward refusing, never toward exceeding)."""
+        cap = self._settings.mcp_max_sessions_per_agent
+        with self._lock:
+            pending = self._opening.get(agent_id, 0)
+            if self._live_sessions(agent_id) + pending >= cap:
+                log.warning("gateway.session_cap agent=%s", scrub_log(agent_id))
+                return False
+            self._opening[agent_id] = pending + 1
+            return True
+
+    def _release_open(self, agent_id: str) -> None:
+        with self._lock:
+            left = self._opening.get(agent_id, 1) - 1
+            if left > 0:
+                self._opening[agent_id] = left
+            else:
+                self._opening.pop(agent_id, None)
 
     def _bus(self, agent_id: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
         with self._lock:
