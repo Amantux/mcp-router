@@ -227,9 +227,11 @@ def test_bundle(env: Env) -> None:
     }
     rows = env.rows()
     assert sorted(x.skill_id or "" for x in rows) == sorted([env.a, env.b])
-    assert all((x.agent_id, x.outcome) == ("alice", "ok") for x in rows)
+    assert all((x.agent_id, x.outcome) == ("alice", "bundle") for x in rows)
     with env.db() as s:
-        assert s.get(SkillRecord, env.a).activation_count == 1  # type: ignore[union-attr]
+        assert (
+            s.get(SkillRecord, env.a).activation_count == 0
+        )  # bundle never activates; type: ignore[union-attr]
 
 
 def test_bundle_caps_and_skipped_header(env: Env, tmp_path: Path) -> None:
