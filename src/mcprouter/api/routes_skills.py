@@ -7,14 +7,18 @@ captured by `/{skill_id}`) and set `app.state.skill_exposure` to the gateway's
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import require_admin
+from mcprouter.generation import bump_catalog
 from mcprouter.models import SkillRecord, SkillVersionRecord
+from mcprouter.registry.audit import audit
+from mcprouter.registry.catalog import _CLASSIFICATION_COLUMNS
+from mcprouter.registry.wire import ClassificationPatchIn
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"], dependencies=[Depends(require_admin)])
 
@@ -32,6 +36,9 @@ def _summary(r: SkillRecord) -> dict[str, Any]:
         "description": r.description,
         "domain": r.domain,
         "operation": r.operation,
+        "categories": list(r.capabilities or []),
+        "tags": list(r.tags or []),
+        "requiredScopes": list(r.required_scopes or []),
         "version": r.version,
         "enabled": r.enabled,
         "available": r.available,
@@ -124,6 +131,34 @@ def get_skill(skill_id: str, request: Request) -> dict[str, Any]:
         }
 
 
+@router.patch("/{skill_id}/classification")
+def patch_classification(
+    skill_id: str,
+    body: ClassificationPatchIn,
+    request: Request,
+    admin: Annotated[str, Depends(require_admin)],
+) -> dict[str, Any]:
+    """Human override (mirrors the tools PATCH): wins over auto-classification
+    forever, because the skill classifier skips `classification_reviewed` rows."""
+    fields = body.to_fields()
+    with _factory(request)() as s:
+        r = _get(s, skill_id)
+        for wire_name, value in fields.items():
+            setattr(r, _CLASSIFICATION_COLUMNS[wire_name], value)
+        r.classification_reviewed = True
+        r.classification_source = "human"
+        s.commit()
+        audit(
+            "skill.classification.override",
+            actor=admin,
+            skill_id=r.id,
+            skill=r.name,
+            fields=",".join(sorted(fields)) or "(approve)",
+        )
+        bump_catalog()  # route cache
+        return _summary(r)
+
+
 @router.get("/{skill_id}/body")
 def get_body(skill_id: str, request: Request) -> dict[str, Any]:
     with _factory(request)() as s:
@@ -166,7 +201,6 @@ agent_router = APIRouter(prefix="/api/v1")
 # server-side (`routed_skill_ids`), never taken from the client.
 
 import functools  # noqa: E402
-from typing import Annotated  # noqa: E402
 from urllib.parse import quote  # noqa: E402
 
 import anyio.to_thread  # noqa: E402
