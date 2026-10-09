@@ -27,6 +27,8 @@ dependencies = [
 dev = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
+  "pytest-xdist==3.8.0",
+  "pytest-timeout==2.4.0",
   "ruff==0.15.22",
   "mypy==2.3.0",
   "types-requests",
@@ -76,4 +78,13 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["slow: loads/downloads real models; set MCPR_RUN_SLOW=1"]
+# Suite policy (D17): unknown markers are errors; every test has a timeout;
+# skips are always reported (-ra). No retries anywhere: flakes are fixed.
+addopts = "--strict-markers -ra --durations=25"
+timeout = 120
+markers = [
+  "db: needs the test database (auto-added from the db fixture; MCPR_REQUIRE_DB=1 fails instead of skipping)",
+  "e2e: real servers/transports (by module name in tests/conftest.py; 300 s timeout)",
+  "slow: loads/downloads real models; set MCPR_RUN_SLOW=1",
+  "scale: fleet/catalog scale runs (nightly)",
+]
