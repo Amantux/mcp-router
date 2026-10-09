@@ -42,7 +42,7 @@
 - Meta-tools `router.activate_skill{name}` and `router.read_skill_resource{name,path}`
   go through the same `_activate` / `_read_skill_resource` helpers (tested with a stub).
 
-## NOT yet landed (out of budget, S3b — next executor)
+## (Superseded by "S3c step 2 — REST landed" below; kept for history)
 - `api/routes_skills.py` section "# --- wave-4 S3: activation + bundle ---".
   Planned shapes (S4 can build against these):
   - `POST /api/v1/skills/{id}/activate` body `{agentId?, routeRequestId?}` (agentId
@@ -120,3 +120,36 @@ Also: `routed_ids` must be derived server-side from the agent's own route, never
   initiated_by=None) -> tuple[bytes, list[str]]` (visibility -> limiter (one
   token per bundle) -> policy per skill, denied ones audited and omitted ->
   audit -> bytes).
+
+## S3c step 2 — REST landed (`api/routes_skills.py`, section "# --- wave-4 S3: activation + bundle ---")
+
+**Integrator must:** `app.include_router(routes_skills.router)` in `api/app.py`
+(not done — outside the fence; tests register it in their own app) and set
+`app.state.skill_exposure = <the same SkillExposure passed to the gateway>`
+(routes return 503 "skill exposure not configured" without it). If S1's section
+of `routes_skills.py` adds `GET /skills/{id}` on the same router, keep the
+`/skills/bundle` route REGISTERED FIRST (Starlette matches in order) —
+`test_bundle` fails if it is shadowed.
+
+**Visibility resolver:** `routes_skills.routed_skill_ids(factory, agent_id)` —
+the agent's LATEST `RoutingDecisionRecord` (by `created_at`, then `id`), entries
+of `selected_tool_ids` prefixed `"skill:"` with the prefix stripped. Nothing
+else grants visibility; never client-supplied. **Router contract:** S2/route
+must persist routed skills as `"skill:<SkillRecord.id>"` in `selected_tool_ids`.
+
+**Identity** (same as routes_execute): agent key → itself; naming another agent
+→ 403. Admin token → `agentId` REQUIRED (400), unknown agent 404, audited
+`initiated_by="admin"`, `routeRequestId` ignored.
+
+| Route | Request | 200 | Errors |
+|---|---|---|---|
+| `POST /api/v1/skills/{id}/activate` | body `{agentId?, routeRequestId?}` (extra keys 422; body optional) | `{body, resources:[{path,size,kind}], recordId}` | 400/401/403/404/429/413/500/503 |
+| `GET /api/v1/skills/{id}/resources/{path:path}[?agentId=]` | — | raw bytes, Content-Type = `resource_mime`, `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` unless text/* | same |
+| `GET /api/v1/skills/bundle[?agentId=]` | — | `application/zip`, `X-Skipped-Resources` = comma-joined skipped paths, each `quote(p, safe="/")` (empty if none) | same; 404 when nothing routed |
+
+Error bodies are curated constants, never `str(exc)`: 403 "Skill activation
+denied by policy." · 429 "Too many skill activations; retry later." · 413
+"Skill resource exceeds the size limit." · 404 "Unknown skill or resource."
+(ONE message for unknown / unrouted / invalid path / not in manifest /
+unreadable) · anything else 500 "Internal error while serving the skill.".
+Note: the notes above said `X-Skipped-Resources` was a count; it is the path list.
