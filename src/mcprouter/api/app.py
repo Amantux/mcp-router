@@ -91,14 +91,12 @@ def _quiet_client_loggers() -> None:
 def create_app(
     settings: Settings | None = None, *, env: Mapping[str, str] | None = None
 ) -> FastAPI:
-    """`env` is what deps_auth reads MCPR_ADMIN_TOKEN from; defaults to
-    os.environ. Tests pass an explicit mapping (pure). A token resolved into
-    Settings (env or MCPR_ADMIN_TOKEN_FILE, length-checked) takes precedence,
-    so the _FILE variant reaches auth until E6 reads settings.admin_token."""
+    """Auth reads the admin token from `settings.admin_token` (env or
+    MCPR_ADMIN_TOKEN_FILE, length-checked; auth.config.SecurityConfig.build).
+    `env` is only its fallback for Settings built without one; defaults to
+    os.environ. Tests pass an explicit mapping (pure)."""
     settings = settings or Settings.from_env()
     env = os.environ if env is None else env
-    if settings.admin_token:
-        env = {**env, "MCPR_ADMIN_TOKEN": settings.admin_token}
     configure_logging(settings)
     _quiet_client_loggers()
 

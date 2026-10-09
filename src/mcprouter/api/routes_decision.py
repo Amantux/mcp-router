@@ -31,12 +31,14 @@ from mcprouter.inference.adapters import DeadlineDecisionModel
 from mcprouter.inference.errors import InferenceError
 from mcprouter.inference.remote_systemone import DECISION_HOP, HOP_HEADER
 from mcprouter.models import AgentPrincipal
+from mcprouter.net_policy import LOOPBACK_HOSTS
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/decision", tags=["decision"])
 
-# ADAPTER (E1 P-109): becomes net_policy.LOOPBACK_HOSTS (+ the wildcard binds) on rebase.
-_LOCAL_ALIASES = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "[::1]", "::"}
+# Loopback names (E1 P-109) plus the wildcard binds: a router bound to 0.0.0.0
+# answers on loopback too, so a remote endpoint naming either is a self-loop.
+_LOCAL_ALIASES = LOOPBACK_HOSTS | {"0.0.0.0", "::"}
 
 
 class SystemOneRequest(BaseModel):
