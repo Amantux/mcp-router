@@ -414,7 +414,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
             <EmptyState
               icon={<EyeRegular />}
               title="No agents yet"
-              body="The lens shows what a specific agent would be offered. Create an agent principal on the Policy page first."
+              body="The lens shows what a specific agent would be offered. Create an agent on the Policy page first."
             />
           ) : (
             <EmptyState

@@ -73,8 +73,8 @@ const CASES: Case[] = [
     route: "/policy",
     ok: { [`GET ${API}/principals`]: [], [`GET ${API}/policy-rules`]: [], [`GET ${API}/servers`]: [], [`GET ${API}/skill-sources`]: [] },
     fails: `GET ${API}/principals`,
-    emptyCopy: /No agent principals yet/,
-    what: "Principals",
+    emptyCopy: /No agents yet/,
+    what: "Agents",
   },
   {
     name: "Policy rules",

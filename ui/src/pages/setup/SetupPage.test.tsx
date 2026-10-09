@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { mockFetch, renderWithProviders, type FetchCall } from "../../test/render";
 import { clearCredentials, setCredentials } from "../../api/auth";
-import { createAgentFailure, FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN, SetupPage, sourceName } from "./SetupPage";
+import { createAgentFailure, FIRST_AGENT_NEEDS_ADMIN_TOKEN, FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN, SetupPage, sourceName } from "./SetupPage";
 import { ApiError } from "../../api/client";
 import { STEP_KEY } from "./redirect";
 
@@ -146,19 +146,19 @@ describe("SetupPage messages", () => {
     await screen.findByText("Admin token: not configured");
     goTo("Agent identity");
     fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
-    expect((await screen.findByRole("status")).textContent).toBe("Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode.");
+    expect((await screen.findByRole("status")).textContent).toBe("Set MCPR_ADMIN_TOKEN before creating the first agent; creating one ends dev mode.");
   });
 
   it("a Create agent 409 follows the backend's curated detail, and names both causes when nothing says which (HS-U-019)", () => {
     const e409 = (detail?: string) => new ApiError(409, "/api/v1/principals", "admin", detail);
     const known = { ...STATUS, hasAdminToken: true };
     // The curated detail wins over a stale or missing status.
-    expect(createAgentFailure("a", e409(FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN), known)).toBe(FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN);
+    expect(createAgentFailure("a", e409(FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN), known)).toBe(FIRST_AGENT_NEEDS_ADMIN_TOKEN);
     expect(createAgentFailure("a", e409("agentId already exists"), null)).toBe("An agent “a” already exists. Choose another id.");
     // No detail and no status: both explanations, not a guess.
     const both = createAgentFailure("a", e409(), null);
     expect(both).toContain("already exists");
-    expect(both).toContain(FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN);
+    expect(both).toContain(FIRST_AGENT_NEEDS_ADMIN_TOKEN);
   });
 
   it("the health check reports unloaded models instead of a vacuous ok", async () => {

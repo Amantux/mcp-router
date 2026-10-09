@@ -70,7 +70,7 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
       setMaxServers("");
       onCreated(created);
     } catch (e) {
-      notify.error(`Create principal “${id}”`, e);
+      notify.error(`Create agent “${id}”`, e);
     } finally {
       setPending(false);
     }
@@ -86,7 +86,7 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
           }}
         >
           <DialogBody>
-            <DialogTitle>Create agent principal</DialogTitle>
+            <DialogTitle>Create agent</DialogTitle>
             <DialogContent className={s.form}>
               <Field label="Agent id" required validationMessage={error}>
                 <Input value={agentId} onChange={(_, d) => setAgentId(d.value)} />
@@ -100,14 +100,14 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
               <Field label="Max distinct servers per request" hint="Blank = no limit." validationMessage={serversError}>
                 <Input type="number" min={1} max={1000} value={maxServers} onChange={(_, d) => setMaxServers(d.value)} />
               </Field>
-              <Caption1>New principals can't use any tool until you add an allow rule (deny by default).</Caption1>
+              <Caption1>A new agent can't use any tool or skill until you add an allow rule (deny by default).</Caption1>
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={onClose} disabled={pending}>
                 Cancel
               </Button>
               <Button appearance="primary" type="submit" disabled={pending}>
-                {pending ? "Creating…" : "Create principal"}
+                {pending ? "Creating…" : "Create agent"}
               </Button>
             </DialogActions>
           </DialogBody>
@@ -410,7 +410,7 @@ export function PolicyPage() {
   const s = useStyles();
   const c = useCommonStyles();
   const notify = useNotify();
-  const principals = useLoader("Load principals", (sig) => listPrincipals(sig), []);
+  const principals = useLoader("Load agents", (sig) => listPrincipals(sig), []);
   const rules = useLoader("Load policy rules", (sig) => listRules(sig), []);
   const servers = useLoader("Load servers", (sig) => listServers(sig), []);
   const sources = useLoader("Load skill sources", (sig) => listSkillSources(sig), []);
@@ -504,31 +504,31 @@ export function PolicyPage() {
         meta={<Caption1 className={c.muted}>Deny by default — an agent can only use tools an allow rule covers.</Caption1>}
         actions={
           <Button appearance="primary" icon={<AddRegular />} onClick={() => setCreateOpen(true)}>
-            Create principal
+            Create agent
           </Button>
         }
       />
       <div className={s.section}>
-        <Subtitle2 as="h2">Principals</Subtitle2>
+        <Subtitle2 as="h2">Agents</Subtitle2>
         {principals.data && <Caption1 className={c.muted}>{fmtInt(plist.length)}</Caption1>}
       </div>
       {principals.loading && !principals.data ? (
-        <LoadingRow label="Loading principals…" />
+        <LoadingRow label="Loading agents…" />
       ) : principals.failed && !principals.data ? (
-        <ErrorState what="Principals" onRetry={principals.reload} />
+        <ErrorState what="Agents" onRetry={principals.reload} />
       ) : plist.length === 0 && !principals.failed ? (
         <EmptyState
           icon={<ShieldKeyholeRegular />}
-          title="No agent principals yet"
-          body="Create a principal to issue an API key for an agent. Until keys exist, gateway auth is disabled (dev mode only)."
-          action={<Button onClick={() => setCreateOpen(true)}>Create principal</Button>}
+          title="No agents yet"
+          body="Create an agent to issue its API key. Dev mode (no gateway auth) is on only while no admin token, agent keys or agents are configured; creating an agent ends it."
+          action={<Button onClick={() => setCreateOpen(true)}>Create agent</Button>}
         />
       ) : (
-        <Table size="small" aria-label="Principals">
+        <Table size="small" aria-label="Agents">
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Agent id</TableHeaderCell>
-              <TableHeaderCell>Status</TableHeaderCell>
+              <TableHeaderCell>Enabled</TableHeaderCell>
               <TableHeaderCell className={c.num}>Max tools</TableHeaderCell>
               <TableHeaderCell className={c.num}>Max skills</TableHeaderCell>
               <TableHeaderCell className={c.num}>Max servers</TableHeaderCell>
@@ -548,7 +548,6 @@ export function PolicyPage() {
                     aria-label={`${p.enabled ? "Disable" : "Enable"} ${p.agentId}`}
                     checked={p.enabled}
                     disabled={acting}
-                    label={p.enabled ? "enabled" : "disabled"}
                     onChange={(_, d) => (d.checked ? setEnabled(p, true) : setPAction({ kind: "disable", p }))}
                   />
                 </TableCell>
@@ -639,7 +638,7 @@ export function PolicyPage() {
       ) : rules.failed && !rules.data ? (
         <ErrorState what="Policy rules" onRetry={rules.reload} />
       ) : rlist.length === 0 && !rules.failed ? (
-        <Caption1>No allow rules — every agent is currently denied all tools.</Caption1>
+        <Caption1>No allow rules — every agent is currently denied all tools and skills. Add a rule above to allow access.</Caption1>
       ) : (
         <Table size="small" aria-label="Rules">
           <TableHeader>

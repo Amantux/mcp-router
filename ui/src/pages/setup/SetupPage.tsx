@@ -82,8 +82,10 @@ function loadStep(): number {
   }
 }
 
-/** D11: the backend's 409 for a first principal in dev mode without MCPR_ADMIN_TOKEN. */
+/** D11: the backend's 409 detail (verbatim, for matching) for a first principal in dev mode without MCPR_ADMIN_TOKEN. */
 export const FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode.";
+/** What the wizard shows for it: the same advice in the UI's word, "agent" (HS-U-006). */
+export const FIRST_AGENT_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first agent; creating one ends dev mode.";
 
 /** Curated wizard message for a failed call: never the raw `HTTP 409 from /api/…`. */
 export function describeFailure(what: string, e: unknown): string {
@@ -101,11 +103,11 @@ const AGENT_EXISTS = "agentId already exists"; // routes_policy.py create_princi
 export function createAgentFailure(agentId: string, e: unknown, status: SetupStatus | null): string {
   if (!(e instanceof ApiError) || e.status !== 409) return describeFailure("Create agent", e);
   const exists = `An agent “${agentId}” already exists. Choose another id.`;
-  if (e.conflict === FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN) return FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN;
+  if (e.conflict === FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN) return FIRST_AGENT_NEEDS_ADMIN_TOKEN;
   if (e.conflict === AGENT_EXISTS) return exists;
   if (e.conflict) return describeFailure("Create agent", e);
-  if (status) return status.hasAdminToken ? exists : FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN;
-  return `Create agent failed (HTTP 409). Either an agent “${agentId}” already exists (choose another id), or this is dev mode: ${FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN}`;
+  if (status) return status.hasAdminToken ? exists : FIRST_AGENT_NEEDS_ADMIN_TOKEN;
+  return `Create agent failed (HTTP 409). Either an agent “${agentId}” already exists (choose another id), or this is dev mode: ${FIRST_AGENT_NEEDS_ADMIN_TOKEN}`;
 }
 
 export function SetupPage() {

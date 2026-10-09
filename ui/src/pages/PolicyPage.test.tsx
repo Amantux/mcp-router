@@ -29,7 +29,7 @@ describe("PolicyPage", () => {
     expect(within(toolRow).getByText("github")).toBeTruthy();
     expect(within(skillRow).getByText("skill")).toBeTruthy();
     expect(within(skillRow).getByText("team-skills")).toBeTruthy();
-    const principals = screen.getByRole("table", { name: "Principals" });
+    const principals = screen.getByRole("table", { name: "Agents" });
     const row = within(principals).getAllByRole("row")[1];
     expect(within(row).getByText("no limit")).toBeTruthy(); // maxServers null
     expect(within(row).getByText("3")).toBeTruthy(); // maxSkills
@@ -60,12 +60,12 @@ describe("PolicyPage", () => {
     const user = userEvent.setup();
     const { calls } = routes({ "POST /api/v1/principals": (b) => ({ json: { ...PRINCIPAL, ...(b as object), id: "p2", api_key: "key-once" } }) });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
-    await screen.findByRole("table", { name: "Principals" });
-    await user.click(screen.getAllByRole("button", { name: "Create principal" })[0]);
+    await screen.findByRole("table", { name: "Agents" });
+    await user.click(screen.getAllByRole("button", { name: "Create agent" })[0]);
     const dlg = await screen.findByRole("dialog");
     await user.type(within(dlg).getByRole("textbox", { name: /Agent id/ }), "triage-bot");
     await user.type(within(dlg).getByRole("spinbutton", { name: /Max distinct servers/ }), "2");
-    await user.click(within(dlg).getByRole("button", { name: "Create principal" }));
+    await user.click(within(dlg).getByRole("button", { name: "Create agent" }));
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ agentId: "triage-bot", maxTools: 8, maxServers: 2, maxSkills: 3 }));
     expect(await screen.findByRole("alertdialog")).toBeTruthy(); // the one-time key reveal
   });
@@ -79,8 +79,8 @@ describe("PolicyPage", () => {
       "GET /api/v1/skill-sources": () => ({ json: [] }),
     });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
-    expect(await screen.findByText("No agent principals yet")).toBeTruthy();
-    expect(screen.getByText(/No allow rules — every agent is currently denied all tools/)).toBeTruthy();
+    expect(await screen.findByText("No agents yet")).toBeTruthy();
+    expect(screen.getByText(/No allow rules — every agent is currently denied all tools and skills. Add a rule above/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Add rule" }));
     expect(await screen.findByText("Choose the agent this rule allows.")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
@@ -92,8 +92,8 @@ describe("PolicyPage", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     routes({ "POST /api/v1/principals": (b) => ({ json: { ...PRINCIPAL, ...(b as object), id: "p2", api_key: "key-once" } }) });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
-    await screen.findByRole("table", { name: "Principals" });
-    await user.click(screen.getAllByRole("button", { name: "Create principal" })[0]);
+    await screen.findByRole("table", { name: "Agents" });
+    await user.click(screen.getAllByRole("button", { name: "Create agent" })[0]);
     const dlg = await screen.findByRole("dialog");
     await user.type(within(dlg).getByRole("textbox", { name: /Agent id/ }), "triage-bot{Enter}");
     const reveal = await screen.findByRole("alertdialog");
