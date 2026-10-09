@@ -516,8 +516,6 @@ export interface ToolFunnel {
   successRate: number | null;
   avgRank: number | null;
   exposedTokens: number;
-  // CONTRACT (guessed, S2f): rows gain kind.
-  kind?: "tool" | "skill";
 }
 
 export type ToolFunnelSort =
@@ -582,6 +580,8 @@ export interface WastedTool {
   selected: number;
   selectionRate: number | null;
   exposedTokens: number;
+  // CONTRACT (guessed, S2f): rows gain kind.
+  kind?: "tool" | "skill";
 }
 
 export interface StaleTool {

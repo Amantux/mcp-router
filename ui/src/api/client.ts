@@ -23,6 +23,7 @@ import type {
   AnalyticsSuggestions,
   AnalyticsWindow,
   ToolAnalytics,
+  ToolFunnel,
   ToolFunnelPage,
   ToolFunnelSort,
   BudgetClamp,
@@ -624,7 +625,7 @@ export async function listToolFunnels(
     // CONTRACT (guessed, S2f): GET /analytics/tools?kind=tool|skill; omitted = all kinds.
     query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset, kind: q.kind && q.kind !== "all" ? q.kind : undefined },
   });
-  const page = { ...raw, ...toPage(raw, q.limit, q.offset) };
+  const page: ToolFunnelPage = { ...raw, ...toPage<ToolFunnel>(raw, q.limit, q.offset) };
   // Client-side fallback for a backend that ignores ?kind=: rows without a kind count as tools.
   if (q.kind && q.kind !== "all") page.items = page.items.filter((r) => (r.kind ?? "tool") === q.kind);
   return page;
