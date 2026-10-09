@@ -297,3 +297,26 @@ def test_bundle_duplicate_names_is_409(env: Env) -> None:
     r = env.client.get("/api/v1/skills/bundle", headers=H_ALICE)
     assert r.status_code == 409, r.text
     assert "share a name" in r.json()["detail"]
+
+
+def test_admin_cannot_impersonate_disabled_agent(env: Env) -> None:
+    from sqlalchemy import update
+
+    from mcprouter.api.routes_execute import AGENT_DISABLED
+    from mcprouter.models import AgentPrincipal
+
+    env.route("alice", env.a)
+    with env.db() as s:
+        s.execute(
+            update(AgentPrincipal).where(AgentPrincipal.agent_id == "alice").values(enabled=False)
+        )
+        s.commit()
+    for r in (
+        env.client.post(
+            f"/api/v1/skills/{env.a}/activate", json={"agentId": "alice"}, headers=H_ADMIN
+        ),
+        env.client.get(f"/api/v1/skills/{env.a}/resources/guide.md?agentId=alice", headers=H_ADMIN),
+        env.client.get("/api/v1/skills/bundle?agentId=alice", headers=H_ADMIN),
+    ):
+        assert (r.status_code, r.json()["detail"]) == (403, AGENT_DISABLED), r.text
+    assert env.rows() == []

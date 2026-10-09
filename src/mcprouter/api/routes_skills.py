@@ -175,7 +175,11 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 from pydantic.alias_generators import to_camel  # noqa: E402
 
 from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of  # noqa: E402
-from mcprouter.api.routes_execute import AGENT_ID_PATTERN, _principal_row  # noqa: E402
+from mcprouter.api.routes_execute import (  # noqa: E402
+    AGENT_DISABLED,
+    AGENT_ID_PATTERN,
+    _principal_row,
+)
 from mcprouter.execution.manager import INITIATED_BY_ADMIN  # noqa: E402
 from mcprouter.gateway.skills import SkillAccessError, SkillExposure  # noqa: E402
 from mcprouter.models import RoutingDecisionRecord  # noqa: E402
@@ -263,6 +267,8 @@ async def _acting_agent(request: Request, named: str | None) -> tuple[str, str |
         row = await anyio.to_thread.run_sync(_principal_row, request, named)
         if row is None:
             raise HTTPException(status_code=404, detail="Unknown agent.")
+        if not row.enabled:
+            raise HTTPException(status_code=403, detail=AGENT_DISABLED)
         return row.agent_id, INITIATED_BY_ADMIN
     principal = await anyio.to_thread.run_sync(get_principal, request)  # 401 on bad key
     if named and named != principal.agent_id:

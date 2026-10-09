@@ -125,6 +125,9 @@ def _out(res: ExecutionResult) -> ExecuteOut:
     )
 
 
+AGENT_DISABLED = "Agent is disabled."
+
+
 def _principal_row(request: Request, agent_id: str) -> AgentPrincipal | None:
     _, factory = security_of(request)
     with factory() as s:
@@ -161,6 +164,8 @@ async def execute_tool(
         principal = await anyio.to_thread.run_sync(_principal_row, request, named)
         if principal is None:
             raise HTTPException(status_code=404, detail="Unknown agent.")
+        if not principal.enabled:
+            raise HTTPException(status_code=403, detail=AGENT_DISABLED)
         log.info(
             "execution.admin_impersonation agent=%s tool=%s",
             scrub_log(principal.agent_id),

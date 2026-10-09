@@ -401,7 +401,13 @@ def test_impersonating_a_disabled_principal_is_denied(
         json={"arguments": OK_ARGS},
         headers=H_ADMIN,
     )
-    assert r.status_code == 200 and r.json()["status"] == "denied" and inv.calls == []
+    # Decision 4: refused at the boundary with a curated 403, nothing executed/audited.
+    from mcprouter.api.routes_execute import AGENT_DISABLED
+    from mcprouter.models import ExecutionRecord
+
+    assert (r.status_code, r.json()["detail"]) == (403, AGENT_DISABLED) and inv.calls == []
+    with sec_db() as s:
+        assert s.query(ExecutionRecord).count() == 0
 
 
 def test_overlong_route_request_id_is_dropped_not_refused(
