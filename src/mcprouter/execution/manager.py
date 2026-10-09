@@ -48,10 +48,11 @@ from mcprouter.execution.models import (
     APPROVAL_PENDING,
     ApprovalRequest,
 )
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
+from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.execution.redaction import redact, redact_value, scrub_log
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.interfaces import ToolCallResult, ToolInvocationError, ToolInvoker
+from mcprouter.limits import LimiterRegistry, make_limiters
 from mcprouter.models import (
     AgentPrincipal,
     ExecutionRecord,
@@ -169,7 +170,7 @@ class ExecutionManager:
         invoker: ToolInvoker,
         *,
         timeout_s: float,
-        limiter: SlidingWindowLimiter,
+        limiter: KeyedLimiter,
         clock: Callable[[], datetime] = utcnow,
         approval_ttl: timedelta = APPROVAL_TTL,
     ) -> None:
@@ -182,13 +183,21 @@ class ExecutionManager:
 
     @classmethod
     def from_settings(
-        cls, settings: Settings, session_factory: sessionmaker[Session], invoker: ToolInvoker
+        cls,
+        settings: Settings,
+        session_factory: sessionmaker[Session],
+        invoker: ToolInvoker,
+        *,
+        limiters: LimiterRegistry | None = None,
     ) -> ExecutionManager:
+        """`limiters` = the app's registry (app.state.limiters, D10); a private
+        one when omitted, so the budget is never shared across apps."""
+        registry = limiters if limiters is not None else make_limiters(settings)
         return cls(
             session_factory,
             invoker,
             timeout_s=settings.default_tool_timeout_s,
-            limiter=SlidingWindowLimiter(settings.rate_limit_per_agent_per_min, 60.0),
+            limiter=registry.surface("execute"),
         )
 
     # ----------------------------------------------------------- loading
