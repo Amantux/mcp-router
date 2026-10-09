@@ -92,3 +92,41 @@ def test_hnsw_index_serves_a_nearest_neighbour_query(db: sessionmaker[Session]) 
         )
         s.rollback()
     assert "ix_mcp_tools_embedding_hnsw" in plan, plan
+
+
+# ------------------------------------------------------------------ P-604
+def test_dedup_upsert_is_set_based(db: sessionmaker[Session]) -> None:
+    """200 pairs: one prior SELECT + one INSERT ... ON CONFLICT, on the first
+    run (all created) and on a re-run (all refreshed); decided pairs skipped."""
+    from mcprouter.dedup.detect import _bulk_upsert, _Pair
+
+    engine = db.kw["bind"]
+    pairs = [_Pair(f"a{i:03d}", f"b{i:03d}", 0.9, "why", None) for i in range(200)]
+    with db() as s:
+        with count_statements(engine) as first:
+            assert _bulk_upsert(s, pairs, refresh_preferred=True) == (200, 0, 0)
+        s.execute(
+            text("UPDATE duplicate_suggestions SET status = 'dismissed' WHERE tool_a_id = 'a000'")
+        )
+        with count_statements(engine) as second:
+            assert _bulk_upsert(s, pairs, refresh_preferred=True) == (0, 199, 1)
+        s.rollback()
+    assert len(first) <= 3, first
+    assert len(second) <= 3, second
+
+
+def test_dedup_statement_count_does_not_grow_with_pairs(db: sessionmaker[Session]) -> None:
+    engine = db.kw["bind"]
+    counts = []
+    for n in (5, 20):  # 10 vs 190 pairs
+        with db() as s:
+            _seed_identical_tools(s, n)
+            with count_statements(engine) as seen:
+                run_dedup(s)
+            s.rollback()
+            counts.append(len(seen))
+        with db() as s:
+            s.execute(text("DELETE FROM mcp_servers WHERE name = 'dupsrv'"))
+            s.execute(text("DELETE FROM duplicate_suggestions"))
+            s.commit()
+    assert counts[0] == counts[1], counts

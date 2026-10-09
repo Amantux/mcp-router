@@ -40,7 +40,7 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import Table, literal_column, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -199,46 +199,15 @@ def run_dedup(
         ).all()
     }
     labels = {tid: f"{server_names.get(t.server_id, '?')}/{t.name}" for tid, t in tools.items()}
-    existing = {
-        (s.tool_a_id, s.tool_b_id): s
-        for s in session.scalars(
-            select(DuplicateSuggestion).where(DuplicateSuggestion.tool_a_id.in_(ids))
-        )
-    }
 
-    created = refreshed = decided = 0
+    batch: list[_Pair] = []
     for r in rows:
         score = score_pair(tools[r.a_id], tools[r.b_id], float(r.cosine), labels)
-        if score.combined < threshold:
-            continue
-        prior = existing.get((r.a_id, r.b_id))
-        if prior is not None:
-            if prior.status == "open":
-                prior.similarity = score.combined
-                prior.rationale = score.rationale
-                prior.preferred_tool_id = score.preferred_tool_id
-                refreshed += 1
-            else:
-                decided += 1
-            continue
-        res = session.execute(
-            insert(DuplicateSuggestion)
-            .values(
-                id=str(uuid.uuid4()),
-                tool_a_id=r.a_id,
-                tool_b_id=r.b_id,
-                similarity=score.combined,
-                rationale=score.rationale,
-                preferred_tool_id=score.preferred_tool_id,
-                status="open",
-                created_at=utcnow(),
+        if score.combined >= threshold:
+            batch.append(
+                _Pair(r.a_id, r.b_id, score.combined, score.rationale, score.preferred_tool_id)
             )
-            .on_conflict_do_nothing(index_elements=["tool_a_id", "tool_b_id"])
-            .returning(DuplicateSuggestion.id)
-        )
-        # RETURNING (not rowcount: ORM-enabled insert reports -1) — no row
-        # back means a concurrent run inserted this pair first.
-        created += int(res.scalar_one_or_none() is not None)
+    created, refreshed, decided = _bulk_upsert(session, batch, refresh_preferred=True)
     session.flush()
     return DedupRun(
         pairs_considered=len(rows) + skill_run.pairs_considered,
@@ -303,38 +272,83 @@ def score_skill_pair(a: SkillRecord, b: SkillRecord, cosine: float) -> float:
     return W_COSINE * cosine + W_NAME * nj + W_SCHEMA * jaccard(_skill_traits(a), _skill_traits(b))
 
 
-def _upsert(
-    session: Session, a_ref: str, b_ref: str, combined: float, rationale: str, counts: list[int]
-) -> None:
-    """counts = [created, refreshed, decided]; never touches either side's state."""
-    prior = session.scalars(
-        select(DuplicateSuggestion).where(
-            DuplicateSuggestion.tool_a_id == a_ref, DuplicateSuggestion.tool_b_id == b_ref
+@dataclass(frozen=True)
+class _Pair:
+    a_ref: str
+    b_ref: str
+    similarity: float
+    rationale: str
+    preferred: str | None
+
+
+_SUGGESTIONS: Table = DuplicateSuggestion.__table__  # type: ignore[assignment]
+_UPSERT_CHUNK = 2000  # rows per INSERT: 7 binds each stays far below 65,535
+
+
+def _bulk_upsert(
+    session: Session, pairs: list[_Pair], *, refresh_preferred: bool
+) -> tuple[int, int, int]:
+    """(created, refreshed, skipped_decided) in ONE prior SELECT plus one
+    INSERT ... ON CONFLICT DO UPDATE ... WHERE status='open' per 2,000 pairs.
+
+    Decided pairs (accepted/dismissed) are filtered out up front and the
+    WHERE clause protects them from a concurrent decision as well: a human
+    decision is never re-litigated. `xmax = 0` in RETURNING tells a fresh
+    insert from an update. Never touches either side's enabled state."""
+    if not pairs:
+        return 0, 0, 0
+    session.flush()  # expire_all below must never drop the caller's pending changes
+    keys = list({(p.a_ref, p.b_ref) for p in pairs})
+    status = {
+        (a, b): st
+        for a, b, st in session.execute(
+            select(
+                DuplicateSuggestion.tool_a_id,
+                DuplicateSuggestion.tool_b_id,
+                DuplicateSuggestion.status,
+            ).where(tuple_(DuplicateSuggestion.tool_a_id, DuplicateSuggestion.tool_b_id).in_(keys))
+        ).all()
+    }
+    decided = sum(1 for p in pairs if status.get((p.a_ref, p.b_ref), "open") != "open")
+    todo = [p for p in pairs if status.get((p.a_ref, p.b_ref), "open") == "open"]
+    created = refreshed = 0
+    now = utcnow()
+    for i in range(0, len(todo), _UPSERT_CHUNK):
+        chunk = todo[i : i + _UPSERT_CHUNK]
+        stmt = insert(_SUGGESTIONS).values(
+            [
+                {
+                    "id": str(uuid.uuid4()),
+                    "tool_a_id": p.a_ref,
+                    "tool_b_id": p.b_ref,
+                    "similarity": p.similarity,
+                    "rationale": p.rationale,
+                    "preferred_tool_id": p.preferred,
+                    "status": "open",
+                    "created_at": now,
+                }
+                for p in chunk
+            ]
         )
-    ).first()
-    if prior is not None:
-        if prior.status == "open":
-            prior.similarity, prior.rationale = combined, rationale
-            counts[1] += 1
-        else:
-            counts[2] += 1
-        return
-    res = session.execute(
-        insert(DuplicateSuggestion)
-        .values(
-            id=str(uuid.uuid4()),
-            tool_a_id=a_ref,
-            tool_b_id=b_ref,
-            similarity=combined,
-            rationale=rationale,
-            preferred_tool_id=None,
-            status="open",
-            created_at=utcnow(),
-        )
-        .on_conflict_do_nothing(index_elements=["tool_a_id", "tool_b_id"])
-        .returning(DuplicateSuggestion.id)
-    )
-    counts[0] += int(res.scalar_one_or_none() is not None)
+        updates: dict[str, Any] = {
+            "similarity": stmt.excluded.similarity,
+            "rationale": stmt.excluded.rationale,
+        }
+        if refresh_preferred:
+            updates["preferred_tool_id"] = stmt.excluded.preferred_tool_id
+        upsert: Any = stmt.on_conflict_do_update(
+            index_elements=["tool_a_id", "tool_b_id"],
+            set_=updates,
+            where=_SUGGESTIONS.c.status == "open",
+        ).returning(literal_column("xmax = 0").label("inserted"))
+        for (inserted,) in session.execute(upsert).all():
+            if inserted:
+                created += 1
+            else:
+                refreshed += 1
+    # Core statements bypass the identity map: drop any stale loaded rows.
+    session.expire_all()
+    return created, refreshed, decided
 
 
 def _run_skill_dedup(
@@ -345,7 +359,7 @@ def _run_skill_dedup(
     cross, t2 = _capped(session, _CROSS_SQL, {"threshold": threshold}, max_pairs)
     ids = {r.a_id for r in pairs} | {r.b_id for r in pairs} | {r.k_id for r in cross}
     skills = {k.id: k for k in session.scalars(select(SkillRecord).where(SkillRecord.id.in_(ids)))}
-    counts = [0, 0, 0]
+    batch: list[_Pair] = []
     for r in pairs:
         a, b = skills[r.a_id], skills[r.b_id]
         combined = score_skill_pair(a, b, float(r.cosine))
@@ -358,13 +372,14 @@ def _run_skill_dedup(
             f"{W_NAME}*name + {W_SCHEMA}*allowed-tools/resource-kinds; "
             "no preferred skill: insufficient evidence."
         )
-        _upsert(session, a_ref, b_ref, combined, why, counts)
+        batch.append(_Pair(a_ref, b_ref, combined, why, None))
     for r in cross:
         k = skills[r.k_id]
         why = (
             f"cross-kind: tool and skill in domain '{k.domain}' with embedding cosine "
             f"{float(r.cosine):.2f} — a skill may wrap or duplicate this tool."
         )
-        _upsert(session, r.t_id, skill_ref(k.id), float(r.cosine), why, counts)
-    session.flush()
-    return DedupRun(len(pairs) + len(cross), counts[0], counts[1], counts[2], t1 or t2)
+        batch.append(_Pair(r.t_id, skill_ref(k.id), float(r.cosine), why, None))
+    # Skill-side rows never carry a preferred side; a refresh leaves it alone.
+    created, refreshed, decided = _bulk_upsert(session, batch, refresh_preferred=False)
+    return DedupRun(len(pairs) + len(cross), created, refreshed, decided, t1 or t2)
