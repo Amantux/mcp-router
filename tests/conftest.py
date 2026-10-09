@@ -15,6 +15,9 @@ from sqlalchemy import text
 from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.settings import Settings
 
+# Shared fixture modules (tests/support/). sec_db lives in support.execution.
+pytest_plugins = ["tests.support.execution"]
+
 TEST_DB_URL = os.environ.get(
     "MCPR_DATABASE_URL",
     "postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter",

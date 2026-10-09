@@ -14,7 +14,10 @@ from mcprouter.gateway.server import ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TO
 from mcprouter.gateway.skills import Activation, SkillAccessError
 from mcprouter.interfaces import RoutedTool, RouteResult
 from mcprouter.skills.serve import ResourceContent
-from tests.test_gateway_mcp import _ctx, sec_db_fixture, world  # noqa: F401 — fixtures
+from tests.support.gateway import _ctx, world  # noqa: F401 — fixtures
+from tests.support.gateway_skills import (
+    _route,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -61,11 +64,6 @@ class StubExposure:
         if path != "ref.md":
             raise SkillAccessError("invalid_path", "bad path ../../etc/passwd")
         return ResourceContent(path, "text/plain", text="hello")
-
-
-def _route(rid: str, skills: list[str]) -> RouteResult:
-    tools = [RoutedTool(s, "", "", 1.0, kind="skill") for s in skills]
-    return RouteResult(rid, tools, False, 1.0, "m")
 
 
 @pytest.fixture()

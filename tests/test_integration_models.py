@@ -14,9 +14,9 @@ from mcprouter.mcpclient import ToolDescriptor
 from mcprouter.models import DuplicateSuggestion, MCPToolRecord, ServerCredentialRecord
 from mcprouter.registry.catalog import ClassificationUpdate, auto_classify, update_classification
 from mcprouter.registry.classify import RuleBasedClassifier
+from tests.support.registry_fixtures import make_server, make_tool
 
 from .conftest import requires_db
-from .test_registry_fixtures import make_server, make_tool
 
 SF = sessionmaker[Session]
 

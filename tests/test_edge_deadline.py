@@ -10,7 +10,7 @@ import pytest
 from mcprouter.inference import serve
 from mcprouter.inference.adapters import DeadlineDecisionModel
 from mcprouter.inference.errors import InferenceError
-from tests.edge_app_helpers import AUTH, PATH, edge_client
+from tests.support.edge_app import AUTH, PATH, edge_client
 
 
 class _Wedged:

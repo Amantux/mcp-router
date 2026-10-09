@@ -12,9 +12,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.api.app import create_app
 from mcprouter.models import MCPToolRecord, ToolVersionRecord
 from mcprouter.settings import Settings
+from tests.support.registry_fixtures import make_server, make_tool, props_schema, unit_vec
 
 from .conftest import requires_db
-from .test_registry_fixtures import make_server, make_tool, props_schema, unit_vec
 
 pytestmark = requires_db
 

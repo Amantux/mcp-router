@@ -26,9 +26,9 @@ from sqlalchemy import select, update
 from mcprouter.gateway.server import ACTIVATE_SKILL_TOOL, META_TOOL, READ_SKILL_RESOURCE_TOOL
 from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult
 from mcprouter.models import ExecutionRecord, SkillRecord, SkillSourceRecord
-from tests.test_execution_support import add_rule
-from tests.test_gateway_mcp import _client, sec_db_fixture, world  # noqa: F401 — fixtures
-from tests.test_skills_exposure_activation import _exp, _seed
+from tests.support.execution import add_rule
+from tests.support.gateway import _client, world  # noqa: F401 — fixtures
+from tests.support.skills_exposure import _exp, _seed
 
 pytestmark = pytest.mark.anyio
 

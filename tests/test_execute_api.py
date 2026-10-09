@@ -25,16 +25,15 @@ from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.models import ExecutionRecord
 from mcprouter.settings import Settings
-
-from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import (
+from tests.support.execution import (
     KEYS,
     Catalog,
     FakeInvoker,
     add_rule,
-    sec_db_fixture,  # noqa: F401 — registers the fixture
     seed,
 )
+
+from .conftest import TEST_DB_URL, requires_db
 
 pytestmark = requires_db
 

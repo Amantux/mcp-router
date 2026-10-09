@@ -18,9 +18,9 @@ from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_s
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.settings import Settings
+from tests.support.routing_fakes import ExplodingDecisionModel, FakeHashEmbedder
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_routing_fakes import ExplodingDecisionModel, FakeHashEmbedder
 
 
 def _case(**kw: object) -> str:

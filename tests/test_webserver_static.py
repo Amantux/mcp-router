@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from mcprouter.api.static import mount_ui
 from mcprouter.gateway.server import gateway_transport_security
 from mcprouter.settings import _host_list
-from tests.edge_app_helpers import AUTH, edge_client
+from tests.support.edge_app import AUTH, edge_client
 
 
 @pytest.fixture

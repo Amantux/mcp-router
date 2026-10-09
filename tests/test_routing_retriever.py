@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import Retriever
 from mcprouter.routing.retriever import HybridRetriever
+from tests.support.routing_fakes import FakeHashEmbedder, add_server, add_tool
 
 from .conftest import requires_db
-from .test_routing_fakes import FakeHashEmbedder, add_server, add_tool
 
 pytestmark = requires_db
 

@@ -27,9 +27,9 @@ from mcprouter.analytics.rollup import recompute_day
 from mcprouter.analytics.window import midnight, parse_window
 from mcprouter.models import MCPServerRecord, MCPToolRecord
 from mcprouter.routing.pipeline import CACHED_MARKER, SIMULATED_MARKER
+from tests.support.analytics import NOW, World, add_decision, add_exec, build_world
 
 from .conftest import requires_db
-from .test_analytics_support import NOW, World, add_decision, add_exec, build_world
 
 pytestmark = requires_db
 

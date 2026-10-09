@@ -7,25 +7,25 @@ from collections.abc import Iterator
 from datetime import datetime, timedelta
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY, generate_latest
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.analytics.window import live_horizon
-from mcprouter.api import deps_auth
-from mcprouter.api.deps_auth import configure_security
-from mcprouter.api.routes_analytics import get_now, install_analytics
+from mcprouter.api.routes_analytics import install_analytics
 from mcprouter.settings import Settings
+from tests.support.analytics import NOW, World, add_decision, build_world
+from tests.support.analytics_app import (
+    ADMIN,
+    H_ADMIN,
+    _app,
+)
+from tests.support.execution import KEYS
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_analytics_support import NOW, World, add_decision, build_world
-from .test_execution_support import KEYS, sec_db_fixture  # noqa: F401 — registers the fixture
 
 pytestmark = requires_db
 
-ADMIN = "admin_" + "z" * 40
-H_ADMIN = {"Authorization": f"Bearer {ADMIN}"}
 
 ROUTES = [
     ("GET", "/api/v1/analytics/overview"),
@@ -35,18 +35,6 @@ ROUTES = [
     ("GET", "/api/v1/analytics/suggestions"),
     ("POST", "/api/v1/analytics/rollup"),
 ]
-
-
-def _app(factory: sessionmaker[Session]) -> FastAPI:
-    deps_auth._reset_dev_warning_for_tests()
-    app = FastAPI()
-    app.state.settings = Settings(database_url=TEST_DB_URL)
-    app.state.engine = factory.kw["bind"]
-    app.state.session_factory = factory
-    configure_security(app, {"MCPR_ADMIN_TOKEN": ADMIN})
-    install_analytics(app)
-    app.dependency_overrides[get_now] = lambda: NOW
-    return app
 
 
 @pytest.fixture()

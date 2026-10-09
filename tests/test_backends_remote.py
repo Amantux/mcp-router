@@ -26,6 +26,9 @@ from mcprouter.inference.remote_systemone import (
 from mcprouter.inference.urlcheck import InvalidEndpointError, validate_outbound_url
 from mcprouter.inference.validation import ValidatedDecisionModel
 from mcprouter.interfaces import BatchScoringDecisionModel, DecisionModel
+from tests.support.remote import (
+    _trickle_server,
+)
 
 KEY = "sk-test-Zq8vR2mN4pL6tY1wX3cB5dF7gH9jK0aS"
 EP = "https://api.aimlapi.com/v1/decisions"
@@ -593,39 +596,6 @@ def test_superscript_digit_headers_do_not_crash(hdr: str) -> None:
 
 
 # ------------------------------------------------------------ wave-3 FIX-2
-def _trickle_server(interval: float) -> tuple[str, Callable[[], None]]:
-    """A loopback server that trickles response HEADERS one byte per interval."""
-    import socket
-    import threading
-
-    srv = socket.socket()
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    stop = threading.Event()
-
-    def serve() -> None:
-        try:
-            conn, _ = srv.accept()
-        except OSError:
-            return
-        with conn:
-            conn.recv(65536)
-            data = b"HTTP/1.1 200 OK\r\nX-Slow: " + b"a" * 10_000
-            for b in data:
-                if stop.wait(interval):
-                    return
-                try:
-                    conn.sendall(bytes([b]))
-                except OSError:
-                    return
-
-    threading.Thread(target=serve, daemon=True).start()
-
-    def shutdown() -> None:
-        stop.set()
-        srv.close()
-
-    return f"http://127.0.0.1:{srv.getsockname()[1]}/v1/decisions", shutdown
 
 
 def test_trickled_headers_hit_the_hard_stop() -> None:

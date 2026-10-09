@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 
 from mcprouter.api import routes_decision
-from tests.edge_app_helpers import PATH, edge_client
+from tests.support.edge_app import PATH, edge_client
 
 MIB = 1024 * 1024
 

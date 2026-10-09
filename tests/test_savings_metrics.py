@@ -13,11 +13,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.analytics.economy import SavingsBasis
 from mcprouter.settings import Settings
+from tests.support.analytics import World, build_world
+from tests.support.analytics_app import ADMIN, _app
 
 from .conftest import requires_db
-from .test_analytics_api import ADMIN, _app
-from .test_analytics_support import World, build_world
-from .test_execution_support import sec_db_fixture  # noqa: F401 — registers the fixture
 
 H = {"Authorization": f"Bearer {ADMIN}"}
 

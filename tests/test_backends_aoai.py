@@ -376,7 +376,7 @@ def test_trickled_headers_hit_the_hard_stop(path: str, monkeypatch: pytest.Monke
     import time as _time
 
     from mcprouter.inference import aoai
-    from tests.test_backends_remote import _trickle_server
+    from tests.support.remote import _trickle_server
 
     url, shutdown = _trickle_server(0.3)
     monkeypatch.setattr(aoai, "_validate_aoai_endpoint", lambda _e: url.rstrip("/"))

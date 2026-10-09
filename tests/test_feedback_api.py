@@ -12,11 +12,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.analytics import feedback as fb
 from mcprouter.models import RouteFeedback
+from tests.support.analytics import NOW, add_decision
+from tests.support.analytics_app import ADMIN, _app
+from tests.support.execution import KEYS, seed
 
 from .conftest import requires_db
-from .test_analytics_api import ADMIN, _app
-from .test_analytics_support import NOW, add_decision
-from .test_execution_support import KEYS, sec_db_fixture, seed  # noqa: F401 — registers the fixture
 
 ALICE = {"Authorization": f"Bearer {KEYS['alice']}"}
 BOB = {"Authorization": f"Bearer {KEYS['bob']}"}

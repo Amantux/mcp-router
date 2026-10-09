@@ -19,8 +19,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.models import ExecutionRecord, RoutingDecisionRecord
-
-from .test_execution_support import Catalog, add_rule, seed
+from tests.support.execution import Catalog, add_rule, seed
 
 NOW = datetime.now(UTC).replace(microsecond=0)
 

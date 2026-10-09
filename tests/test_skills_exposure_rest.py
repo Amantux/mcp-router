@@ -27,11 +27,10 @@ from mcprouter.gateway.skills import SkillExposure
 from mcprouter.models import ExecutionRecord, RoutingDecisionRecord, SkillRecord
 from mcprouter.settings import Settings
 from mcprouter.skills.serve import manifest_entries
+from tests.support.execution import KEYS, FakeInvoker, seed
+from tests.support.skills_exposure import FakePolicy, _clone, _seed
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_execution_support import KEYS, FakeInvoker, seed
-from .test_execution_support import sec_db_fixture as sec_db_fixture  # registers fixture
-from .test_skills_exposure_activation import FakePolicy, _clone, _seed
 
 pytestmark = requires_db
 

@@ -15,9 +15,9 @@ from sqlalchemy import select, update
 
 from mcprouter.gateway.skills import SkillAccessError
 from mcprouter.models import ExecutionRecord, SkillRecord, SkillSourceRecord
-from tests.test_gateway_mcp import _ctx, sec_db_fixture, world  # noqa: F401 — fixtures
-from tests.test_gateway_skills import _route
-from tests.test_skills_exposure_activation import FakePolicy, _exp, _seed
+from tests.support.gateway import _ctx, world  # noqa: F401 — fixtures
+from tests.support.gateway_skills import _route
+from tests.support.skills_exposure import FakePolicy, _exp, _seed
 
 pytestmark = pytest.mark.anyio
 

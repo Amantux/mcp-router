@@ -17,9 +17,9 @@ from mcprouter.analytics.window import midnight
 from mcprouter.api.app import create_app
 from mcprouter.models import ToolStatsDaily
 from mcprouter.settings import Settings
+from tests.support.analytics import NOW, add_decision, add_exec, build_world
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_analytics_support import NOW, add_decision, add_exec, build_world
 
 SF = sessionmaker[Session]
 

@@ -29,9 +29,9 @@ from mcprouter.models import MCPServerRecord, MCPToolRecord
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever, ensure_keyword_index
 from mcprouter.routing.scope import AllowAllScope
+from tests.support.routing_fakes import FakeHashEmbedder, ScriptedDecisionModel
 
 from .conftest import requires_db
-from .test_routing_fakes import FakeHashEmbedder, ScriptedDecisionModel
 
 # Opt-in (MCPR_RUN_SLOW=1): wall-clock budgets flake on an oversubscribed
 # shared host, and a flaky default gate is worse than an explicit perf run.

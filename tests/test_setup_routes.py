@@ -10,7 +10,7 @@ from sqlalchemy import create_engine, delete, inspect
 
 from mcprouter.api.app import create_app
 from mcprouter.api.routes_setup import SETUP_COMPLETED_KEY, AppSetting
-from tests.test_edge_roundtrip import KEY, _drop_principal, _settings
+from tests.support.edge import KEY, _drop_principal, _settings
 
 ADMIN = "setup-admin-token-0123456789abcdef"
 S = _settings(decision_backend="deterministic", embedding_backend="hash")

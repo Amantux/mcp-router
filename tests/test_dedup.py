@@ -17,13 +17,14 @@ from mcprouter.dedup.review import accept_suggestion, dismiss_suggestion, list_s
 from mcprouter.models import DuplicateSuggestion, MCPToolRecord
 from mcprouter.registry.errors import InvalidArgument, InvalidTransition, SuggestionNotFound
 from mcprouter.registry.schema import init_registry
+from tests.support.dedup import (
+    V_A,
+    V_A2,
+    V_FAR,
+)
+from tests.support.registry_fixtures import make_server, make_tool, props_schema, unit_vec
 
 from .conftest import requires_db
-from .test_registry_fixtures import make_server, make_tool, props_schema, unit_vec
-
-V_A = unit_vec((0, 1.0))
-V_A2 = unit_vec((0, 0.99), (1, 0.14))  # cosine ~0.99 with V_A
-V_FAR = unit_vec((5, 1.0))  # orthogonal
 
 
 # ----------------------------------------------------------------- pure

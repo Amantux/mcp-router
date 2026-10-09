@@ -10,10 +10,10 @@ from mcprouter.dedup.detect import run_dedup
 from mcprouter.dedup.review import accept_suggestion, dismiss_suggestion, list_suggestions
 from mcprouter.models import DuplicateSuggestion, MCPToolRecord, SkillRecord, SkillSourceRecord
 from mcprouter.registry.schema import init_registry
+from tests.support.dedup import V_A, V_A2, V_FAR
+from tests.support.registry_fixtures import make_server, make_tool
 
 from .conftest import requires_db
-from .test_dedup import V_A, V_A2, V_FAR
-from .test_registry_fixtures import make_server, make_tool
 
 
 @pytest.fixture()

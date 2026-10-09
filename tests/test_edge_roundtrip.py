@@ -4,7 +4,6 @@ it returns exactly what the direct deterministic model returns."""
 
 from __future__ import annotations
 
-import dataclasses
 import threading
 import time
 from collections.abc import Iterator
@@ -13,17 +12,18 @@ from contextlib import contextmanager
 import httpx
 import pytest
 import uvicorn
-from sqlalchemy import delete
 
 from mcprouter.api.app import create_app
-from mcprouter.db import make_engine, make_session_factory
 from mcprouter.inference.deterministic import DeterministicDecisionModel
 from mcprouter.inference.remote_systemone import RemoteAuthError, RemoteSystemOneModel
-from mcprouter.models import AgentPrincipal
 from mcprouter.settings import Settings
+from tests.support.edge import (
+    KEY,
+    _drop_principal,
+    _settings,
+)
 
 PORT_A, PORT_LOOP = 8761, 8762
-KEY = "edge-test-key-0123456789abcdef"
 STATE = "user wants to read a file from the repository and summarize it"
 OPTS = ["read_file", "send_email", "delete_repo"]
 LEVELS = ["none", "low", "medium", "high"]
@@ -45,22 +45,6 @@ def _serve(settings: Settings, port: int) -> Iterator[None]:
         server.should_exit = True
         t.join(timeout=10)
         _drop_principal(settings)
-
-
-def _drop_principal(settings: Settings) -> None:
-    """The bootstrapped principal would take later tests out of dev mode."""
-    eng = make_engine(settings)
-    try:
-        with make_session_factory(eng)() as session:
-            session.execute(delete(AgentPrincipal).where(AgentPrincipal.agent_id == "edgebot"))
-            session.commit()
-    finally:
-        eng.dispose()
-
-
-def _settings(**kw: object) -> Settings:
-    base = Settings.from_env()
-    return dataclasses.replace(base, agent_keys=f"edgebot:{KEY}", **kw)  # type: ignore[arg-type]
 
 
 @pytest.fixture(scope="module")

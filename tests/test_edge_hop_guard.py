@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from mcprouter.inference.remote_systemone import DECISION_HOP, RemoteSystemOneModel
-from tests.edge_app_helpers import AUTH, PATH, edge_client
+from tests.support.edge_app import AUTH, PATH, edge_client
 
 BODY = {"state": "s", "questions": {"q0": {"type": "noul", "instructions": "x"}}}
 

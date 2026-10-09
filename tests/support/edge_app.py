@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mcprouter.api.app import create_app
-from tests.test_edge_roundtrip import KEY, _drop_principal, _settings
+from tests.support.edge import KEY, _drop_principal, _settings
 
 AUTH = {"Authorization": f"Bearer {KEY}"}
 PATH = "/api/v1/decision/systemone"

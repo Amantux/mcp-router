@@ -15,9 +15,14 @@ from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever
 from mcprouter.routing.scope import AllowAllScope
 from mcprouter.settings import Settings
+from tests.support.routing_fakes import (
+    FakeHashEmbedder,
+    ScriptedDecisionModel,
+    add_server,
+    add_tool,
+)
 
 from .conftest import TEST_DB_URL, requires_db
-from .test_routing_fakes import FakeHashEmbedder, ScriptedDecisionModel, add_server, add_tool
 
 
 class SleepingModel:

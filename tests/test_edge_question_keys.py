@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mcprouter.inference import serve
-from tests.edge_app_helpers import AUTH, PATH, edge_client
+from tests.support.edge_app import AUTH, PATH, edge_client
 
 
 def test_huge_key_is_422_without_echo() -> None:

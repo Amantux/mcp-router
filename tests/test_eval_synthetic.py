@@ -25,9 +25,13 @@ from mcprouter.eval.runner import compute_metrics, run_cases
 from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_scope_resolver
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever
+from tests.support.routing_fakes import (
+    ExplodingDecisionModel,
+    FakeHashEmbedder,
+    ScriptedDecisionModel,
+)
 
 from .conftest import requires_db
-from .test_routing_fakes import ExplodingDecisionModel, FakeHashEmbedder, ScriptedDecisionModel
 
 pytestmark = requires_db
 
