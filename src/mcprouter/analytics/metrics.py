@@ -22,9 +22,9 @@ No per-tool labels (cardinality). Registration is idempotent: ONE collector
 per process is registered in the default registry; `bind()` points it at the
 most recently installed app's session factory (tests re-create apps). A DB
 failure keeps the last-good snapshot and logs the exception type — never a
-failed scrape. Refresh cost grows with UNROLLED history: nothing schedules
-rollups yet (POST /api/v1/analytics/rollup is on-demand), so run it
-periodically.
+failed scrape. Refresh cost grows with UNROLLED history: the RollupLoop
+(analytics/scheduler.py, MCPR_ANALYTICS_ROLLUP_ENABLED) rolls finished days
+up; with it off, run POST /api/v1/analytics/rollup periodically.
 """
 
 from __future__ import annotations

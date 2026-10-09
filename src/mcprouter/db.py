@@ -7,8 +7,6 @@ inference, not the driver. Revisit only with evidence.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,15 +36,3 @@ def init_db(engine: Engine) -> None:
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
-
-
-def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
-    s = factory()
-    try:
-        yield s
-        s.commit()
-    except Exception:
-        s.rollback()
-        raise
-    finally:
-        s.close()

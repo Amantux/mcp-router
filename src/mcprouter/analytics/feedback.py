@@ -1,7 +1,7 @@
 """Route feedback: was a surfaced tool/skill helpful? (docs/analytics.md)
 
-THE one implementation: REST (api/routes_feedback.py) calls `record_feedback`.
-The MCP meta-tool `router.feedback` is NOT wired yet; it must call this too.
+THE one implementation: REST (api/routes_feedback.py) and the MCP meta-tool
+`router.feedback` (gateway/server.py) both call `record_feedback`.
 
 Trust rules:
 * source=agent: the decision must be the caller's OWN live (non-simulated)
@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from mcprouter.analytics._common import meta
 from mcprouter.execution.ratelimit import KeyedLimiter, SlidingWindowLimiter
 from mcprouter.execution.redaction import scrub_log
 from mcprouter.limits import FEEDBACK_LIMIT_PER_MIN
@@ -124,9 +125,8 @@ def record_feedback(
     if d is None:
         raise FeedbackNotFound("decision not found")
     surfaced = [t for t in (d.selected_tool_ids or []) if isinstance(t, str)]
-    from mcprouter.analytics.service import _meta  # local: service imports analytics
 
-    names = {t: m.name for t, m in _meta(session).items() if t in surfaced and m.name}
+    names = {t: m.name for t, m in meta(session).items() if t in surfaced and m.name}
     rows = {}
     for it in items:
         tid = _resolve(it, surfaced, names)

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics import feedback_stats as fbs
 from mcprouter.analytics import funnel as fn
+from mcprouter.analytics._common import CatalogMeta, meta
 from mcprouter.analytics.economy import (
     CATALOG_BASIS,
     Economy,
@@ -53,7 +52,6 @@ from mcprouter.analytics.wire import (
     WastedOut,
     WindowOut,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
 
 SortKey = Literal[
     "surfaced",
@@ -70,13 +68,6 @@ SortKey = Literal[
 
 class ToolNotFound(LookupError):
     pass
-
-
-@dataclass(frozen=True)
-class _Meta:
-    name: str
-    server: str
-    enabled: bool
 
 
 def _window_out(w: Window) -> WindowOut:
@@ -118,6 +109,10 @@ def _curve_out(points: list[fn.RankPoint]) -> list[RankPointOut]:
     ]
 
 
+# Old private spellings, kept as aliases (P-609 moved them to analytics/_common.py).
+_Meta = CatalogMeta
+_meta = meta
+
 SKILL_PREFIX = "skill:"
 Kind = Literal["tool", "skill", "all"]
 
@@ -125,27 +120,6 @@ Kind = Literal["tool", "skill", "all"]
 def kind_of(tid: str) -> Literal["tool", "skill"]:
     """Funnel ids are kind-keyed: "skill:<skill id>" vs a bare tool id."""
     return "skill" if tid.startswith(SKILL_PREFIX) else "tool"
-
-
-def _meta(session: Session) -> dict[str, _Meta]:
-    """Catalog metadata keyed by funnel id. Skills resolve name from
-    SkillRecord and "server" from their SkillSourceRecord; enabled is the
-    source's enabled flag (skills have no per-skill toggle)."""
-    out = {
-        tid: _Meta(name, srv, enabled)
-        for tid, name, srv, enabled in session.execute(
-            select(
-                MCPToolRecord.id, MCPToolRecord.name, MCPServerRecord.name, MCPToolRecord.enabled
-            ).join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
-        ).all()
-    }
-    for sid, name, src, enabled in session.execute(
-        select(
-            SkillRecord.id, SkillRecord.name, SkillSourceRecord.name, SkillSourceRecord.enabled
-        ).join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
-    ).all():
-        out[SKILL_PREFIX + sid] = _Meta(name, src, enabled)
-    return out
 
 
 def _tool_out(
