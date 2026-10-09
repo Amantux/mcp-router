@@ -77,6 +77,9 @@ from mcprouter.settings import Settings
 log = logging.getLogger(__name__)
 
 
+# Patch targets: monkeypatch mcprouter.auth.* (config/keys/principals), not
+# this module — setting a name here (e.g. _dev_warned, _match_principal)
+# only shadows the re-export and no longer affects the auth core.
 def __getattr__(name: str) -> Any:
     # `_dev_warned` is rebound inside auth.config; read it live, not a copy.
     if name == "_dev_warned":

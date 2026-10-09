@@ -39,15 +39,44 @@ FACADE_NAMES = frozenset(
 )  # fmt: skip
 
 
-def _api_imports(path: Path) -> list[str]:
-    """Every `mcprouter.api...` import in the file, top-level or function-local."""
+def _package_of(path: Path) -> list[str]:
+    parts = ["mcprouter", *path.relative_to(SRC).with_suffix("").parts]
+    return parts if path.name == "__init__.py" else parts[:-1]
+
+
+def _absolute(node: ast.ImportFrom, path: Path) -> str:
+    if node.level == 0:
+        return node.module or ""
+    base = _package_of(path)
+    base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
+    return ".".join([*base, *([node.module] if node.module else [])])
+
+
+def _is_api(mod: str) -> bool:
+    return mod == "mcprouter.api" or mod.startswith("mcprouter.api.")
+
+
+def _api_imports(path: Path, source: str | None = None) -> list[str]:
+    """Every `mcprouter.api...` import in the file: top-level or function-local,
+    absolute or relative, and importlib/__import__ calls with a literal name."""
     found: list[str] = []
-    for node in ast.walk(ast.parse(path.read_text(), str(path))):
-        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            mod = node.module
+    text = path.read_text() if source is None else source
+    for node in ast.walk(ast.parse(text, str(path))):
+        if (
+            isinstance(node, ast.Call)
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and _is_api(node.args[0].value)
+            and (getattr(node.func, "attr", None) or getattr(node.func, "id", None))
+            in {"import_module", "__import__"}
+        ):
+            found.append(f"{node.lineno}: dynamic import {node.args[0].value}")
+        if isinstance(node, ast.ImportFrom):
+            mod = _absolute(node, path)
             if mod == "mcprouter" and any(a.name == "api" for a in node.names):
                 found.append(f"{node.lineno}: from mcprouter import api")
-            elif mod == "mcprouter.api" or mod.startswith("mcprouter.api."):
+            elif _is_api(mod):
                 found.append(f"{node.lineno}: from {mod} import ...")
         elif isinstance(node, ast.Import):
             for a in node.names:
@@ -79,6 +108,37 @@ def test_no_lower_layer_imports_the_api_layer() -> None:
 def test_pending_allowlist_has_no_stale_entries() -> None:
     stale = sorted(set(PENDING) - set(_offenders()))
     assert stale == [], f"remove from PENDING (no longer imports mcprouter.api): {stale}"
+
+
+AUTH_MAY_IMPORT = {"mcprouter.auth", "mcprouter.models", "mcprouter.settings"}
+
+
+def test_auth_core_imports_only_models_and_settings() -> None:
+    """auth/ sits under execution/policy/gateway; importing them would cycle."""
+    for path in sorted((SRC / "auth").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                mod = _absolute(node, path)
+            elif isinstance(node, ast.Import):
+                mod = node.names[0].name
+            else:
+                continue
+            if mod.startswith("mcprouter"):
+                assert any(mod == a or mod.startswith(a + ".") for a in AUTH_MAY_IMPORT), (
+                    f"{path.name}: {mod}"
+                )
+
+
+def test_layering_scanner_sees_relative_and_dynamic_imports() -> None:
+    probe = (
+        "from ..api import deps_auth\n"
+        "from ..api.deps_auth import require_admin\n"
+        "import importlib\n"
+        "importlib.import_module('mcprouter.api.deps_auth')\n"
+        "from .ratelimit import SlidingWindowLimiter\n"
+    )
+    hits = _api_imports(SRC / "execution" / "probe.py", probe)
+    assert len(hits) == 3, hits
 
 
 def test_auth_core_has_no_fastapi_or_api_dependency() -> None:

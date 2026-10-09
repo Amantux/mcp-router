@@ -41,7 +41,7 @@ class SecurityConfig:
 
         The admin token comes from `settings.admin_token` (MCPR_ADMIN_TOKEN, P-607);
         `env` is the fallback for callers that build Settings without it."""
-        admin = (settings.admin_token or env.get(ADMIN_TOKEN_ENV, "")).strip()
+        admin = settings.admin_token.strip() or env.get(ADMIN_TOKEN_ENV, "").strip()
         return cls(
             agent_keys_configured=bool(settings.agent_keys.strip()),
             admin_token_hash=hash_key(admin) if admin else None,

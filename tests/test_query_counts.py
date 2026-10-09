@@ -288,3 +288,6 @@ def test_admin_token_comes_from_settings() -> None:
     fallback = SecurityConfig.build(Settings(), {"MCPR_ADMIN_TOKEN": other})
     assert fallback.admin_token_hash == hash_key(other)  # env mapping as fallback
     assert SecurityConfig.build(Settings(), {}).admin_token_hash is None
+    # A blank settings token must not mask a real env token (would open dev mode).
+    blank = SecurityConfig.build(Settings(admin_token="  "), {"MCPR_ADMIN_TOKEN": other})
+    assert blank.admin_token_hash == hash_key(other) and not blank.dev_mode_possible

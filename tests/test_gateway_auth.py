@@ -170,7 +170,7 @@ def test_disabled_principal_cannot_authenticate(
     assert c.get("/whoami", headers={"Authorization": f"Bearer {KEY_A}"}).status_code == 401
 
 
-def test_lookup_is_indexed_and_the_hit_is_compared_in_constant_time(
+def test_lookup_is_indexed_and_the_hit_is_confirmed_with_compare_digest(
     make_client: Callable[..., TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """P-607 (E6): the key hash is looked up by index (no full-table scan per
