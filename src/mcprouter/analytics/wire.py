@@ -72,6 +72,13 @@ class RankPointOut(Wire):
     rate: float | None
 
 
+class SkillsOverviewOut(Wire):
+    surfaced: int  # (decision, skill) pairs surfaced
+    activated: int  # of those, activated on that decision (attributed)
+    activation_rate: float | None
+    body_tokens_not_sent: int  # = contextEconomy.skillBodyTokensNotSent
+
+
 class OverviewOut(Wire):
     window: WindowOut
     context_economy: EconomyOut
@@ -80,6 +87,7 @@ class OverviewOut(Wire):
     executions: ExecutionsOut
     position_curve: list[RankPointOut]
     catalog_drift: dict[str, int]
+    skills: SkillsOverviewOut
 
 
 class ToolFunnelOut(Wire):
@@ -109,6 +117,7 @@ class ToolFunnelPageOut(Wire):
 
 class CoSurfacedOut(Wire):
     tool_id: str
+    kind: Literal["tool", "skill"]
     tool_name: str | None
     server_name: str | None
     co_surfaced: int
@@ -139,6 +148,9 @@ class AgentProfileOut(Wire):
     attribution_coverage: float | None
     surfaced: int
     selected: int
+    skills_surfaced: int
+    skills_activated: int
+    skill_activation_rate: float | None
     selection_rate: float | None
     avg_surfaced_per_decision: float | None
     budget_tools: int | None = None  # not persisted per decision yet
@@ -153,6 +165,7 @@ class AgentPageOut(Wire):
 
 class WastedOut(Wire):
     tool_id: str
+    kind: Literal["tool", "skill"]
     tool_name: str | None
     server_name: str | None
     surfaced: int

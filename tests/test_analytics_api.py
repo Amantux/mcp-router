@@ -82,6 +82,7 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "executions",
         "positionCurve",
         "catalogDrift",
+        "skills",
     }
     assert set(body["window"]) == {"label", "start", "end"} and body["window"]["label"] == "7d"
     assert set(body["contextEconomy"]) == {
@@ -133,6 +134,7 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "rate": pytest.approx(2 / 3),
     }
     assert set(body["catalogDrift"]) == {"added", "schema", "metadata", "removed", "restored"}
+    assert set(body["skills"]) == {"surfaced", "activated", "activationRate", "bodyTokensNotSent"}
 
 
 def test_tools_table_sort_and_zero_rows(env: tuple[TestClient, World]) -> None:
@@ -183,6 +185,7 @@ def test_tool_detail_and_404(env: tuple[TestClient, World]) -> None:
         "coSurfaced",
         "thisSelected",
         "otherSelected",
+        "kind",
     }
     missing = c.get("/api/v1/analytics/tools/nope", headers=H_ADMIN)
     assert missing.status_code == 404 and missing.json() == {"detail": "Unknown tool."}

@@ -29,6 +29,7 @@ from mcprouter.analytics.wire import (
     RollupDayOut,
     RollupOut,
     RoutingOut,
+    SkillsOverviewOut,
     StaleToolOut,
     SuggestionsOut,
     ToolDetailOut,
@@ -179,6 +180,12 @@ def overview(session: Session, window: Window) -> OverviewOut:
             off_funnel_selections=off_funnel_selections(session, window),
         ),
         position_curve=_curve_out(fn.position_curve(session, window)),
+        skills=SkillsOverviewOut(
+            surfaced=total.skills_surfaced,
+            activated=total.skills_activated,
+            activation_rate=total.skill_activation_rate,
+            body_tokens_not_sent=econ.skill_body_tokens_not_sent,
+        ),
         catalog_drift=catalog_drift(session, window),
     )
 
@@ -250,6 +257,7 @@ def tool_detail(session: Session, window: Window, tool_id: str) -> ToolDetailOut
         co_surfaced=[
             CoSurfacedOut(
                 tool_id=c.tool_id,
+                kind=kind_of(c.tool_id),
                 tool_name=meta[c.tool_id].name if c.tool_id in meta else None,
                 server_name=meta[c.tool_id].server if c.tool_id in meta else None,
                 co_surfaced=c.co_surfaced,
@@ -275,6 +283,9 @@ def agent_profiles(session: Session, window: Window) -> AgentPageOut:
             AgentProfileOut(
                 agent_id=agent,
                 decisions=p.decisions,
+                skills_surfaced=p.skills_surfaced,
+                skills_activated=p.skills_activated,
+                skill_activation_rate=p.skill_activation_rate,
                 no_match=p.no_match,
                 no_match_rate=p.no_match_rate,
                 fallback=p.fallback,
@@ -322,6 +333,7 @@ def suggestions(
         wasted_exposure=[
             WastedOut(
                 tool_id=w.tool_id,
+                kind=kind_of(w.tool_id),
                 tool_name=meta[w.tool_id].name if w.tool_id in meta else None,
                 server_name=meta[w.tool_id].server if w.tool_id in meta else None,
                 surfaced=w.counts.surfaced,

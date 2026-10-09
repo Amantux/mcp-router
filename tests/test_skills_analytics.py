@@ -223,3 +223,35 @@ def test_economy_prices_skills_and_never_counts_unactivated_bodies(
 def test_economy_unknown_skill_id_is_still_stale(db: sessionmaker[Session]) -> None:
     add_decision(db, "alice", NOW - timedelta(minutes=5), ["skill:does-not-exist"])
     assert _econ(db).stale_ref_decisions == 1
+
+
+def test_overview_and_profiles_report_skill_activation(db: sessionmaker[Session]) -> None:
+    a = _skill(db, "pdf-fill")
+    r1 = add_decision(db, "alice", NOW - timedelta(minutes=5), ["t-x", f"skill:{a}"])
+    add_decision(db, "alice", NOW - timedelta(minutes=4), [f"skill:{a}"])
+    _activate(db, "alice", a, r1)
+    with db() as s:
+        ov = service.overview(s, parse_window("7d", NOW))
+        total, by_agent = profiles(s, parse_window("7d", NOW))
+    assert (ov.skills.surfaced, ov.skills.activated, ov.skills.activation_rate) == (2, 1, 0.5)
+    alice = by_agent["alice"]
+    assert (alice.skills_surfaced, alice.skills_activated) == (2, 1)
+    assert alice.skill_activation_rate == 0.5
+    assert alice.surfaced == 3  # the tool row is not a skill
+
+
+def test_skill_counters_registered_once(db: sessionmaker[Session]) -> None:
+    from prometheus_client import REGISTRY, generate_latest
+
+    from mcprouter.analytics.metrics import install_metrics
+
+    a = _skill(db, "pdf-fill")
+    r1 = add_decision(db, "alice", NOW - timedelta(minutes=5), ["t-x", f"skill:{a}"])
+    _activate(db, "alice", a, r1)
+    install_metrics(db)
+    install_metrics(db).refresh_now()  # idempotent: no "Duplicated timeseries"
+    lines = generate_latest(REGISTRY).decode().splitlines()
+    got = {ln.split()[0]: float(ln.split()[1]) for ln in lines if ln.startswith("mcpr_analytics_")}
+    assert got["mcpr_analytics_skills_surfaced_total"] == 1
+    assert got["mcpr_analytics_skills_activated_total"] == 1
+    assert got["mcpr_analytics_tools_surfaced_total"] == 2  # kind-blind
