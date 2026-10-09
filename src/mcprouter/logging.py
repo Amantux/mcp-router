@@ -51,7 +51,7 @@ class _StderrHandler(logging.StreamHandler):  # type: ignore[type-arg]
 def secret_values(settings: Settings) -> tuple[str, ...]:
     """Every configured secret value worth redacting, longest first."""
     found: set[str] = set()
-    for v in (settings.admin_token, settings.decision_api_key):
+    for v in (settings.admin_token, settings.decision_api_key, settings.aoai_api_key):
         found.add(v)
     for entry in settings.agent_keys.split(","):
         found.add(entry.partition(":")[2].strip())

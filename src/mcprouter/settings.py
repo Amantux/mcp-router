@@ -14,10 +14,13 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = "postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter"
+    # Secrets (database_url carries the password) never appear in repr().
+    database_url: str = field(
+        default="postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter", repr=False
+    )
     # Gateway auth: comma-separated "agent_id:key" pairs for v1 local API keys.
     # Empty = auth disabled with a loud startup warning (dev only).
-    agent_keys: str = ""
+    agent_keys: str = field(default="", repr=False)
     # Inference
     embedding_backend: str = "hash"  # hash | bge | aoai  (bge needs the [inference] extra)
     embedding_model_id: str = "BAAI/bge-small-en-v1.5"
@@ -147,13 +150,14 @@ def _bool(raw: str, name: str = "value") -> bool:
 
 
 # wave-3 remote decision backend
-def _secret(name: str, get: Callable[[str, str], str]) -> str:
+def _secret(name: str, get: Callable[[str, str], str], *, printable: bool = True) -> str:
     """<NAME>_FILE wins over <NAME>; surrounding whitespace is stripped. A set
     but unreadable, non-UTF-8 or oversized (> 64 KiB) file fails loudly; the
     message names the variable, never the content."""
     path = get(f"{name}_FILE", "")
     if not path:
-        return _printable_key(get(name, "").strip(), name)
+        plain = get(name, "").strip()
+        return _printable_key(plain, name) if printable else _no_controls(plain, name)
     failed = False
     data = b""
     try:
@@ -173,17 +177,27 @@ def _secret(name: str, get: Callable[[str, str], str]) -> str:
         raise ValueError(f"{name}_FILE: key file is not UTF-8 text")
     if not text.strip():
         raise ValueError(f"{name}_FILE: key file is empty")
-    return _printable_key(text.strip(), name)
+    text = text.strip()
+    return _printable_key(text, name) if printable else _no_controls(text, name)
 
 
 _KEY_RE = re.compile(r"[\x21-\x7e]*")
+_NO_CONTROLS_RE = re.compile(r"[\x20-\x7e]*")
+MIN_KEY_LEN = 32
+
+
+def _no_controls(value: str, name: str) -> str:
+    """Printable ASCII, spaces allowed (comma lists). Never echoes the value."""
+    if not _NO_CONTROLS_RE.fullmatch(value):
+        raise ValueError(f"{name}: must be printable ASCII")
+    return value
 
 
 def _printable_key(key: str, name: str) -> str:
     """A key goes into an HTTP header: printable ASCII, no whitespace/control.
     The message names the variable, never the key."""
     if not _KEY_RE.fullmatch(key):
-        raise ValueError(f"{name}: key must be printable ASCII with no whitespace")
+        raise ValueError(f"{name}: must be printable ASCII with no whitespace")
     return key
 
 
@@ -201,6 +215,7 @@ _MAX_KEY_FILE_BYTES = 64 * 1024
 #   type      str|upper|int|float|bool|enum|opt_int|hosts|secret|device
 #   default   the parsed default        doc      one-line operator description
 #   choices   accepted values (enum/device/bool)  lo/hi  inclusive numeric bounds
+#             (secret/agent_keys: lo = minimum key length, env/_FILE path only)
 #   secret    never logged / never in repr        file_var  "<ENV>_FILE" or None
 #   scope     app | entrypoint | compose
 
@@ -244,9 +259,29 @@ def _s(name: str, type_: str, doc: str, **kw: object) -> SettingSpec:
 
 SETTINGS_SPEC: tuple[SettingSpec, ...] = (
     # core / security
-    _s("database_url", "str", "SQLAlchemy Postgres DSN (compose derives it).", secret=True),
-    _s("agent_keys", "str", "Comma list of agent_id:key API keys.", secret=True),
-    _s("admin_token", "str", "Bearer token for the admin API (unset: dev/locked).", secret=True),
+    _s(
+        "database_url",
+        "secret",
+        "SQLAlchemy Postgres DSN (compose derives it).",
+        secret=True,
+        file_var=True,
+    ),
+    _s(
+        "agent_keys",
+        "agent_keys",
+        "Comma list of agent_id:key API keys (each key >= 32 chars).",
+        secret=True,
+        file_var=True,
+        lo=MIN_KEY_LEN,
+    ),
+    _s(
+        "admin_token",
+        "secret",
+        "Bearer token for the admin API, >= 32 chars (unset: loopback bind).",
+        secret=True,
+        file_var=True,
+        lo=MIN_KEY_LEN,
+    ),
     _s("allowed_hosts", "hosts", "Extra Host names accepted besides loopback (421 otherwise)."),
     _s("allow_open_dev", "bool", "Entrypoint: bind 0.0.0.0 even without an admin token."),
     _s("log_level", "enum", "Root log level.", choices=LOG_LEVEL_CHOICES),
@@ -382,6 +417,21 @@ ENV_ONLY_SPEC: tuple[SettingSpec, ...] = (
 )
 
 
+def _agent_keys(spec: SettingSpec, get: Callable[[str, str], str]) -> str:
+    """`id:key,id:key` (spaces around commas allowed). Each key must meet the
+    minimum length; malformed entries are left to auth's parse_agent_keys,
+    whose messages never contain key material either."""
+    entries = [p.strip() for p in _secret(spec.env, get, printable=False).split(",")]
+    entries = [e for e in entries if e]
+    for idx, entry in enumerate(entries, 1):
+        _, sep, key = entry.partition(":")
+        if sep and spec.lo is not None and len(key) < spec.lo:
+            raise ValueError(
+                f"{spec.env}: entry #{idx} key must be at least {spec.lo:g} characters"
+            )
+    return ",".join(entries)
+
+
 def _num(raw: str, spec: SettingSpec) -> float:
     try:
         value = int(raw) if spec.type in ("int", "opt_int") else float(raw)
@@ -401,7 +451,12 @@ def _parse(spec: SettingSpec, get: Callable[[str, str], str]) -> Any:
     """One registry entry -> its typed value. Messages name the variable and
     never echo the value."""
     if spec.type == "secret":
-        return _secret(spec.env, get)
+        value = _secret(spec.env, get)
+        if value and spec.lo is not None and len(value) < spec.lo:
+            raise ValueError(f"{spec.env}: must be at least {spec.lo:g} characters")
+        return value or spec.default
+    if spec.type == "agent_keys":
+        return _agent_keys(spec, get)
     raw = get(spec.env, "").strip()
     if not raw:
         return spec.default

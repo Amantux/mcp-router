@@ -120,7 +120,7 @@ def test_single_worker_and_port(stub_bin: Path, tmp_path: Path) -> None:
 def test_missing_database_url_is_fatal(stub_bin: Path, tmp_path: Path) -> None:
     r = run(stub_bin, tmp_path, {"MCPR_DATABASE_URL": ""})
     assert r.returncode == 1
-    assert "FATAL: MCPR_DATABASE_URL is required" in r.stderr
+    assert "FATAL: MCPR_DATABASE_URL (or MCPR_DATABASE_URL_FILE) is required" in r.stderr
     assert "UVICORN_ARGV" not in r.stdout
 
 

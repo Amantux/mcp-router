@@ -16,7 +16,8 @@ set -eu
 log() { echo "[entrypoint] $*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
 
-[ -n "${MCPR_DATABASE_URL:-}" ] || die "MCPR_DATABASE_URL is required (see docs/deploy.md)."
+[ -n "${MCPR_DATABASE_URL:-}${MCPR_DATABASE_URL_FILE:-}" ] \
+  || die "MCPR_DATABASE_URL (or MCPR_DATABASE_URL_FILE) is required (see docs/deploy.md)."
 
 # "<bind_host> <db_wait_tries>" on stdout; FATAL/WARNING lines on stderr.
 plan=$(python -m mcprouter.settings entrypoint) || exit $?
