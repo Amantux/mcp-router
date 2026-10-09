@@ -188,3 +188,23 @@ def catalog_drift(session: Session, window: Window) -> dict[str, int]:
         if kind in counts:
             counts[kind] = int(n)
     return counts
+
+
+_EXEC_LATENCY_SQL = text(
+    """
+SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x.latency_ms) AS p50,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY x.latency_ms) AS p95
+FROM execution_records x
+WHERE x.created_at >= :start AND x.created_at < :end
+  AND x.latency_ms IS NOT NULL
+"""
+)
+
+
+def execution_latency(session: Session, window: Window) -> tuple[float | None, float | None]:
+    """MEASURED p50/p95 of recorded execution latency in the window."""
+    row = session.execute(_EXEC_LATENCY_SQL, {"start": window.start, "end": window.end}).one()
+    return (
+        None if row.p50 is None else float(row.p50),
+        None if row.p95 is None else float(row.p95),
+    )

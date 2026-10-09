@@ -83,6 +83,7 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "positionCurve",
         "catalogDrift",
         "skills",
+        "measured",
     }
     assert set(body["window"]) == {"label", "start", "end"} and body["window"]["label"] == "7d"
     assert set(body["contextEconomy"]) == {
@@ -100,6 +101,10 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "skillBodyTokensNotSent",
         "estimator",
         "catalogBasis",
+        "estimatedTimeSavedMs",
+        "estimatedCostSaved",
+        "currency",
+        "assumptions",
     }
     assert body["contextEconomy"]["catalogTokensPerDecision"] is None  # per-agent only
     assert body["funnel"] == {

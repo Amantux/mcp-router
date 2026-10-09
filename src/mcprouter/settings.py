@@ -48,6 +48,11 @@ class Settings:
     # cron POST /api/v1/analytics/rollup). Both off by default.
     usage_prior_enabled: bool = False
     analytics_rollup_enabled: bool = False
+    # Savings ESTIMATES (docs/analytics.md). 0 = not configured -> the estimate is
+    # reported as null, never as a measured 0.
+    prefill_ms_per_1k_tokens: float = 0.0
+    price_per_1k_input_tokens: float = 0.0
+    currency: str = "USD"
     # Execution
     default_tool_timeout_s: float = 30.0
     rate_limit_per_agent_per_min: int = 120
@@ -101,6 +106,13 @@ class Settings:
             analytics_rollup_enabled=_bool(
                 get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false"), "MCPR_ANALYTICS_ROLLUP_ENABLED"
             ),
+            prefill_ms_per_1k_tokens=float(
+                get("MCPR_PREFILL_MS_PER_1K_TOKENS", str(d.prefill_ms_per_1k_tokens))
+            ),
+            price_per_1k_input_tokens=float(
+                get("MCPR_PRICE_PER_1K_INPUT_TOKENS", str(d.price_per_1k_input_tokens))
+            ),
+            currency=get("MCPR_CURRENCY", d.currency).strip().upper(),
             default_tool_timeout_s=float(
                 get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
             ),

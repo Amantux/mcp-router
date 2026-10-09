@@ -20,6 +20,13 @@ class WindowOut(Wire):
     end: datetime
 
 
+class AssumptionsOut(Wire):
+    # explicit aliases: to_camel would emit "Per1K" (docs say "Per1k")
+    prefill_ms_per_1k_tokens: float | None = Field(serialization_alias="prefillMsPer1kTokens")
+    price_per_1k_input_tokens: float | None = Field(serialization_alias="pricePer1kInputTokens")
+    estimator: str
+
+
 class EconomyOut(Wire):
     served_decisions: int
     unscored_decisions: int
@@ -35,6 +42,20 @@ class EconomyOut(Wire):
     skill_body_tokens_not_sent: int = 0
     estimator: str
     catalog_basis: str
+    # ESTIMATES derived from tokens_not_sent x operator rates (never measured).
+    estimated_time_saved_ms: float | None = None
+    estimated_cost_saved: float | None = None
+    currency: str | None = None
+    assumptions: AssumptionsOut
+
+
+class MeasuredOut(Wire):
+    """MEASURED latencies (recorded per row), kept apart from estimates."""
+
+    route_latency_p50_ms: float | None
+    route_latency_p95_ms: float | None
+    execution_latency_p50_ms: float | None
+    execution_latency_p95_ms: float | None
 
 
 class FunnelTotalsOut(Wire):
@@ -88,6 +109,7 @@ class OverviewOut(Wire):
     position_curve: list[RankPointOut]
     catalog_drift: dict[str, int]
     skills: SkillsOverviewOut
+    measured: MeasuredOut
 
 
 class ToolFunnelOut(Wire):

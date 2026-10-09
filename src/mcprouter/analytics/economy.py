@@ -284,3 +284,26 @@ def overall(by_agent: dict[str, Economy]) -> Economy:
 
 
 __all__ = ["CATALOG_BASIS", "ESTIMATOR", "Economy", "economy_by_agent", "overall"]
+
+
+@dataclass(frozen=True)
+class SavingsBasis:
+    """Operator-supplied rates turning tokensNotSent into ESTIMATES.
+
+    A rate <= 0 means "not configured": the estimate is None (null on the wire),
+    never 0 -- a 0 would read as a measured "saved nothing".
+    """
+
+    prefill_ms_per_1k_tokens: float = 0.0
+    price_per_1k_input_tokens: float = 0.0
+    currency: str = "USD"
+
+    def time_saved_ms(self, tokens_not_sent: int) -> float | None:
+        if self.prefill_ms_per_1k_tokens <= 0:
+            return None
+        return tokens_not_sent * self.prefill_ms_per_1k_tokens / 1000
+
+    def cost_saved(self, tokens_not_sent: int) -> float | None:
+        if self.price_per_1k_input_tokens <= 0:
+            return None
+        return tokens_not_sent * self.price_per_1k_input_tokens / 1000
