@@ -515,6 +515,7 @@ class GatewayServer:
             on_list_prompts=self._on_list_prompts,
             on_get_prompt=self._on_get_prompt,
             on_list_resources=self._on_list_resources,
+            on_list_resource_templates=self._on_list_resource_templates,
             on_read_resource=self._on_read_resource,
         )
         # Innermost, so the SDK's OpenTelemetry middleware records the curated error.
@@ -934,6 +935,16 @@ class GatewayServer:
                         )
                     )
         return types.ListResourcesResult(resources=out, cache_scope="private", ttl_ms=0)
+
+    async def _on_list_resource_templates(
+        self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
+    ) -> types.ListResourceTemplatesResult:
+        """D15: always empty (skill resources are concrete URIs). Registered so
+        clients that call it right after resources/list see no error."""
+        self._principal(ctx)
+        return types.ListResourceTemplatesResult(
+            resource_templates=[], cache_scope="private", ttl_ms=0
+        )
 
     async def _on_read_resource(
         self, ctx: ServerRequestContext[Any, Any], params: types.ReadResourceRequestParams

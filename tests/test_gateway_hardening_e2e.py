@@ -19,7 +19,15 @@ from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
 from mcprouter.gateway.server import INTERNAL_ERROR_MESSAGE, TOO_MANY_SESSIONS
 from tests.support.execution import add_rule
-from tests.support.gateway import ERAS, HANDSHAKE, MODERN, _client, alive, mcp_session
+from tests.support.gateway import (
+    ERAS,
+    HANDSHAKE,
+    MODERN,
+    UNSUPPORTED_CALLS,
+    _client,
+    alive,
+    mcp_session,
+)
 from tests.support.gateway import live as live  # noqa: F401 — fixture
 from tests.support.gateway import world as world  # noqa: F401 — fixture
 from tests.support.wait import wait_for
@@ -225,3 +233,26 @@ async def test_bearer_scheme_case_is_one_credential(live: dict[str, Any]) -> Non
     same = {**ACCEPT, "mcp-session-id": sid, "mcp-protocol-version": "2025-11-25"}
     async with create_mcp_http_client(headers={"Authorization": f"bearer {KEYS['alice']}"}) as h:
         assert (await h.post(url, json=ping, headers=same)).status_code == 200
+
+
+# ------------------------------------------------ P-308 unsupported methods pinned
+@pytest.mark.filterwarnings("ignore::mcp.shared.exceptions.MCPDeprecationWarning")
+@pytest.mark.parametrize("era", ERAS)
+@pytest.mark.parametrize("method", sorted(UNSUPPORTED_CALLS))
+async def test_unsupported_method_is_32601_and_server_stays_usable(
+    live: dict[str, Any], era: str, method: str
+) -> None:
+    async with mcp_session(live["url"], "alice", era) as session:
+        with pytest.raises(MCPError) as info:
+            await UNSUPPORTED_CALLS[method](session)
+        assert info.value.code == types.METHOD_NOT_FOUND
+        await alive(session, era)
+    assert (era, method, None) in live["wire"].calls
+
+
+@pytest.mark.parametrize("era", ERAS)
+async def test_resource_templates_list_is_empty(live: dict[str, Any], era: str) -> None:
+    async with mcp_session(live["url"], "alice", era) as session:
+        res = await session.list_resource_templates()
+    assert res.resource_templates == []
+    assert (era, "resources/templates/list", None) in live["wire"].calls

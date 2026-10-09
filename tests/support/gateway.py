@@ -5,9 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 
+import mcp_types as types
 import pytest
 from fastapi import FastAPI
 from mcp.client.session import ClientSession
@@ -232,3 +233,15 @@ def get_stream_attached(gw: GatewayServer, sid: str) -> bool:
     Reads SDK internals (mcp 2.3.0 ``StreamableHTTPSessionManager``)."""
     transport = gw.server.session_manager._server_instances.get(sid)
     return transport is not None and GET_STREAM_KEY in transport._request_streams
+
+
+# Spec methods the gateway deliberately does NOT handle (SDK answers -32601),
+# each driven through the real client. Shared by the P-308 pin and MT-3.
+UNSUPPORTED_CALLS: dict[str, Callable[[ClientSession], Awaitable[Any]]] = {
+    "completion/complete": lambda s: s.complete(
+        types.PromptReference(type="ref/prompt", name="x"), {"name": "a", "value": "b"}
+    ),
+    "logging/setLevel": lambda s: s.set_logging_level("info"),
+    "resources/subscribe": lambda s: s.subscribe_resource("skill://a/b/c"),
+    "resources/unsubscribe": lambda s: s.unsubscribe_resource("skill://a/b/c"),
+}
