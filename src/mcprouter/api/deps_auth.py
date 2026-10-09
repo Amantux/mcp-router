@@ -47,12 +47,12 @@ from mcprouter.auth.config import (  # noqa: F401
     ADMIN_TOKEN_ENV,
     DEV_AGENT_ID,
     SecurityConfig,
-    _dev_lock,
-    _dev_mode_active,
-    _reset_dev_warning_for_tests,
-    _warn_dev_once,
     dev_principal,
 )
+from mcprouter.auth.config import dev_mode_active as _dev_mode_active
+from mcprouter.auth.config import dev_warning_lock as _dev_lock
+from mcprouter.auth.config import reset_dev_warning as _reset_dev_warning_for_tests
+from mcprouter.auth.config import warn_dev_once as _warn_dev_once
 from mcprouter.auth.keys import (  # noqa: F401
     AGENT_ID_RE as _AGENT_ID_RE,
 )
@@ -69,12 +69,12 @@ from mcprouter.auth.keys import (
     parse_bearer,
 )
 from mcprouter.auth.principals import (  # noqa: F401
-    _match_principal,
     bootstrap_principals,
     check_admin,
     is_admin_bearer,
     resolve_principal,
 )
+from mcprouter.auth.principals import match_principal as _match_principal
 from mcprouter.models import AgentPrincipal  # noqa: F401
 from mcprouter.settings import Settings
 

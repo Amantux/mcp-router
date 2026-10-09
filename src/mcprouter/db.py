@@ -17,11 +17,6 @@ def make_engine(settings: Settings) -> Engine:
     return create_engine(settings.database_url, pool_pre_ping=True)
 
 
-# The pre-0.6 additive bridge moved VERBATIM to migrations/legacy_bridge.py
-# (P-601); the old name stays importable.
-from mcprouter.migrations.legacy_bridge import _ADDITIVE_COLUMNS  # noqa: E402, F401
-
-
 def init_db(engine: Engine) -> None:
     """The ONE schema-init path: Alembic `upgrade head` under an advisory lock,
     with the one-time legacy bridge for pre-0.6 databases (mcprouter.migrate).

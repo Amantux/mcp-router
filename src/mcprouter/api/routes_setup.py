@@ -23,8 +23,8 @@ from mcprouter.models import (  # AppSetting/_SettingsBase re-exported (P-608 mo
     MCPServerRecord,
     MCPToolRecord,
     SkillSourceRecord,
-    _SettingsBase,
 )
+from mcprouter.models import SettingsBase as _SettingsBase
 
 SETUP_COMPLETED_KEY = "setup.completed_at"
 

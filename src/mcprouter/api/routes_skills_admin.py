@@ -18,7 +18,7 @@ from mcprouter.api.deps_auth import require_admin
 from mcprouter.generation import bump_catalog
 from mcprouter.models import SkillRecord, SkillVersionRecord
 from mcprouter.registry.audit import audit
-from mcprouter.registry.catalog import _CLASSIFICATION_COLUMNS
+from mcprouter.registry.catalog import CLASSIFICATION_COLUMNS
 from mcprouter.registry.wire import ClassificationPatchIn
 
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"], dependencies=[Depends(require_admin)])
@@ -149,7 +149,7 @@ def patch_classification(
     with _factory(request)() as s:
         r = _get(s, skill_id)
         for wire_name, value in fields.items():
-            setattr(r, _CLASSIFICATION_COLUMNS[wire_name], value)
+            setattr(r, CLASSIFICATION_COLUMNS[wire_name], value)
         r.classification_reviewed = True
         r.classification_source = "human"
         s.commit()

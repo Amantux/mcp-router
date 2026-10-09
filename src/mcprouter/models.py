@@ -426,6 +426,10 @@ class _SettingsBase(DeclarativeBase):
     pass
 
 
+# Public spelling for modules outside models (routes_setup re-exports it).
+SettingsBase = _SettingsBase
+
+
 class AppSetting(_SettingsBase):
     """First-run wizard key/value flags (non-secret). Moved here from
     api/routes_setup.py (P-608); still on its OWN metadata (single-Base merge

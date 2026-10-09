@@ -52,12 +52,12 @@ from sqlalchemy import select
 from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
-    _dev_mode_active,
     dev_principal,
     get_principal,
     require_admin,
 )
 from mcprouter.api.errors import install_error_handlers
+from mcprouter.auth import dev_mode_active
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
@@ -417,7 +417,7 @@ def _simulation_principal(request: Request, agent_id: str) -> AgentPrincipal:
         principal = s.scalars(
             select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
         ).one_or_none()
-        if principal is None and agent_id == DEV_AGENT_ID and _dev_mode_active(s, security):
+        if principal is None and agent_id == DEV_AGENT_ID and dev_mode_active(s, security):
             principal = dev_principal(security)
     if principal is None:
         raise HTTPException(status_code=404, detail="agentId does not name a principal")

@@ -151,7 +151,7 @@ def get_tool_detail(session: Session, tool_id: str) -> ToolDetail:
 
 # ---------------------------------------------------------- classification
 # Wire field name -> column. `categories` (SPEC §8) is stored in `capabilities`.
-_CLASSIFICATION_COLUMNS = {
+CLASSIFICATION_COLUMNS = {
     "domain": "domain",
     "categories": "capabilities",
     "tags": "tags",
@@ -172,7 +172,7 @@ def update_classification(
 ) -> MCPToolRecord:
     """Human override: wins over any automatic classification, forever
     (sets classification_reviewed=True, which apply_auto_classification honours)."""
-    unknown = set(upd.fields) - set(_CLASSIFICATION_COLUMNS)
+    unknown = set(upd.fields) - set(CLASSIFICATION_COLUMNS)
     if unknown:
         raise InvalidArgument("Unsupported classification field.")
     op = upd.fields.get("operation")
@@ -180,7 +180,7 @@ def update_classification(
         raise InvalidArgument("operation must be one of read, write, execute, unknown.")
     tool = _load(session, tool_id)
     for wire_name, value in upd.fields.items():
-        setattr(tool, _CLASSIFICATION_COLUMNS[wire_name], value)
+        setattr(tool, CLASSIFICATION_COLUMNS[wire_name], value)
     tool.classification_reviewed = True
     tool.classification_source = "human"
     session.flush()

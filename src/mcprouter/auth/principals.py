@@ -20,9 +20,9 @@ from sqlalchemy.orm import Session
 
 from mcprouter.auth.config import (
     SecurityConfig,
-    _warn_dev_once,
     dev_mode_active,
     dev_principal,
+    warn_dev_once,
 )
 from mcprouter.auth.keys import (
     AgentKeysConfigError,
@@ -66,7 +66,7 @@ def bootstrap_principals(session: Session, settings: Settings, config: SecurityC
     return len(pairs)
 
 
-def _match_principal(session: Session, token: str) -> AgentPrincipal | None:
+def match_principal(session: Session, token: str) -> AgentPrincipal | None:
     presented = hash_key(token)
     # ONE indexed query (ix_agent_principals_key_hash, migration 0002) instead
     # of a full-table scan per request. The lookup key is the SHA-256 of the
@@ -91,10 +91,10 @@ def resolve_principal(
     token = parse_bearer(authorization)
     if token is None:
         if dev_mode_active(session, config):
-            _warn_dev_once()
+            warn_dev_once()
             return dev_principal(config)
         raise AuthenticationError()
-    principal = _match_principal(session, token)
+    principal = match_principal(session, token)
     if principal is None:
         raise AuthenticationError()
     session.expunge(principal)
@@ -105,7 +105,7 @@ def check_admin(session: Session, config: SecurityConfig, authorization: str | N
     """Raises AuthenticationError (401) or PermissionError (403)."""
     if config.admin_token_hash is None:
         if dev_mode_active(session, config):
-            _warn_dev_once()
+            warn_dev_once()
             return
         raise PermissionError("admin token not configured")
     token = parse_bearer(authorization)

@@ -169,19 +169,65 @@ def test_dev_warning_flag_is_live_through_the_facade() -> None:
 
     facade._reset_dev_warning_for_tests()
     assert facade._dev_warned is False
-    config._warn_dev_once()
+    config.warn_dev_once()
     assert facade._dev_warned is True
     facade._reset_dev_warning_for_tests()
 
 
 @pytest.mark.parametrize(
-    "name", ["SecurityConfig", "resolve_principal", "hash_key", "_dev_mode_active", "DEV_AGENT_ID"]
+    ("name", "core_name"),
+    [
+        ("SecurityConfig", "SecurityConfig"),
+        ("resolve_principal", "resolve_principal"),
+        ("hash_key", "hash_key"),
+        ("DEV_AGENT_ID", "DEV_AGENT_ID"),
+        # Old private façade spellings bound to the core's public names.
+        ("_dev_mode_active", "dev_mode_active"),
+        ("_warn_dev_once", "warn_dev_once"),
+        ("_reset_dev_warning_for_tests", "reset_dev_warning"),
+        ("_dev_lock", "dev_warning_lock"),
+        ("_match_principal", "match_principal"),
+        ("_AGENT_ID_RE", "AGENT_ID_RE"),
+        ("_KEY_RE", "KEY_RE"),
+    ],
 )
-def test_facade_names_are_the_auth_core_objects(name: str) -> None:
+def test_facade_names_are_the_auth_core_objects(name: str, core_name: str) -> None:
     import mcprouter.api.deps_auth as facade
     import mcprouter.auth.config as c
     import mcprouter.auth.keys as k
     import mcprouter.auth.principals as p
 
-    core = next(getattr(m, name) for m in (c, k, p) if hasattr(m, name))
+    core = next(getattr(m, core_name) for m in (c, k, p) if hasattr(m, core_name))
     assert getattr(facade, name) is core
+
+
+def _private_cross_package_imports() -> list[str]:
+    """`from <other package> import _name` anywhere in src. A module may bind a
+    private name from a sibling in its OWN package (the routes_skills façade);
+    across packages only public names are imported (aliasing one to an old
+    private spelling, as the deps_auth façade does, is fine)."""
+    found: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        own = ".".join(_package_of(path))
+        for node in ast.walk(ast.parse(path.read_text(), str(path))):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            mod = _absolute(node, path)
+            if not mod.startswith("mcprouter"):
+                continue
+            pkg = (
+                mod.rpartition(".")[0]
+                if (SRC.parent / (mod.replace(".", "/") + ".py")).exists()
+                else mod
+            )
+            private = [
+                a.name for a in node.names if a.name.startswith("_") and not a.name.startswith("__")
+            ]
+            if private and pkg != own:
+                rel = path.relative_to(SRC).as_posix()
+                found.append(f"{rel}:{node.lineno} from {mod} import {', '.join(private)}")
+    return found
+
+
+def test_no_private_name_is_imported_across_packages() -> None:
+    assert _private_cross_package_imports() == []

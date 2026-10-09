@@ -26,7 +26,7 @@ ADMIN_TOKEN_ENV = "MCPR_ADMIN_TOKEN"
 DEV_AGENT_ID = "dev"
 
 _dev_warned = False
-_dev_lock = threading.Lock()
+dev_warning_lock = threading.Lock()  # guards _dev_warned
 
 
 @dataclass(frozen=True)
@@ -53,9 +53,9 @@ class SecurityConfig:
         return not self.agent_keys_configured and self.admin_token_hash is None
 
 
-def _warn_dev_once() -> None:
+def warn_dev_once() -> None:
     global _dev_warned
-    with _dev_lock:
+    with dev_warning_lock:
         if _dev_warned:
             return
         _dev_warned = True
@@ -68,9 +68,10 @@ def _warn_dev_once() -> None:
     )
 
 
-def _reset_dev_warning_for_tests() -> None:
+def reset_dev_warning() -> None:
+    """Re-arm the one-time dev-mode warning (tests build many apps per process)."""
     global _dev_warned
-    with _dev_lock:
+    with dev_warning_lock:
         _dev_warned = False
 
 
@@ -84,13 +85,9 @@ def dev_mode_active(session: Session, config: SecurityConfig) -> bool:
 
 def dev_principal(config: SecurityConfig) -> AgentPrincipal:
     return AgentPrincipal(
-        id="dev",
+        id=DEV_AGENT_ID,  # synthetic principal: its row id is its agent id
         agent_id=DEV_AGENT_ID,
         key_hash="",
         enabled=True,
         max_tools=config.max_exposed_tools,
     )
-
-
-# Old private spelling (policy/scope.py, routes_route.py imported it).
-_dev_mode_active = dev_mode_active
