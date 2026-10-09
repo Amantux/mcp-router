@@ -24,228 +24,62 @@ The raw key is never stored, logged, or echoed in an error.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
+# ---- façade (P-607): the auth core moved to mcprouter/auth/; every name this
+# module used to define or import is re-exported so old imports keep working.
+import hashlib  # noqa: F401
+import hmac  # noqa: F401
 import logging
-import re
-import secrets
-import threading
+import re  # noqa: F401
+import secrets  # noqa: F401
+import threading  # noqa: F401
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: F401
 from typing import Any
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select  # noqa: F401
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.models import AgentPrincipal
+from mcprouter.auth import config as _config
+from mcprouter.auth.config import (  # noqa: F401
+    ADMIN_TOKEN_ENV,
+    DEV_AGENT_ID,
+    SecurityConfig,
+    _dev_lock,
+    _dev_mode_active,
+    _reset_dev_warning_for_tests,
+    _warn_dev_once,
+    dev_principal,
+)
+from mcprouter.auth.keys import (  # noqa: F401
+    _AGENT_ID_RE,
+    _KEY_RE,
+    MAX_KEY_LEN,
+    AgentKeysConfigError,
+    AuthenticationError,
+    generate_key,
+    hash_key,
+    parse_agent_keys,
+    parse_bearer,
+)
+from mcprouter.auth.principals import (  # noqa: F401
+    _match_principal,
+    bootstrap_principals,
+    check_admin,
+    is_admin_bearer,
+    resolve_principal,
+)
+from mcprouter.models import AgentPrincipal  # noqa: F401
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
 
-ADMIN_TOKEN_ENV = "MCPR_ADMIN_TOKEN"
-DEV_AGENT_ID = "dev"
-MAX_KEY_LEN = 512
-_AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,120}$")
-_KEY_RE = re.compile(r"^[\x21-\x7e]{1,512}$")  # printable ASCII, no spaces
 
-_dev_warned = False
-_dev_lock = threading.Lock()
-
-
-class AgentKeysConfigError(ValueError):
-    """Malformed MCPR_AGENT_KEYS. The message never contains key material."""
-
-
-class AuthenticationError(Exception):
-    """No valid credential. Curated message; maps to 401."""
-
-    def __init__(self, message: str = "invalid or missing API key") -> None:
-        super().__init__(message)
-        self.message = message
-
-
-@dataclass(frozen=True)
-class SecurityConfig:
-    agent_keys_configured: bool
-    admin_token_hash: str | None
-    max_exposed_tools: int
-
-    @classmethod
-    def build(cls, settings: Settings, env: Mapping[str, str]) -> SecurityConfig:
-        """Pure: everything comes from the arguments (no os.environ reads here)."""
-        admin = env.get(ADMIN_TOKEN_ENV, "").strip()
-        return cls(
-            agent_keys_configured=bool(settings.agent_keys.strip()),
-            admin_token_hash=hash_key(admin) if admin else None,
-            max_exposed_tools=settings.max_exposed_tools,
-        )
-
-    @property
-    def dev_mode_possible(self) -> bool:
-        return not self.agent_keys_configured and self.admin_token_hash is None
-
-
-def hash_key(raw: str) -> str:
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def generate_key() -> str:
-    return "mcpr_" + secrets.token_urlsafe(32)
-
-
-def parse_agent_keys(spec: str) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for idx, raw in enumerate(p.strip() for p in spec.split(",")):
-        if not raw:
-            continue
-        agent_id, sep, key = raw.partition(":")
-        if not sep or not _AGENT_ID_RE.match(agent_id) or not _KEY_RE.match(key):
-            raise AgentKeysConfigError(
-                f"MCPR_AGENT_KEYS entry #{idx + 1} is malformed; expected 'agent_id:key' "
-                "(agent_id [A-Za-z0-9_.-], key printable ASCII without spaces)"
-            )
-        if agent_id in seen:
-            raise AgentKeysConfigError(f"MCPR_AGENT_KEYS lists agent '{agent_id}' twice")
-        seen.add(agent_id)
-        pairs.append((agent_id, key))
-    return pairs
-
-
-def bootstrap_principals(session: Session, settings: Settings, config: SecurityConfig) -> int:
-    """Upsert principals from settings.agent_keys (hash only). Returns the count.
-
-    Env-configured keys are operator config and win over an API-created key
-    for the same agent_id (rotation = change the env and restart).
-    """
-    pairs = parse_agent_keys(settings.agent_keys)
-    if len({key for _, key in pairs}) != len(pairs):
-        raise AgentKeysConfigError("MCPR_AGENT_KEYS reuses one key for several agents")
-    for agent_id, key in pairs:
-        key_hash = hash_key(key)
-        if config.admin_token_hash and hmac.compare_digest(key_hash, config.admin_token_hash):
-            raise AgentKeysConfigError(
-                f"MCPR_AGENT_KEYS key for agent '{agent_id}' equals MCPR_ADMIN_TOKEN; use distinct"
-                " credentials"
-            )
-        existing = session.scalars(
-            select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
-        ).one_or_none()
-        if existing is None:
-            session.add(AgentPrincipal(agent_id=agent_id, key_hash=key_hash))
-        elif not hmac.compare_digest(existing.key_hash, key_hash):
-            existing.key_hash = key_hash
-    session.flush()
-    if pairs:
-        log.info("auth.bootstrap principals=%d", len(pairs))
-    return len(pairs)
-
-
-def parse_bearer(header: str | None) -> str | None:
-    """None if absent; raises AuthenticationError if present but malformed."""
-    if header is None:
-        return None
-    scheme, sep, token = header.partition(" ")
-    if not sep or scheme.lower() != "bearer" or not _KEY_RE.match(token):
-        raise AuthenticationError()
-    return token
-
-
-def _match_principal(session: Session, token: str) -> AgentPrincipal | None:
-    presented = hash_key(token)
-    matches: list[AgentPrincipal] = []
-    # Full scan with compare_digest and NO early exit (constant-time w.r.t.
-    # which principal matched). Local-agent counts make this cheap.
-    for p in session.scalars(select(AgentPrincipal)).all():
-        if hmac.compare_digest(presented, p.key_hash):
-            matches.append(p)
-    # Exactly one match or nothing: a key shared by two principals names no
-    # one (never "last wins").
-    if len(matches) != 1 or not matches[0].enabled:
-        return None
-    return matches[0]
-
-
-def _warn_dev_once() -> None:
-    global _dev_warned
-    with _dev_lock:
-        if _dev_warned:
-            return
-        _dev_warned = True
-    log.warning(
-        "auth.dev_mode event=auth_disabled reason=no_agent_keys_no_admin_token_no_principals "
-        "identity=%s — every unauthenticated caller is the '%s' agent; dev only, never expose "
-        "beyond localhost",
-        DEV_AGENT_ID,
-        DEV_AGENT_ID,
-    )
-
-
-def _reset_dev_warning_for_tests() -> None:
-    global _dev_warned
-    with _dev_lock:
-        _dev_warned = False
-
-
-def _dev_mode_active(session: Session, config: SecurityConfig) -> bool:
-    if not config.dev_mode_possible:
-        return False
-    count = session.scalar(select(func.count()).select_from(AgentPrincipal)) or 0
-    return count == 0
-
-
-def dev_principal(config: SecurityConfig) -> AgentPrincipal:
-    return AgentPrincipal(
-        id="dev",
-        agent_id=DEV_AGENT_ID,
-        key_hash="",
-        enabled=True,
-        max_tools=config.max_exposed_tools,
-    )
-
-
-def resolve_principal(
-    session: Session, config: SecurityConfig, authorization: str | None
-) -> AgentPrincipal:
-    """The single agent-auth decision, shared by REST and the MCP gateway."""
-    token = parse_bearer(authorization)
-    if token is None:
-        if _dev_mode_active(session, config):
-            _warn_dev_once()
-            return dev_principal(config)
-        raise AuthenticationError()
-    principal = _match_principal(session, token)
-    if principal is None:
-        raise AuthenticationError()
-    session.expunge(principal)
-    return principal
-
-
-def check_admin(session: Session, config: SecurityConfig, authorization: str | None) -> None:
-    """Raises AuthenticationError (401) or PermissionError (403)."""
-    if config.admin_token_hash is None:
-        if _dev_mode_active(session, config):
-            _warn_dev_once()
-            return
-        raise PermissionError("admin token not configured")
-    token = parse_bearer(authorization)
-    if token is None or not hmac.compare_digest(hash_key(token), config.admin_token_hash):
-        raise AuthenticationError("invalid or missing admin token")
-
-
-def is_admin_bearer(config: SecurityConfig, authorization: str | None) -> bool:
-    """True iff `authorization` is a well-formed Bearer whose token IS the admin
-    token (constant-time compare). Never raises and never grants anything by
-    itself: callers that branch on it still authenticate the other branch
-    with resolve_principal. False when no admin token is configured."""
-    if config.admin_token_hash is None:
-        return False
-    try:
-        token = parse_bearer(authorization)
-    except AuthenticationError:
-        return False
-    return token is not None and hmac.compare_digest(hash_key(token), config.admin_token_hash)
+def __getattr__(name: str) -> Any:
+    # `_dev_warned` is rebound inside auth.config; read it live, not a copy.
+    if name == "_dev_warned":
+        return _config._dev_warned
+    raise AttributeError(name)
 
 
 def configure_security(app: Any, env: Mapping[str, str]) -> SecurityConfig:
@@ -305,3 +139,54 @@ def require_admin(request: Request) -> None:
             raise _unauthorized(exc) from None
         except PermissionError:
             raise HTTPException(status_code=403, detail="admin token not configured") from None
+
+
+# Explicit façade surface (mypy no-implicit-reexport): every pre-move name.
+__all__ = [
+    "ADMIN_TOKEN_ENV",
+    "AgentKeysConfigError",
+    "AgentPrincipal",
+    "Any",
+    "AuthenticationError",
+    "DEV_AGENT_ID",
+    "HTTPException",
+    "MAX_KEY_LEN",
+    "Mapping",
+    "Request",
+    "SecurityConfig",
+    "Session",
+    "Settings",
+    "_AGENT_ID_RE",
+    "_KEY_RE",
+    "_dev_lock",
+    "_dev_mode_active",
+    "_match_principal",
+    "_reset_dev_warning_for_tests",
+    "_security",
+    "_unauthorized",
+    "_warn_dev_once",
+    "bootstrap_principals",
+    "check_admin",
+    "configure_security",
+    "dataclass",
+    "dev_principal",
+    "func",
+    "generate_key",
+    "get_principal",
+    "hash_key",
+    "hashlib",
+    "hmac",
+    "is_admin_bearer",
+    "log",
+    "logging",
+    "parse_agent_keys",
+    "parse_bearer",
+    "re",
+    "require_admin",
+    "resolve_principal",
+    "secrets",
+    "security_of",
+    "select",
+    "sessionmaker",
+    "threading",
+]

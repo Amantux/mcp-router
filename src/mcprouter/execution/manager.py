@@ -38,7 +38,7 @@ import anyio
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.api.deps_auth import DEV_AGENT_ID
+from mcprouter.auth.config import DEV_AGENT_ID
 from mcprouter.execution.models import (
     APPROVAL_DENIED,
     APPROVAL_EXECUTED,
