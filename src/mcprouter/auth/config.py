@@ -37,8 +37,11 @@ class SecurityConfig:
 
     @classmethod
     def build(cls, settings: Settings, env: Mapping[str, str]) -> SecurityConfig:
-        """Pure: everything comes from the arguments (no os.environ reads here)."""
-        admin = env.get(ADMIN_TOKEN_ENV, "").strip()
+        """Pure: everything comes from the arguments (no os.environ reads here).
+
+        The admin token comes from `settings.admin_token` (MCPR_ADMIN_TOKEN, P-607);
+        `env` is the fallback for callers that build Settings without it."""
+        admin = (settings.admin_token or env.get(ADMIN_TOKEN_ENV, "")).strip()
         return cls(
             agent_keys_configured=bool(settings.agent_keys.strip()),
             admin_token_hash=hash_key(admin) if admin else None,

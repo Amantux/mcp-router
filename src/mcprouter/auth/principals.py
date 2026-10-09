@@ -68,12 +68,15 @@ def bootstrap_principals(session: Session, settings: Settings, config: SecurityC
 
 def _match_principal(session: Session, token: str) -> AgentPrincipal | None:
     presented = hash_key(token)
-    matches: list[AgentPrincipal] = []
-    # Full scan with compare_digest and NO early exit (constant-time w.r.t.
-    # which principal matched). Local-agent counts make this cheap.
-    for p in session.scalars(select(AgentPrincipal)).all():
-        if hmac.compare_digest(presented, p.key_hash):
-            matches.append(p)
+    # ONE indexed query (ix_agent_principals_key_hash, migration 0002) instead
+    # of a full-table scan per request. The lookup key is the SHA-256 of the
+    # presented secret, so index timing reveals nothing usable about any stored
+    # key; the hit is still confirmed with compare_digest. LIMIT 2 is enough to
+    # see a key shared by two principals.
+    candidates = session.scalars(
+        select(AgentPrincipal).where(AgentPrincipal.key_hash == presented).limit(2)
+    ).all()
+    matches = [p for p in candidates if hmac.compare_digest(presented, p.key_hash)]
     # Exactly one match or nothing: a key shared by two principals names no
     # one (never "last wins").
     if len(matches) != 1 or not matches[0].enabled:

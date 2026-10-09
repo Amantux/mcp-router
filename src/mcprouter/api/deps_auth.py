@@ -1,9 +1,11 @@
 """Agent and admin authentication for REST and the MCP gateway (FR-07).
 
 Agents: `Authorization: Bearer <api key>`. Keys are stored as sha256 hex in
-`AgentPrincipal.key_hash`; the presented key is hashed and compared against
-EVERY principal's hash with `hmac.compare_digest` (no early exit), so timing
-reveals neither which principal matched nor how much of a hash matched.
+`AgentPrincipal.key_hash`; the presented key is hashed, looked up with ONE
+indexed query on `key_hash`, and the hit is confirmed with
+`hmac.compare_digest`. The lookup key is a hash of the secret, so its timing
+reveals nothing usable. (The core lives in `mcprouter.auth`; this module keeps
+the FastAPI dependencies and re-exports the rest.)
 
 Rules (all mutation-checked in tests/test_gateway_auth.py):
 
@@ -15,7 +17,7 @@ Rules (all mutation-checked in tests/test_gateway_auth.py):
   `settings.agent_keys`, no `MCPR_ADMIN_TOKEN`, and zero principals in the DB.
   It yields the synthetic, unpersisted principal `dev`, which is still subject
   to deny-by-default policy. A loud structured warning is logged once.
-* Admin: `Authorization: Bearer <MCPR_ADMIN_TOKEN>`. Unset admin token outside
+* Admin: `Authorization: Bearer <MCPR_ADMIN_TOKEN>` (`settings.admin_token`). Unset admin token outside
   dev mode => admin endpoints are 403 (fail closed). An agent key is never an
   admin credential, and bootstrap refuses an agent key equal to the admin token.
 

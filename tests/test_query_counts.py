@@ -236,3 +236,55 @@ def test_skill_ingest_refreshes_planner_statistics(
         ingest.sync_source(s, src, tmp_path, Settings())  # no change -> no ANALYZE
         assert len(calls) == 1
         s.rollback()
+
+
+# ------------------------------------------------------------------ P-607
+def test_agent_auth_is_one_indexed_query(db: sessionmaker[Session]) -> None:
+    from mcprouter.auth import SecurityConfig, hash_key, resolve_principal
+    from mcprouter.models import AgentPrincipal
+
+    with db() as s:
+        s.add_all(
+            AgentPrincipal(agent_id=f"agent-{i}", key_hash=hash_key(f"key-{i}")) for i in range(50)
+        )
+        s.commit()
+    config = SecurityConfig(agent_keys_configured=True, admin_token_hash=None, max_exposed_tools=8)
+    with db() as s, count_statements(db.kw["bind"]) as seen:
+        p = resolve_principal(s, config, "Bearer key-7")
+    assert p.agent_id == "agent-7"
+    assert len(seen) == 1, seen
+    with db() as s:
+        s.execute(text("SET LOCAL enable_seqscan = off"))
+        plan = _plan(s, "SELECT id FROM agent_principals WHERE key_hash = :h", {"h": hash_key("x")})
+        s.rollback()
+    assert "ix_agent_principals_key_hash" in plan, plan
+
+
+def test_a_key_shared_by_two_principals_names_no_one(db: sessionmaker[Session]) -> None:
+    from mcprouter.auth import AuthenticationError, SecurityConfig, hash_key, resolve_principal
+    from mcprouter.models import AgentPrincipal
+
+    with db() as s:
+        s.add_all(
+            [
+                AgentPrincipal(agent_id="twin-a", key_hash=hash_key("shared")),
+                AgentPrincipal(agent_id="twin-b", key_hash=hash_key("shared")),
+            ]
+        )
+        s.commit()
+    config = SecurityConfig(agent_keys_configured=True, admin_token_hash=None, max_exposed_tools=8)
+    with db() as s, pytest.raises(AuthenticationError):
+        resolve_principal(s, config, "Bearer shared")
+
+
+def test_admin_token_comes_from_settings() -> None:
+    from mcprouter.auth import SecurityConfig, hash_key
+    from mcprouter.settings import Settings
+
+    tok, other = "a" * 40, "b" * 40
+    assert SecurityConfig.build(Settings(admin_token=tok), {}).admin_token_hash == hash_key(tok)
+    built = SecurityConfig.build(Settings(admin_token=tok), {"MCPR_ADMIN_TOKEN": other})
+    assert built.admin_token_hash == hash_key(tok)  # settings wins
+    fallback = SecurityConfig.build(Settings(), {"MCPR_ADMIN_TOKEN": other})
+    assert fallback.admin_token_hash == hash_key(other)  # env mapping as fallback
+    assert SecurityConfig.build(Settings(), {}).admin_token_hash is None
