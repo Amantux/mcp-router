@@ -1,20 +1,17 @@
 """FR-06 gateway: per-agent dynamic exposure over a real MCP endpoint.
 
 Handler-level tests drive the low-level Server handlers with a real
-ServerRequestContext; end-to-end tests run uvicorn on 127.0.0.1:8641 and talk
+ServerRequestContext; end-to-end tests run uvicorn on an OS-assigned port and talk
 to it with the installed mcp 2.x client (both protocol eras)."""
 
 from __future__ import annotations
 
-import threading
 import time
-from collections.abc import Iterator
 from typing import Any
 
 import anyio
 import mcp_types as types
 import pytest
-import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.client.subscriptions import listen
@@ -36,15 +33,14 @@ from tests.support.gateway import (
     _client,
     _ctx,
     _names,
+    notify_stream_ready,
 )
+from tests.support.gateway import live as live  # noqa: F401 — fixture
 from tests.support.gateway import world as world  # noqa: F401 — fixture
 
 from .conftest import requires_db
 
 pytestmark = requires_db
-
-PORT = 8641
-URL = f"http://127.0.0.1:{PORT}/mcp"
 
 
 # ----------------------------------------------------------- list_tools
@@ -264,26 +260,16 @@ async def test_list_changed_bus_is_per_agent(world: dict[str, Any]) -> None:
 
 # ------------------------------------------------------------ end-to-end
 @pytest.fixture()
-def served(world: dict[str, Any]) -> Iterator[dict[str, Any]]:
-    config = uvicorn.Config(world["app"], host="127.0.0.1", port=PORT, log_level="warning")
-    server = uvicorn.Server(config)
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    deadline = time.time() + 10
-    while not server.started and time.time() < deadline:
-        time.sleep(0.05)
-    assert server.started, "uvicorn did not start"
-    yield world
-    server.should_exit = True
-    t.join(10)
+def served(live: dict[str, Any]) -> dict[str, Any]:
+    return live
 
 
 async def test_e2e_requires_authentication(served: dict[str, Any]) -> None:
     async with _client(None) as http:
-        r = await http.post(URL, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        r = await http.post(served["url"], json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         assert r.status_code == 401
     async with create_mcp_http_client(headers={"Authorization": "Bearer wrong"}) as http:
-        r = await http.post(URL, json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        r = await http.post(served["url"], json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         assert r.status_code == 401
 
 
@@ -298,7 +284,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
 
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w, message_handler=on_message) as session,
     ):
         init = await session.initialize()
@@ -316,7 +302,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
         assert res.is_error is False and inv.calls == [("github", "list_issues", {"repo": "a/b"})]
         denied = await session.call_tool("shell.run_command", {"repo": "a/b"})
         assert denied.is_error is True and len(inv.calls) == 1
-        await anyio.sleep(0.3)  # let the standalone GET stream attach
+        await notify_stream_ready(served["gw"], "alice")
         await session.call_tool(META_TOOL, {"query": "file an issue"})
         with anyio.fail_after(5):
             await changed.wait()
@@ -329,7 +315,7 @@ async def test_e2e_session_is_bound_to_its_creator(served: dict[str, Any]) -> No
     add_rule(served["db"], "alice")
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w) as session,
     ):
         await session.initialize()
@@ -337,7 +323,7 @@ async def test_e2e_session_is_bound_to_its_creator(served: dict[str, Any]) -> No
         sid = next(iter(served["gw"]._legacy["alice"]))
         async with _client("bob") as bob:
             resp = await bob.post(
-                URL,
+                served["url"],
                 json={"jsonrpc": "2.0", "id": 9, "method": "tools/list"},
                 headers={
                     "mcp-session-id": sid,
@@ -353,7 +339,7 @@ async def test_e2e_modern_listen_receives_only_own_changes(served: dict[str, Any
     add_rule(served["db"], "alice", max_operation="write")
     async with (
         _client("alice") as http,
-        streamable_http_client(URL, http_client=http) as (r, w),
+        streamable_http_client(served["url"], http_client=http) as (r, w),
         ClientSession(r, w) as session,
     ):
         await session.discover()

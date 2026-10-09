@@ -8,6 +8,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any
 
+import anyio
 import mcp_types as types
 import pytest
 from fastapi import FastAPI
@@ -233,6 +234,18 @@ def get_stream_attached(gw: GatewayServer, sid: str) -> bool:
     Reads SDK internals (mcp 2.3.0 ``StreamableHTTPSessionManager``)."""
     transport = gw.server.session_manager._server_instances.get(sid)
     return transport is not None and GET_STREAM_KEY in transport._request_streams
+
+
+async def notify_stream_ready(gw: GatewayServer, agent: str, timeout: float = 5.0) -> None:
+    """Replaces the old fixed ``sleep(0.3)``: wait (without blocking the
+    loop the client runs on) until every tracked handshake session of
+    ``agent`` has its standalone GET notification stream attached."""
+    with anyio.fail_after(timeout):
+        while True:
+            sids = list(gw._legacy.get(agent, {}))
+            if sids and all(get_stream_attached(gw, sid) for sid in sids):
+                return
+            await anyio.sleep(0.01)
 
 
 # Spec methods the gateway deliberately does NOT handle (SDK answers -32601),

@@ -507,6 +507,8 @@ class GatewayServer:
         self._manager_takes_route_id = _accepts_kwarg(manager.execute, ROUTE_REQUEST_ID_KWARG)
         self._route_fn = route_fn
         self.exposure = ExposureStore()
+        # ADAPTER (E6 P-606): becomes the D10 registry's ("find_tools", agent)
+        # limiter (app.state.limiters, passed in by build_gateway) on rebase.
         self._route_limiter = SlidingWindowLimiter(settings.rate_limit_per_agent_per_min)
         self._buses: dict[str, tuple[InMemorySubscriptionBus, ListenHandler]] = {}
         self._legacy: dict[str, OrderedDict[str, ServerSession]] = {}
