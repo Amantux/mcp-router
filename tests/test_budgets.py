@@ -272,27 +272,12 @@ async def test_gateway_exposure_excludes_offline_servers(world: dict[str, Any]) 
 
 
 # ------------------------------------------- analytics seam (route_request_id)
-def test_accepts_kwarg_feature_detect() -> None:
-    from mcprouter.gateway.server import _accepts_kwarg
-
-    def old(principal: object, tool: object, arguments: object) -> None: ...
-    def new(
-        principal: object, tool: object, arguments: object, *, route_request_id: str | None = None
-    ) -> None: ...
-    def loose(principal: object, **kw: object) -> None: ...
-
-    assert _accepts_kwarg(old, "route_request_id") is False
-    assert _accepts_kwarg(new, "route_request_id") is True
-    assert _accepts_kwarg(loose, "route_request_id") is True
-
-
 @requires_db
 async def test_gateway_passes_last_route_request_id_when_supported(world: dict[str, Any]) -> None:  # noqa: F811
     import mcp_types as types
 
     from mcprouter.execution.manager import ExecutionManager, ExecutionResult
     from mcprouter.execution.ratelimit import SlidingWindowLimiter
-    from mcprouter.gateway.server import ROUTE_REQUEST_ID_KWARG, _accepts_kwarg
     from tests.support.gateway import _ctx
 
     gw, cat, db, route = world["gw"], world["cat"], world["db"], world["route"]
@@ -309,10 +294,9 @@ async def test_gateway_passes_last_route_request_id_when_supported(world: dict[s
     base = gw._manager
     rec = Recording(db, base._invoker, timeout_s=2.0, limiter=SlidingWindowLimiter(1000))
     gw._manager = rec
-    gw._manager_takes_route_id = _accepts_kwarg(rec.execute, ROUTE_REQUEST_ID_KWARG)
     params = types.CallToolRequestParams(name="github.list_issues", arguments={})
     await gw._on_call_tool(_ctx(gw, cat, "alice"), params)
-    assert seen == [None]  # no route yet -> no kwarg passed
+    assert seen == [None]  # no route yet -> unattributed
     result = route(RouteRequest("q", "alice", 8))
     await gw.apply_route("alice", result)
     await gw._on_call_tool(_ctx(gw, cat, "alice"), params)

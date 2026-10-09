@@ -36,12 +36,11 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import inspect
 import json
 import logging
 import threading
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import anyio
@@ -115,22 +114,6 @@ NOTIFY_TIMEOUT_S = 2.0
 # The SDK's own /mcp body cap: the app-wide cap (limits.MAX_BODY_BYTES, which
 # api.body_limit enforces in front of every route).
 MAX_MCP_BODY_BYTES = MAX_BODY_BYTES
-ROUTE_REQUEST_ID_KWARG = "route_request_id"
-
-
-def _accepts_kwarg(fn: Callable[..., object], name: str) -> bool:
-    """Feature-detect an optional keyword (cross-branch seam: the analytics
-    track adds `route_request_id` to ExecutionManager.execute)."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
-    p = params.get(name)
-    if p is not None:
-        return p.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    return any(q.kind is inspect.Parameter.VAR_KEYWORD for q in params.values())
-
-
 _META_TOOL_DEF = types.Tool(
     name=META_TOOL,
     description=(
@@ -513,7 +496,6 @@ class GatewayServer:
         self._security = security
         self._settings = settings
         self._manager = manager
-        self._manager_takes_route_id = _accepts_kwarg(manager.execute, ROUTE_REQUEST_ID_KWARG)
         self._route_fn = route_fn
         self.exposure = ExposureStore()
         # D10: the app's registry (app.state.limiters, via build_gateway); a
@@ -852,16 +834,17 @@ class GatewayServer:
         if skill:
             return await self._skill_tool(principal, params.name, params.arguments or {})
         tool_id = await anyio.to_thread.run_sync(self._resolve_stable_id, params.name)
-        # Analytics seam (wave 2): attribute the call to the route that exposed
-        # the agent's current tool set. Exposure is per AGENT (all its sessions
-        # share it), so this is the agent's last route request_id. Passed only
-        # when the manager's execute() declares the optional keyword.
-        extra: dict[str, Any] = {}
+        # Attribute the call to the route that exposed the agent's current tool
+        # set. Exposure is per AGENT (all its sessions share it), so this is the
+        # agent's last route request_id (None before any route).
         exposure = self.exposure.get(principal.agent_id)
-        if exposure is not None and self._manager_takes_route_id:
-            extra[ROUTE_REQUEST_ID_KWARG] = exposure.request_id
         # Unknown names still go through the manager so the attempt is audited.
-        res = await self._manager.execute(principal, tool_id or "", params.arguments or {}, **extra)
+        res = await self._manager.execute(
+            principal,
+            tool_id or "",
+            params.arguments or {},
+            route_request_id=exposure.request_id if exposure is not None else None,
+        )
         return _to_call_result(res)
 
     async def _on_listen(

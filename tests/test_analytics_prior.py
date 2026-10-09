@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from mcprouter.analytics.prior import DEFAULT_CAP, prior_enabled, usage_prior
+from mcprouter.analytics.prior import DEFAULT_CAP, usage_prior
 from mcprouter.analytics.window import InvalidWindow, live_horizon, parse_window
 from mcprouter.settings import Settings
 
@@ -61,9 +61,9 @@ def test_bad_cap_is_zero() -> None:
 def test_prior_enabled_env(raw: str, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     """Promoted to Settings (integration): one strict parser, empty = unset."""
     monkeypatch.setenv("MCPR_USAGE_PRIOR_ENABLED", raw)
-    assert prior_enabled(Settings.from_env()) is expected
+    assert Settings.from_env().usage_prior_enabled is expected
     monkeypatch.delenv("MCPR_USAGE_PRIOR_ENABLED")
-    assert prior_enabled(Settings.from_env()) is False
+    assert Settings.from_env().usage_prior_enabled is False
     monkeypatch.setenv("MCPR_USAGE_PRIOR_ENABLED", "maybe")
     with pytest.raises(ValueError):
         Settings.from_env()

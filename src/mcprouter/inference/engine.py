@@ -609,26 +609,3 @@ class InferenceEngine:
                     "laya": _pkg_version("laya"),
                 },
             }
-
-
-# ------------------------------------------------------ process singleton
-_PROCESS_ENGINE: InferenceEngine | None = None
-_PROCESS_LOCK = threading.Lock()
-
-
-def get_process_engine(settings: Settings) -> InferenceEngine:
-    """The one engine for this process (first caller's settings win). Does not load."""
-    global _PROCESS_ENGINE
-    with _PROCESS_LOCK:
-        if _PROCESS_ENGINE is None:
-            _PROCESS_ENGINE = InferenceEngine(settings)
-        return _PROCESS_ENGINE
-
-
-def reset_process_engine() -> None:
-    """Unload and forget the process engine (tests, shutdown)."""
-    global _PROCESS_ENGINE
-    with _PROCESS_LOCK:
-        if _PROCESS_ENGINE is not None:
-            _PROCESS_ENGINE.unload()
-        _PROCESS_ENGINE = None

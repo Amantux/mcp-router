@@ -63,12 +63,10 @@ def tool_token_map(session: Session) -> dict[str, int]:
     return {tid: estimate_tokens(srv, name, desc, sch) for tid, srv, name, desc, sch in rows}
 
 
-SKILL_METADATA_ESTIMATOR = "chars/4 over compact JSON of skill name+description"
-
-
 def skill_metadata_tokens(name: str, description: str) -> int:
     """The progressive-disclosure tier an agent always receives for a skill:
-    `name` + `description` (the body is sent only on activation)."""
+    `name` + `description` (the body is sent only on activation). Estimator:
+    chars/4 over the compact JSON of those two fields."""
     chars = len(
         json.dumps(
             {"name": name, "description": description or ""},

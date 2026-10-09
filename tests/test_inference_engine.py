@@ -10,15 +10,12 @@ from typing import Any
 
 import pytest
 
-from mcprouter.inference import engine as engine_mod
 from mcprouter.inference.deterministic import DeterministicDecisionModel
 from mcprouter.inference.engine import (
     MODE_CONCURRENCY,
     InferenceEngine,
     batched,
-    get_process_engine,
     memory_stats,
-    reset_process_engine,
     resolve_device,
 )
 from mcprouter.inference.errors import (
@@ -360,17 +357,6 @@ def test_health_exposes_no_paths_or_secrets() -> None:
     blob = repr(eng.health())
     for needle in ("supersecret", "dbpass", "/very/private", "postgresql"):
         assert needle not in blob
-
-
-def test_process_engine_is_a_singleton() -> None:
-    reset_process_engine()
-    try:
-        a = get_process_engine(Settings())
-        b = get_process_engine(Settings(operating_mode="battery"))
-        assert a is b
-        assert engine_mod._PROCESS_ENGINE is a
-    finally:
-        reset_process_engine()
 
 
 # ------------------------------------------------- review fixes (race/lock)

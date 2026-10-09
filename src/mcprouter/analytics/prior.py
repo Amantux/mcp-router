@@ -36,16 +36,10 @@ from __future__ import annotations
 
 import math
 
-from mcprouter.settings import Settings
-
 DEFAULT_CAP = 0.05
 SATURATION_SURFACED = 200
 W_SELECTION = 0.7
 W_FEEDBACK = 0.3
-
-
-def prior_enabled(settings: Settings) -> bool:
-    return settings.usage_prior_enabled
 
 
 def usage_prior(
