@@ -10,7 +10,9 @@
   not_found | denied | rate_limited | invalid_path | not_in_manifest | too_large | not_found | unreadable.
 - `execution/manager.py::record_skill_activation(agent_id, skill_id, outcome, detail,
   route_request_id=None, initiated_by=None) -> record id` (bumps activation_count on ok).
-- `skills/bundle.py::build_bundle([(skill, SkillFiles)]) -> (zip_bytes, skipped)`.
+- `skills/bundle.py::_build_bundle([(skill, SkillFiles)]) -> (zip_bytes, skipped)` is
+  PRIVATE: call `SkillExposure.bundle(agent_id, routed_ids, ...)`, which gates
+  (visibility -> rate limit -> policy) and audits before returning the bytes.
 - `skills/__init__.py` is an empty file — S1 also creates it; resolve as empty.
 
 ## Seams for the integrator
@@ -153,3 +155,15 @@ denied by policy." · 429 "Too many skill activations; retry later." · 413
 (ONE message for unknown / unrouted / invalid path / not in manifest /
 unreadable) · anything else 500 "Internal error while serving the skill.".
 Note: the notes above said `X-Skipped-Resources` was a count; it is the path list.
+
+## Reviewer fixes — curated errors and bundle audit
+- REST status map (`routes_skills._ERRORS`), all with curated messages:
+  403 `denied`; 429 `rate_limited`; 413 `too_large` and `too_many` (bundle over
+  `MAX_BUNDLE_SKILLS`); 409 `stale` ("Skill resource is out of date; re-index the
+  skill.") and 409 `duplicate_name` (two routed skills share a name, e.g. from two
+  sources — activate them singly). 404 "Unknown skill or resource." stays shared by
+  `not_found`/`invalid_name`/`invalid_path`/`not_in_manifest`/`unreadable`.
+- `SkillExposure.bundle` audit rows: a `BundleError` (too_many/too_large/
+  invalid_name/duplicate_name) writes ONE `error` row with detail `bundle: <code>`
+  before re-raising; a rate-limited bundle writes ONE `rate_limited` row with detail
+  `bundle` (not one per routed skill).
