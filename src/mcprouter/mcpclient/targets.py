@@ -13,13 +13,16 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from mcprouter.mcpclient.errors import InvalidTargetError
+from mcprouter.net_policy import ForbiddenAddressError, resolve_and_check
 
 Transport = Literal["stdio", "streamable-http", "sse"]
 TRANSPORTS: tuple[Transport, ...] = ("stdio", "streamable-http", "sse")
 
 
 def validate_http_url(url: str) -> str:
-    """Return ``url`` if it is an http(s) URL with a host and no userinfo.
+    """Return ``url`` if it is an http(s) URL with a host and no userinfo that
+    is not, and does not resolve to, a link-local/metadata address
+    (net_policy; private LAN ranges stay allowed).
 
     Userinfo is refused because credentials in a URL leak into logs, caches
     and error messages; supply them via server-side credential storage.
@@ -39,6 +42,10 @@ def validate_http_url(url: str) -> str:
         raise InvalidTargetError("endpoint URL must not contain credentials")
     if not parts.hostname:
         raise InvalidTargetError("endpoint URL must include a host")
+    try:
+        resolve_and_check(parts.hostname)
+    except ForbiddenAddressError as exc:  # curated constant message
+        raise InvalidTargetError(str(exc)) from None
     return url
 
 

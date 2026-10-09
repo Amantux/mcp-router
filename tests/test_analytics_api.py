@@ -303,7 +303,8 @@ def test_install_on_the_real_app_factory(sec_db: sessionmaker[Session]) -> None:
         r = c.get("/api/v1/analytics/overview?window=24h", headers=H_ADMIN)
         assert r.status_code == 200 and r.json()["routing"]["decisions"] == 0
         install_metrics(app.state.session_factory).refresh_now()
-        assert "mcpr_analytics_tools_surfaced_total" in c.get("/metrics/").text
+        assert c.get("/metrics/").status_code == 401  # D14: admin bearer when a token is set
+        assert "mcpr_analytics_tools_surfaced_total" in c.get("/metrics/", headers=H_ADMIN).text
 
 
 def test_collect_never_queries_the_db_on_the_calling_thread() -> None:

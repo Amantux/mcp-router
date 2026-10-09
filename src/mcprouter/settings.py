@@ -7,22 +7,26 @@ from __future__ import annotations
 import math
 import os
 import re
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, fields
+from typing import Any
 
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = "postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter"
+    # Secrets (database_url carries the password) never appear in repr().
+    database_url: str = field(
+        default="postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter", repr=False
+    )
     # Gateway auth: comma-separated "agent_id:key" pairs for v1 local API keys.
     # Empty = auth disabled with a loud startup warning (dev only).
-    agent_keys: str = ""
+    agent_keys: str = field(default="", repr=False)
     # Inference
-    embedding_backend: str = "hash"  # hash | bge  (bge needs the [inference] extra)
+    embedding_backend: str = "hash"  # hash | bge | aoai  (bge needs the [inference] extra)
     embedding_model_id: str = "BAAI/bge-small-en-v1.5"
-    decision_backend: str = "deterministic"  # deterministic | laya | remote
+    decision_backend: str = "deterministic"  # deterministic | laya | remote | aoai
     laya_model_id: str = "convaiinnovations/laya"
-    device: str = "auto"  # auto | cuda | cpu
+    device: str = "auto"  # auto | cpu | cuda | cuda:<index>
     operating_mode: str = "balanced"  # performance | balanced | battery
     models_cache_dir: str = "./models-cache"
     idle_unload_s: float = 300.0  # battery mode only
@@ -74,8 +78,7 @@ class Settings:
     # the /mcp gateway accepts beyond the localhost set (MCPR_ALLOWED_HOSTS).
     ui_dist: str = "./ui/dist"
     allowed_hosts: tuple[str, ...] = ()
-    # wave-6 W0-3 seams: plain-parsed stubs, NOT consumed yet (E1 validates and
-    # wires them; E3/E6 consume the limits). Defaults are the documented ones.
+    # wave-6: validated through SETTINGS_SPEC (E1); E3/E6 consume the limits.
     admin_token: str = field(default="", repr=False)  # MCPR_ADMIN_TOKEN (secret)
     log_level: str = "INFO"
     log_format: str = "console"  # console | json
@@ -84,88 +87,36 @@ class Settings:
     mcp_max_sessions_per_agent: int = 32
     decision_rate_limit_per_min: int = 120
     dedup_max_pairs: int = 5000
+    # wave-3 Azure OpenAI backends (folded in from AoaiSettings, wave-6 E1).
+    # The endpoint is validated at point of use (inference/aoai.py).
+    aoai_endpoint: str = ""
+    aoai_api_key: str = field(default="", repr=False)
+    aoai_chat_deployment: str = ""
+    aoai_embedding_deployment: str = ""
+    aoai_max_retries: int = 2
+
+    def aoai(self) -> AoaiSettings:
+        """The Azure OpenAI backend's config view of these settings."""
+        return AoaiSettings(
+            endpoint=self.aoai_endpoint,
+            api_key=self.aoai_api_key,
+            chat_deployment=self.aoai_chat_deployment,
+            embedding_deployment=self.aoai_embedding_deployment,
+            max_retries=self.aoai_max_retries,
+        )
 
     @classmethod
-    def from_env(cls) -> Settings:
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
+        """Parse every SETTINGS_SPEC entry from `env` (default os.environ).
+        Empty string means unset. Any invalid value raises ValueError whose
+        message names the variable and never echoes the value."""
+        source = os.environ if env is None else env
+
         def get(name: str, default: str) -> str:
-            v = os.environ.get(name, "")
+            v = source.get(name, "")
             return v if v.strip() else default  # empty string means unset
 
-        d = cls()
-        return cls(
-            database_url=get("MCPR_DATABASE_URL", d.database_url),
-            agent_keys=get("MCPR_AGENT_KEYS", d.agent_keys),
-            embedding_backend=get("MCPR_EMBEDDING_BACKEND", d.embedding_backend),
-            embedding_model_id=get("MCPR_EMBEDDING_MODEL_ID", d.embedding_model_id),
-            decision_backend=get("MCPR_DECISION_BACKEND", d.decision_backend),
-            laya_model_id=get("MCPR_LAYA_MODEL_ID", d.laya_model_id),
-            device=get("MCPR_DEVICE", d.device),
-            operating_mode=get("MCPR_OPERATING_MODE", d.operating_mode),
-            models_cache_dir=get("MCPR_MODELS_CACHE_DIR", d.models_cache_dir),
-            idle_unload_s=float(get("MCPR_IDLE_UNLOAD_S", str(d.idle_unload_s))),
-            embed_batch_size=int(get("MCPR_EMBED_BATCH_SIZE", str(d.embed_batch_size))),
-            laya_noul_mode=get("MCPR_LAYA_NOUL_MODE", d.laya_noul_mode),
-            max_exposed_tools=int(get("MCPR_MAX_EXPOSED_TOOLS", str(d.max_exposed_tools))),
-            max_exposed_servers=_opt_int(get("MCPR_MAX_EXPOSED_SERVERS", "")),
-            retrieval_candidates=int(get("MCPR_RETRIEVAL_CANDIDATES", str(d.retrieval_candidates))),
-            route_confidence_floor=float(
-                get("MCPR_ROUTE_CONFIDENCE_FLOOR", str(d.route_confidence_floor))
-            ),
-            decision_timeout_s=float(get("MCPR_DECISION_TIMEOUT_S", str(d.decision_timeout_s))),
-            route_cache_ttl_s=float(get("MCPR_ROUTE_CACHE_TTL_S", str(d.route_cache_ttl_s))),
-            route_cache_size=int(get("MCPR_ROUTE_CACHE_SIZE", str(d.route_cache_size))),
-            sync_enabled=_bool(get("MCPR_SYNC_ENABLED", "false"), "MCPR_SYNC_ENABLED"),
-            usage_prior_enabled=_bool(
-                get("MCPR_USAGE_PRIOR_ENABLED", "false"), "MCPR_USAGE_PRIOR_ENABLED"
-            ),
-            analytics_rollup_enabled=_bool(
-                get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false"), "MCPR_ANALYTICS_ROLLUP_ENABLED"
-            ),
-            prefill_ms_per_1k_tokens=_rate(
-                get("MCPR_PREFILL_MS_PER_1K_TOKENS", str(d.prefill_ms_per_1k_tokens)),
-                "MCPR_PREFILL_MS_PER_1K_TOKENS",
-            ),
-            price_per_1k_input_tokens=_rate(
-                get("MCPR_PRICE_PER_1K_INPUT_TOKENS", str(d.price_per_1k_input_tokens)),
-                "MCPR_PRICE_PER_1K_INPUT_TOKENS",
-            ),
-            currency=get("MCPR_CURRENCY", d.currency).strip().upper(),
-            default_tool_timeout_s=float(
-                get("MCPR_DEFAULT_TOOL_TIMEOUT_S", str(d.default_tool_timeout_s))
-            ),
-            rate_limit_per_agent_per_min=int(
-                get("MCPR_RATE_LIMIT_PER_AGENT_PER_MIN", str(d.rate_limit_per_agent_per_min))
-            ),
-            max_exposed_skills=int(get("MCPR_MAX_EXPOSED_SKILLS", str(d.max_exposed_skills))),
-            skill_body_max_bytes=int(get("MCPR_SKILL_BODY_MAX_BYTES", str(d.skill_body_max_bytes))),
-            skill_resource_max_bytes=int(
-                get("MCPR_SKILL_RESOURCE_MAX_BYTES", str(d.skill_resource_max_bytes))
-            ),
-            skills_cache_dir=get("MCPR_SKILLS_CACHE_DIR", d.skills_cache_dir),
-            # wave-3 remote decision backend
-            decision_endpoint=get("MCPR_DECISION_ENDPOINT", d.decision_endpoint),
-            decision_model=get("MCPR_DECISION_MODEL", d.decision_model),
-            decision_api_key=_secret("MCPR_DECISION_API_KEY", get),
-            decision_max_retries=_bounded_retries(
-                get("MCPR_DECISION_MAX_RETRIES", str(d.decision_max_retries)),
-                "MCPR_DECISION_MAX_RETRIES",
-            ),
-            ui_dist=get("MCPR_UI_DIST", d.ui_dist),
-            allowed_hosts=_host_list(get("MCPR_ALLOWED_HOSTS", "")),
-            # wave-6 W0-3 stubs (plain parse; E1 adds validation and _FILE)
-            admin_token=get("MCPR_ADMIN_TOKEN", d.admin_token),
-            log_level=get("MCPR_LOG_LEVEL", d.log_level),
-            log_format=get("MCPR_LOG_FORMAT", d.log_format),
-            allow_open_dev=_bool(get("MCPR_ALLOW_OPEN_DEV", "false"), "MCPR_ALLOW_OPEN_DEV"),
-            mcp_max_sessions=int(get("MCPR_MCP_MAX_SESSIONS", str(d.mcp_max_sessions))),
-            mcp_max_sessions_per_agent=int(
-                get("MCPR_MCP_MAX_SESSIONS_PER_AGENT", str(d.mcp_max_sessions_per_agent))
-            ),
-            decision_rate_limit_per_min=int(
-                get("MCPR_DECISION_RATE_LIMIT_PER_MIN", str(d.decision_rate_limit_per_min))
-            ),
-            dedup_max_pairs=int(get("MCPR_DEDUP_MAX_PAIRS", str(d.dedup_max_pairs))),
-        )
+        return cls(**{spec.name: _parse(spec, get) for spec in SETTINGS_SPEC})
 
 
 def _host_list(raw: str) -> tuple[str, ...]:
@@ -198,24 +149,15 @@ def _bool(raw: str, name: str = "value") -> bool:
     raise ValueError(f"{name}: expected one of 1/0, true/false, yes/no, on/off")
 
 
-def _opt_int(raw: str) -> int | None:
-    """Empty/unset -> None. A set value must be a positive integer (fail loudly)."""
-    if not raw.strip():
-        return None
-    value = int(raw)
-    if value < 1:
-        raise ValueError("must be a positive integer when set")
-    return value
-
-
 # wave-3 remote decision backend
-def _secret(name: str, get: Callable[[str, str], str]) -> str:
+def _secret(name: str, get: Callable[[str, str], str], *, printable: bool = True) -> str:
     """<NAME>_FILE wins over <NAME>; surrounding whitespace is stripped. A set
     but unreadable, non-UTF-8 or oversized (> 64 KiB) file fails loudly; the
     message names the variable, never the content."""
     path = get(f"{name}_FILE", "")
     if not path:
-        return _printable_key(get(name, "").strip(), name)
+        plain = get(name, "").strip()
+        return _printable_key(plain, name) if printable else _no_controls(plain, name)
     failed = False
     data = b""
     try:
@@ -233,41 +175,386 @@ def _secret(name: str, get: Callable[[str, str], str]) -> str:
         failed = True
     if failed:
         raise ValueError(f"{name}_FILE: key file is not UTF-8 text")
-    return _printable_key(text.strip(), name)
+    if not text.strip():
+        raise ValueError(f"{name}_FILE: key file is empty")
+    text = text.strip()
+    return _printable_key(text, name) if printable else _no_controls(text, name)
 
 
 _KEY_RE = re.compile(r"[\x21-\x7e]*")
+_NO_CONTROLS_RE = re.compile(r"[\x20-\x7e]*")
+MIN_KEY_LEN = 32
+
+
+def _no_controls(value: str, name: str) -> str:
+    """Printable ASCII, spaces allowed (comma lists). Never echoes the value."""
+    if not _NO_CONTROLS_RE.fullmatch(value):
+        raise ValueError(f"{name}: must be printable ASCII")
+    return value
 
 
 def _printable_key(key: str, name: str) -> str:
     """A key goes into an HTTP header: printable ASCII, no whitespace/control.
     The message names the variable, never the key."""
     if not _KEY_RE.fullmatch(key):
-        raise ValueError(f"{name}: key must be printable ASCII with no whitespace")
+        raise ValueError(f"{name}: must be printable ASCII with no whitespace")
     return key
 
 
 _MAX_KEY_FILE_BYTES = 64 * 1024
-_MAX_DECISION_RETRIES = 10
 
 
-def _rate(raw: str, name: str) -> float:
-    """A non-negative finite rate. nan/inf/negative would silently poison every
-    estimate downstream (nan compares false everywhere), so refuse at startup."""
+# --- settings registry (P-105) -----------------------------------------------
+# SETTINGS_SPEC is the ONE declaration of every MCPR_* variable `Settings`
+# reads: `from_env` is driven by it, and scripts/gen_config_docs.py (E7)
+# renders docs/reference/configuration.md from it. ENV_ONLY_SPEC lists the
+# variables read only by the container entrypoint or by compose interpolation.
+#
+# Shape (plain data, importable without side effects):
+#   env       variable name             name     Settings attribute ("" = none)
+#   type      str|upper|int|float|bool|enum|opt_int|hosts|secret|device
+#   default   the parsed default        doc      one-line operator description
+#   choices   accepted values (enum/device/bool)  lo/hi  inclusive numeric bounds
+#             (secret/agent_keys: lo = minimum key length, env/_FILE path only)
+#   secret    never logged / never in repr        file_var  "<ENV>_FILE" or None
+#   scope     app | entrypoint | compose
+
+EMBEDDING_BACKEND_CHOICES = ("hash", "bge", "aoai")
+DECISION_BACKEND_CHOICES = ("deterministic", "laya", "remote", "aoai")
+OPERATING_MODE_CHOICES = ("performance", "balanced", "battery")
+LAYA_NOUL_MODE_CHOICES = ("choice", "native")
+LOG_FORMAT_CHOICES = ("console", "json")
+LOG_LEVEL_CHOICES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+DEVICE_CHOICES = ("auto", "cpu", "cuda", "cuda:<index>")
+_BOOL_CHOICES = ("true", "false")
+_DEVICE_RE = re.compile(r"auto|cpu|cuda(:\d{1,2})?")
+
+
+@dataclass(frozen=True)
+class SettingSpec:
+    env: str
+    name: str
+    type: str
+    default: object
+    doc: str
+    choices: tuple[str, ...] = ()
+    lo: float | None = None
+    hi: float | None = None
+    secret: bool = False
+    file_var: str | None = None
+    scope: str = "app"
+
+
+_FIELD_DEFAULTS = {f.name: f.default for f in fields(Settings)}
+
+
+def _s(name: str, type_: str, doc: str, **kw: object) -> SettingSpec:
+    env = f"MCPR_{name.upper()}"
+    if type_ == "bool":
+        kw.setdefault("choices", _BOOL_CHOICES)
+    if kw.get("file_var") is True:
+        kw["file_var"] = f"{env}_FILE"
+    return SettingSpec(env, name, type_, _FIELD_DEFAULTS[name], doc, **kw)  # type: ignore[arg-type]
+
+
+SETTINGS_SPEC: tuple[SettingSpec, ...] = (
+    # core / security
+    _s(
+        "database_url",
+        "secret",
+        "SQLAlchemy Postgres DSN (compose derives it).",
+        secret=True,
+        file_var=True,
+    ),
+    _s(
+        "agent_keys",
+        "agent_keys",
+        "Comma list of agent_id:key API keys (each key >= 32 chars).",
+        secret=True,
+        file_var=True,
+        lo=MIN_KEY_LEN,
+    ),
+    _s(
+        "admin_token",
+        "secret",
+        "Bearer token for the admin API, >= 32 chars (unset: loopback bind).",
+        secret=True,
+        file_var=True,
+        lo=MIN_KEY_LEN,
+    ),
+    _s("allowed_hosts", "hosts", "Extra Host names accepted besides loopback (421 otherwise)."),
+    _s("allow_open_dev", "bool", "Entrypoint: bind 0.0.0.0 even without an admin token."),
+    _s("log_level", "enum", "Root log level.", choices=LOG_LEVEL_CHOICES),
+    _s("log_format", "enum", "Log line format (compose sets json).", choices=LOG_FORMAT_CHOICES),
+    # inference
+    _s("embedding_backend", "enum", "Embedding backend.", choices=EMBEDDING_BACKEND_CHOICES),
+    _s("embedding_model_id", "str", "Hugging Face model id for the bge backend."),
+    _s("decision_backend", "enum", "Decision backend.", choices=DECISION_BACKEND_CHOICES),
+    _s("laya_model_id", "str", "Hugging Face model id for the laya backend."),
+    _s("device", "device", "Torch device for local models.", choices=DEVICE_CHOICES),
+    _s("operating_mode", "enum", "Inference concurrency profile.", choices=OPERATING_MODE_CHOICES),
+    _s("models_cache_dir", "str", "Model download cache directory."),
+    _s(
+        "idle_unload_s",
+        "float",
+        "Battery mode: unload models after this idle time.",
+        lo=1,
+        hi=86400,
+    ),
+    _s("embed_batch_size", "int", "Embedding batch size.", lo=1, hi=4096),
+    _s("laya_noul_mode", "enum", "Laya no-UL question mode.", choices=LAYA_NOUL_MODE_CHOICES),
+    _s("decision_timeout_s", "float", "Deadline per decision-model call.", lo=0.01, hi=600),
+    # routing
+    _s("max_exposed_tools", "int", "Tools exposed per route.", lo=1, hi=1000),
+    _s("max_exposed_servers", "opt_int", "Distinct servers per route (empty: no cap).", lo=1),
+    _s("retrieval_candidates", "int", "Retriever candidates before the decision.", lo=1, hi=10000),
+    _s("route_confidence_floor", "float", "Minimum route confidence.", lo=0, hi=1),
+    _s("route_cache_ttl_s", "float", "Route cache TTL (0 disables).", lo=0, hi=86400),
+    _s("route_cache_size", "int", "Route cache entries (0 disables).", lo=0, hi=1_000_000),
+    # discovery / analytics
+    _s("sync_enabled", "bool", "Run the background catalog sync + health loop."),
+    _s("usage_prior_enabled", "bool", "Enable the bounded usage-prior score nudge."),
+    _s("analytics_rollup_enabled", "bool", "Run the daily tool_stats rollup loop."),
+    _s("prefill_ms_per_1k_tokens", "float", "Savings estimate: prefill ms per 1k tokens.", lo=0),
+    _s("price_per_1k_input_tokens", "float", "Savings estimate: price per 1k tokens.", lo=0),
+    _s("currency", "upper", "Currency code for savings estimates."),
+    # execution / gateway
+    _s("default_tool_timeout_s", "float", "Default tool-call timeout.", lo=0.01, hi=3600),
+    _s(
+        "rate_limit_per_agent_per_min",
+        "int",
+        "Tool calls per agent per minute.",
+        lo=1,
+        hi=1_000_000,
+    ),
+    _s("mcp_max_sessions", "int", "Live MCP sessions (all agents).", lo=1, hi=1_000_000),
+    _s("mcp_max_sessions_per_agent", "int", "Live MCP sessions per agent.", lo=1, hi=100_000),
+    # skills
+    _s("max_exposed_skills", "int", "Skills exposed per route.", lo=0, hi=100),
+    _s("skill_body_max_bytes", "int", "SKILL.md body cap.", lo=1, hi=64 * 1024 * 1024),
+    _s("skill_resource_max_bytes", "int", "Per-resource serve cap.", lo=1, hi=1024 * 1024 * 1024),
+    _s("skills_cache_dir", "str", "Where git skill sources are cloned."),
+    # remote decision backend
+    _s("decision_endpoint", "str", "Remote decision endpoint URL (https; http only to loopback)."),
+    _s("decision_model", "str", "Remote decision model name."),
+    _s("decision_api_key", "secret", "Remote decision API key.", secret=True, file_var=True),
+    _s("decision_max_retries", "int", "Remote decision retries.", lo=0, hi=10),
+    _s(
+        "decision_rate_limit_per_min",
+        "int",
+        "Decision edge calls per principal/min.",
+        lo=1,
+        hi=1_000_000,
+    ),
+    # Azure OpenAI backend
+    _s("aoai_endpoint", "str", "Azure OpenAI endpoint (https://<resource>.openai.azure.com)."),
+    _s("aoai_api_key", "secret", "Azure OpenAI API key.", secret=True, file_var=True),
+    _s("aoai_chat_deployment", "str", "Azure OpenAI chat deployment (decisions)."),
+    _s("aoai_embedding_deployment", "str", "Azure OpenAI embedding deployment."),
+    _s("aoai_max_retries", "int", "Azure OpenAI retries.", lo=0, hi=10),
+    # dashboard / dedup
+    _s("ui_dist", "str", "Built dashboard directory served at /."),
+    _s("dedup_max_pairs", "int", "Cap on duplicate pairs per dedup run.", lo=1, hi=10_000_000),
+)
+
+
+def _e(env: str, type_: str, default: object, doc: str, scope: str, **kw: object) -> SettingSpec:
+    return SettingSpec(env, "", type_, default, doc, scope=scope, **kw)  # type: ignore[arg-type]
+
+
+ENV_ONLY_SPEC: tuple[SettingSpec, ...] = (
+    _e(
+        "MCPR_DB_WAIT_TRIES",
+        "int",
+        30,
+        "Postgres wait attempts (2 s apart).",
+        "entrypoint",
+        lo=1,
+        hi=1000,
+    ),
+    _e(
+        "MCPR_PORT",
+        "int",
+        8400,
+        "Port uvicorn listens on inside the container.",
+        "entrypoint",
+        lo=1,
+        hi=65535,
+    ),
+    _e("MCPR_DATA_DIR", "str", "/data", "Directory probed for writability at start.", "entrypoint"),
+    _e("MCPR_BIND", "str", "127.0.0.1", "Host interface compose publishes the API on.", "compose"),
+    _e(
+        "MCPR_HOST_PORT",
+        "int",
+        8400,
+        "Host port compose publishes the API on.",
+        "compose",
+        lo=1,
+        hi=65535,
+    ),
+    _e("MCPR_IMAGE", "str", "mcp-router:local", "Image tag of the base flavor.", "compose"),
+    _e(
+        "MCPR_BASE_IMAGE",
+        "str",
+        "mcp-router:local",
+        "Base image the inference build extends.",
+        "compose",
+    ),
+    _e(
+        "MCPR_INFERENCE_IMAGE",
+        "str",
+        "mcp-router:local-inference",
+        "Image tag of the inference flavor.",
+        "compose",
+    ),
+    _e(
+        "MCPR_TORCH_INDEX_URL",
+        "str",
+        "https://download.pytorch.org/whl/cu124",
+        "Torch wheel index (GPU build).",
+        "compose",
+    ),
+)
+
+
+def _agent_keys(spec: SettingSpec, get: Callable[[str, str], str]) -> str:
+    """`id:key,id:key` (spaces around commas allowed). Each key must meet the
+    minimum length; malformed entries are left to auth's parse_agent_keys,
+    whose messages never contain key material either."""
+    entries = [p.strip() for p in _secret(spec.env, get, printable=False).split(",")]
+    entries = [e for e in entries if e]
+    for idx, entry in enumerate(entries, 1):
+        _, sep, key = entry.partition(":")
+        if sep and spec.lo is not None and len(key) < spec.lo:
+            raise ValueError(
+                f"{spec.env}: entry #{idx} key must be at least {spec.lo:g} characters"
+            )
+    return ",".join(entries)
+
+
+def _num(raw: str, spec: SettingSpec) -> float:
     try:
-        value = float(raw)
+        value = int(raw) if spec.type in ("int", "opt_int") else float(raw)
     except ValueError:
-        raise ValueError(f"{name}: must be a number") from None
-    if not math.isfinite(value) or value < 0:
-        raise ValueError(f"{name}: must be a finite number >= 0")
+        kind = "an integer" if spec.type in ("int", "opt_int") else "a number"
+        raise ValueError(f"{spec.env}: must be {kind}") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{spec.env}: must be a finite number")
+    lo, hi = spec.lo, spec.hi
+    if (lo is not None and value < lo) or (hi is not None and value > hi):
+        bounds = f">= {lo:g}" if hi is None else f"between {lo:g} and {hi:g}"
+        raise ValueError(f"{spec.env}: must be {bounds}")
     return value
 
 
-def _bounded_retries(raw: str, name: str) -> int:
-    value = int(raw)
-    if not 0 <= value <= _MAX_DECISION_RETRIES:
-        raise ValueError(f"{name}: must be between 0 and {_MAX_DECISION_RETRIES}")
-    return value
+def _parse(spec: SettingSpec, get: Callable[[str, str], str]) -> Any:
+    """One registry entry -> its typed value. Messages name the variable and
+    never echo the value."""
+    if spec.type == "secret":
+        value = _secret(spec.env, get)
+        if value and spec.lo is not None and len(value) < spec.lo:
+            raise ValueError(f"{spec.env}: must be at least {spec.lo:g} characters")
+        return value or spec.default
+    if spec.type == "agent_keys":
+        return _agent_keys(spec, get)
+    raw = get(spec.env, "").strip()
+    if not raw:
+        return spec.default
+    match spec.type:
+        case "str":
+            return raw
+        case "upper":
+            return raw.upper()
+        case "int" | "opt_int":
+            return int(_num(raw, spec))
+        case "float":
+            return _num(raw, spec)
+        case "bool":
+            return _bool(raw, spec.env)
+        case "hosts":
+            return _host_list(raw)
+        case "device":
+            if not _DEVICE_RE.fullmatch(raw.lower()):
+                raise ValueError(f"{spec.env}: must be auto, cpu, cuda or cuda:<index>")
+            return raw.lower()
+        case "enum":
+            value = raw.upper() if spec.choices[0].isupper() else raw.lower()
+            if value not in spec.choices:
+                raise ValueError(f"{spec.env}: must be one of {' | '.join(spec.choices)}")
+            return value
+    raise AssertionError(f"unknown setting type {spec.type!r}")  # pragma: no cover
+
+
+# --- container entrypoint adapter (D1) -------------------------------------
+# The shell never re-parses config: scripts/docker-entrypoint.sh asks this one
+# tested function for the resolved bind host and DB-wait budget.
+
+LOOPBACK_BIND = "127.0.0.1"
+ALL_INTERFACES_BIND = "0.0.0.0"  # noqa: S104 - deliberate when a token is set (D1)
+
+
+@dataclass(frozen=True)
+class EntrypointPlan:
+    bind_host: str
+    db_wait_tries: int
+    warnings: tuple[str, ...]
+    port: int = 8400
+
+
+def entrypoint_plan(settings: Settings, env: Mapping[str, str]) -> EntrypointPlan:
+    """D1 fail-closed posture. Admin token set -> all interfaces. No token ->
+    loopback only (the admin API is open in dev mode, or locked with agent keys)
+    unless MCPR_ALLOW_OPEN_DEV explicitly opts back in to all interfaces."""
+
+    def get(name: str, default: str) -> str:
+        v = env.get(name, "")
+        return v if v.strip() else default
+
+    parsed = {spec.env: _parse(spec, get) for spec in ENV_ONLY_SPEC if spec.scope == "entrypoint"}
+    tries = int(parsed["MCPR_DB_WAIT_TRIES"])
+    port = int(parsed["MCPR_PORT"])
+    if settings.admin_token:
+        warn: tuple[str, ...] = ()
+        if not settings.allowed_hosts:
+            warn = (
+                "listening on all interfaces but MCPR_ALLOWED_HOSTS is empty: "
+                "requests by any non-loopback name get 421",
+            )
+        return EntrypointPlan(ALL_INTERFACES_BIND, tries, warn, port)
+    state = "locked (agent keys set)" if settings.agent_keys.strip() else "open"
+    if settings.allow_open_dev:
+        return EntrypointPlan(
+            ALL_INTERFACES_BIND,
+            tries,
+            (
+                f"admin API {state}; MCPR_ALLOW_OPEN_DEV=1 binds ALL interfaces; "
+                "set MCPR_ADMIN_TOKEN for any shared host",
+            ),
+            port,
+        )
+    return EntrypointPlan(
+        LOOPBACK_BIND,
+        tries,
+        (f"admin API {state}; listening on loopback only; set MCPR_ADMIN_TOKEN",),
+        port,
+    )
+
+
+def _entrypoint_main() -> int:
+    """`python -m mcprouter.settings entrypoint`: prints "<host> <tries> <port>" on
+    stdout, warnings on stderr. Invalid settings -> exit 2 with a FATAL line
+    that names the variable (never its value)."""
+    import sys
+
+    try:
+        plan = entrypoint_plan(Settings.from_env(), os.environ)
+    except ValueError as exc:
+        print(f"[entrypoint] FATAL: {exc}", file=sys.stderr)
+        return 2
+    for w in plan.warnings:
+        print(f"[entrypoint] WARNING: {w}", file=sys.stderr)
+    print(f"{plan.bind_host} {plan.db_wait_tries} {plan.port}")
+    return 0
 
 
 # wave-3 Azure OpenAI backends
@@ -293,28 +580,27 @@ class AoaiSettings:
         )
 
     @classmethod
-    def from_env(cls) -> AoaiSettings:
-        def get(name: str) -> str:
-            v = os.environ.get(name, "")
-            return v.strip() if v.strip() else ""  # empty string means unset
+    def from_env(cls, env: Mapping[str, str] | None = None) -> AoaiSettings:
+        """Only the MCPR_AOAI_* subset of SETTINGS_SPEC (unrelated settings
+        cannot break the AOAI backend)."""
+        source = os.environ if env is None else env
 
-        key = ""
-        key_file = get("MCPR_AOAI_API_KEY_FILE")
-        if key_file:  # _FILE wins over the plain variable
-            with open(key_file, encoding="utf-8") as fh:
-                key = fh.read().strip()
-            if not key:
-                raise ValueError("MCPR_AOAI_API_KEY_FILE: file is empty")
-        else:
-            key = get("MCPR_AOAI_API_KEY")
-        retries_raw = get("MCPR_AOAI_MAX_RETRIES") or "2"
-        retries = int(retries_raw)
-        if not 0 <= retries <= 10:
-            raise ValueError("MCPR_AOAI_MAX_RETRIES: expected an integer in 0..10")
-        return cls(
-            endpoint=get("MCPR_AOAI_ENDPOINT"),
-            api_key=key,
-            chat_deployment=get("MCPR_AOAI_CHAT_DEPLOYMENT"),
-            embedding_deployment=get("MCPR_AOAI_EMBEDDING_DEPLOYMENT"),
-            max_retries=retries,
-        )
+        def get(name: str, default: str) -> str:
+            v = source.get(name, "")
+            return v if v.strip() else default
+
+        values = {
+            spec.name: _parse(spec, get)
+            for spec in SETTINGS_SPEC
+            if spec.env.startswith("MCPR_AOAI_")
+        }
+        return Settings(**values).aoai()
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by tests/test_entrypoint.py
+    import sys
+
+    if sys.argv[1:] != ["entrypoint"]:
+        print("usage: python -m mcprouter.settings entrypoint", file=sys.stderr)
+        raise SystemExit(64)
+    raise SystemExit(_entrypoint_main())

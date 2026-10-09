@@ -21,14 +21,14 @@ Network posture (owner decision, wave 3):
   IPv4-compatible ``::/96`` (except ``::`` and ``::1``) and NAT64 ``64:ff9b::/96``.
 - RFC 1918 / ULA private ranges are deliberately ALLOWED: a LAN edge router is
   the intended remote.
-- DNS names are NOT resolved here. Residual: a DNS name that resolves to a
-  link-local/metadata address is not caught by this validator.
+- DNS names ARE resolved (via ``validate_http_url`` ->
+  ``net_policy.resolve_and_check``): a name resolving to a link-local/metadata
+  address is refused. Residual: DNS rebinding between this check and the
+  connect.
 """
 
 from __future__ import annotations
 
-import ipaddress
-import socket
 from urllib.parse import urlsplit
 
 import httpx
@@ -36,49 +36,18 @@ import httpx
 from mcprouter.inference.errors import InferenceError
 from mcprouter.mcpclient.errors import InvalidTargetError
 from mcprouter.mcpclient.targets import validate_http_url
+from mcprouter.net_policy import FORBIDDEN_NETS, LOOPBACK_HOSTS, is_forbidden, literal_ip
 
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-_FORBIDDEN_NETS = tuple(
-    ipaddress.ip_network(n)
-    for n in (
-        "169.254.0.0/16",
-        "fe80::/10",
-        "100.100.100.200/32",
-        "fd00:ec2::254/128",
-        "64:ff9b:1::/48",  # NAT64 local-use (RFC 8215): translator-defined, refuse
-    )
-)
+# Shared policy lives in mcprouter.net_policy; old private names kept as aliases.
+_LOOPBACK_HOSTS = LOOPBACK_HOSTS
+_FORBIDDEN_NETS = FORBIDDEN_NETS
+_literal_ip = literal_ip
 _MALFORMED = "endpoint URL is malformed"
 
 
-_EMBEDDED_V4_NETS = tuple(
-    ipaddress.ip_network(n) for n in ("::ffff:0:0:0/96", "::/96", "64:ff9b::/96")
-)
-
-
-def _literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """The address an IP-literal host will connect to, or None for a DNS name."""
-    if host.startswith("[") or ":" in host:
-        try:
-            ip6 = ipaddress.IPv6Address(host.strip("[]").split("%", 1)[0])
-        except ValueError:
-            return None
-        if ip6.ipv4_mapped is not None:
-            return ip6.ipv4_mapped
-        if any(ip6 in net for net in _EMBEDDED_V4_NETS) and int(ip6) & 0xFFFFFFFF > 1:
-            return ipaddress.IPv4Address(int(ip6) & 0xFFFFFFFF)
-        return ip6
-    try:
-        # inet_aton accepts the decimal/hex/octal/short-dotted forms that
-        # ipaddress rejects but getaddrinfo connects to.
-        return ipaddress.IPv4Address(socket.inet_aton(host))
-    except (OSError, ValueError):
-        return None  # a DNS name: not resolved here (documented residual)
-
-
 def _forbidden_literal(host: str) -> bool:
-    ip = _literal_ip(host)
-    return ip is not None and any(ip in net for net in _FORBIDDEN_NETS)
+    ip = literal_ip(host)
+    return ip is not None and is_forbidden(ip)
 
 
 class InvalidEndpointError(InferenceError):
@@ -90,8 +59,8 @@ def validate_outbound_url(url: str, *, allow_http_localhost: bool = True) -> str
     """Return ``url`` unchanged if it is safe to send credentials to.
 
     Raises InvalidEndpointError otherwise (curated message; never echoes the
-    host or URL). Link-local/metadata IP literals are always refused; private
-    LAN ranges are allowed; DNS names are not resolved (see module docstring).
+    host or URL). Link-local/metadata IP literals, and names resolving to
+    them, are always refused; private LAN ranges are allowed.
     """
     malformed = False
     host = ""

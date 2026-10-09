@@ -1,6 +1,8 @@
 # MCP Router — zero-ML stack (hash embeddings + deterministic decisions).
-# Configure via a .env file next to this file (cp .env.example .env); every
-# ${VAR} below is read from it. See docs/deploy.md for the full table.
+# Configure via a .env file next to this file (cp .env.example .env). The api
+# service loads the WHOLE .env (env_file), so every MCPR_* setting reaches the
+# container; ${VAR} below is interpolated from the same file or the shell.
+# POSTGRES_PASSWORD is required (no default). See docs/deploy.md.
 # Flavors (overrides): docker-compose.inference.yml (bge + laya on CPU),
 # docker-compose.gpu.yml (NVIDIA device reservation; stack on top of inference).
 services:
@@ -9,7 +11,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-mcprouter}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcprouter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-mcprouter}
     # No host port: the database is reachable only on the compose network.
     # Tests: add docker-compose.dev.yml to publish 127.0.0.1:5434 (dev only).
@@ -25,20 +27,41 @@ services:
     build: .
     image: ${MCPR_IMAGE:-mcp-router:local}
     restart: unless-stopped
+    # tini as PID 1: reaps stdio MCP server children and forwards SIGTERM.
+    init: true
+    # Runs as the image's unprivileged `app` user and needs no capabilities.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    # uvicorn gets 20 s (--timeout-graceful-shutdown) inside this window.
+    stop_grace_period: 30s
+    # Resource caps: uncomment and size for the host (bge/laya want ~2-4 GB).
+    # mem_limit: 4g
+    # cpus: 2
+    env_file:
+      - path: .env
+        required: false
     environment:
-      MCPR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mcprouter}:${POSTGRES_PASSWORD:-mcprouter}@db:5432/${POSTGRES_DB:-mcprouter}
+      # Derived, so it always matches the db service (password must be URL-safe).
+      MCPR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mcprouter}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-mcprouter}
+      MCPR_LOG_FORMAT: ${MCPR_LOG_FORMAT:-json}
+      # Security-relevant values are also passed explicitly so a shell export
+      # (not only .env) reaches the container.
       MCPR_AGENT_KEYS: ${MCPR_AGENT_KEYS:-}
-      # Admin API credential. Unset + agent keys set => management API is
-      # locked (403, fail closed); unset + no keys => dev mode (open).
+      # Admin API credential. Unset => the router binds loopback only inside
+      # the container (D1); unset + agent keys => management API locked (403).
       MCPR_ADMIN_TOKEN: ${MCPR_ADMIN_TOKEN:-}
-      MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-hash}
-      MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-deterministic}
-      MCPR_DEVICE: ${MCPR_DEVICE:-auto}
-      # Extra Host names /mcp accepts besides localhost (DNS-rebinding tradeoff:
-      # see docs/INSTALL.md §1). The dashboard is served at / on the same port.
+      # Extra Host names the WHOLE app accepts besides loopback (API, /mcp,
+      # dashboard; port ignored). Anything else gets 421 (DNS-rebinding guard).
       MCPR_ALLOWED_HOSTS: ${MCPR_ALLOWED_HOSTS:-}
+      # Torch/BLAS thread cap for the inference flavor (set in .env to apply):
+      # OMP_NUM_THREADS: ${OMP_NUM_THREADS:-}
+    # Host side binds loopback by default (D1). MCPR_BIND=0.0.0.0 publishes on
+    # every interface; only do that with MCPR_ADMIN_TOKEN set. Without a token
+    # the router itself listens on 127.0.0.1 inside the container, so the
+    # published port is dead until a token is configured (fail closed).
     ports:
-      - "${MCPR_HOST_PORT:-8400}:8400"
+      - "${MCPR_BIND:-127.0.0.1}:${MCPR_HOST_PORT:-8400}:8400"
     volumes:
       - mcpr-data:/data
       - mcpr-skills-cache:/srv/skills-cache
