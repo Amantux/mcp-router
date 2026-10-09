@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 
 import anyio
 import anyio.to_thread
@@ -37,12 +37,14 @@ class SyncLoop:
         health_interval_s: float = 60.0,
         tick_s: float = 1.0,
         intervals: Mapping[str, float] | None = None,
+        skill_tick: Callable[[], Awaitable[object]] | None = None,
     ) -> None:
         self._service = service
         self._sync_interval_s = sync_interval_s
         self._health_interval_s = health_interval_s
         self._tick_s = tick_s
         self._intervals = dict(intervals or {})
+        self._skill_tick = skill_tick
         self._last_sync: dict[str, float] = {}
         self._last_health: dict[str, float] = {}
         self._task: asyncio.Task[None] | None = None
@@ -106,4 +108,6 @@ class SyncLoop:
             for sid in to_check:
                 self._last_health[sid] = now
             await self._service.check_all(to_check)
+        if self._skill_tick is not None:  # skill sources (own intervals, in the DB)
+            await self._skill_tick()
         return to_sync, to_check

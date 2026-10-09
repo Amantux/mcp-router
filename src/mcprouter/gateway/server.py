@@ -34,6 +34,7 @@ Request flow:
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import inspect
 import json
@@ -53,7 +54,13 @@ from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.models import InitializationOptions
 from mcp.server.session import ServerSession
-from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, ToolsListChanged
+from mcp.server.subscriptions import (
+    InMemorySubscriptionBus,
+    ListenHandler,
+    PromptsListChanged,
+    ResourcesListChanged,
+    ToolsListChanged,
+)
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
@@ -69,11 +76,19 @@ from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stabl
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import redact, scrub_log
 from mcprouter.gateway.exposure import ExposureStore
+from mcprouter.gateway.skills import (
+    Activation,
+    SkillAccessError,
+    SkillExposure,
+    prompt_name,
+    resource_uri,
+)
 from mcprouter.interfaces import RouteFn, RouteRequest, RouteResult
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from mcprouter.policy.engine import evaluate
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.settings import Settings
+from mcprouter.skills.serve import ResourceContent, manifest_entries, resource_mime
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +129,70 @@ _META_TOOL_DEF = types.Tool(
 )
 
 
+ACTIVATE_SKILL_TOOL = "router.activate_skill"
+READ_SKILL_RESOURCE_TOOL = "router.read_skill_resource"
+_SKILL_URI_PREFIX = "skill://"
+# Curated by error code: never echo a path, skill id or serve-layer message.
+_SKILL_ERRORS: dict[str, str] = {
+    "rate_limited": "Too many skill activations; retry later.",
+    "denied": "Skill access denied by policy.",
+    "too_large": "Skill resource is too large.",
+}
+_SKILL_UNKNOWN = "Unknown skill or resource."
+_SKILL_INTERNAL = "Internal error while serving the skill."
+
+_SKILL_TOOL_DEFS = [
+    types.Tool(
+        name=ACTIVATE_SKILL_TOOL,
+        description="Activate a routed skill by its prompt name (<source>/<skill>); "
+        "returns the skill's instructions and its resource list.",
+        input_schema={
+            "type": "object",
+            "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 512}},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+    ),
+    types.Tool(
+        name=READ_SKILL_RESOURCE_TOOL,
+        description="Read one resource file of a routed skill (path relative to the skill).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1, "maxLength": 512},
+                "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+            },
+            "required": ["name", "path"],
+            "additionalProperties": False,
+        },
+    ),
+]
+
+
+def _skill_error(exc: SkillAccessError) -> str:
+    return _SKILL_ERRORS.get(exc.code, _SKILL_UNKNOWN)
+
+
+def _skill_mcp_error(exc: Exception) -> MCPError:
+    """Curated MCP error for any skill-path failure; never `str(exc)`."""
+    if isinstance(exc, SkillAccessError) and exc.code != "internal":
+        return MCPError(types.INVALID_PARAMS, _skill_error(exc))
+    if not isinstance(exc, SkillAccessError):
+        log.warning("gateway.skill_failed exc_type=%s", type(exc).__name__)
+    return MCPError(types.INTERNAL_ERROR, _SKILL_INTERNAL)
+
+
+def _parse_skill_uri(uri: str) -> tuple[str, str] | None:
+    """`skill://<source>/<skill>/<path>` -> (prompt name, path). No decoding:
+    the path is validated by SkillFiles (normalize_relpath + manifest)."""
+    if not uri.startswith(_SKILL_URI_PREFIX):
+        return None
+    parts = uri[len(_SKILL_URI_PREFIX) :].split("/", 2)
+    if len(parts) != 3 or not all(parts):
+        return None
+    return f"{parts[0]}/{parts[1]}", parts[2]
+
+
 class _RouterMCPServer(Server[Any]):
     """Low-level Server that advertises tools.listChanged on the handshake era.
 
@@ -130,7 +209,10 @@ class _RouterMCPServer(Server[Any]):
         extensions: dict[str, dict[str, Any]] | None = None,
     ) -> InitializationOptions:
         return super().create_initialization_options(
-            notification_options or NotificationOptions(tools_changed=True),
+            notification_options
+            or NotificationOptions(
+                tools_changed=True, prompts_changed=True, resources_changed=True
+            ),
             experimental_capabilities,
             extensions,
         )
@@ -223,8 +305,12 @@ class GatewayServer:
         route_fn: RouteFn | None = None,
         transport_security: TransportSecuritySettings | None = None,
         host: str = "127.0.0.1",
+        skills: SkillExposure | None = None,
     ) -> None:
         self._factory = session_factory
+        self._skills = skills
+        # Routed skill ids per agent (RoutedTool.kind == "skill" of the last route).
+        self._skill_ids: dict[str, tuple[str, ...]] = {}
         self._security = security
         self._settings = settings
         self._manager = manager
@@ -237,7 +323,7 @@ class GatewayServer:
         self._lock = threading.Lock()
         self.server = _RouterMCPServer(
             "mcp-router",
-            version="0.1.0",
+            version="0.4.0",
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."
@@ -245,6 +331,10 @@ class GatewayServer:
             on_list_tools=self._on_list_tools,
             on_call_tool=self._on_call_tool,
             on_subscriptions_listen=self._on_listen,
+            on_list_prompts=self._on_list_prompts,
+            on_get_prompt=self._on_get_prompt,
+            on_list_resources=self._on_list_resources,
+            on_read_resource=self._on_read_resource,
         )
         self._starlette = self.server.streamable_http_app(
             streamable_http_path=MCP_PATH, transport_security=transport_security, host=host
@@ -411,7 +501,10 @@ class GatewayServer:
         principal = self._principal(ctx)
         self._track_session(ctx, principal.agent_id)
         rows = await anyio.to_thread.run_sync(self.visible_tools, principal)
-        return types.ListToolsResult(tools=self._render(rows), cache_scope="private", ttl_ms=0)
+        tools = self._render(rows)
+        if self._skills is not None:
+            tools += _SKILL_TOOL_DEFS
+        return types.ListToolsResult(tools=tools, cache_scope="private", ttl_ms=0)
 
     async def _on_call_tool(
         self, ctx: ServerRequestContext[Any, Any], params: types.CallToolRequestParams
@@ -420,6 +513,11 @@ class GatewayServer:
         self._track_session(ctx, principal.agent_id)
         if params.name == META_TOOL and self._route_fn is not None:
             return await self._find_tools(principal, params.arguments)
+        if self._skills is not None and params.name in (
+            ACTIVATE_SKILL_TOOL,
+            READ_SKILL_RESOURCE_TOOL,
+        ):
+            return await self._skill_tool(principal, params.name, params.arguments or {})
         tool_id = await anyio.to_thread.run_sync(self._resolve_stable_id, params.name)
         # Analytics seam (wave 2): attribute the call to the route that exposed
         # the agent's current tool set. Exposure is per AGENT (all its sessions
@@ -478,10 +576,155 @@ class GatewayServer:
             return _text("No authorized tools matched; the tool list is now empty.", is_error=False)
         return _text("Tool list updated: " + ", ".join(names), is_error=False)
 
+    # ------------------------------------------------------------ skills
+    def _routed_skills(self, agent_id: str) -> tuple[tuple[str, ...], str | None]:
+        exposure = self.exposure.get(agent_id)
+        with self._lock:
+            if exposure is None:
+                # exposure.clear(agent) is the reset: skills go with the tools
+                # (fail closed; never serve a stale routed skill set).
+                self._skill_ids.pop(agent_id, None)
+                return (), None
+            ids = self._skill_ids.get(agent_id, ())
+        return ids, exposure.request_id
+
+    async def _on_list_prompts(
+        self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
+    ) -> types.ListPromptsResult:
+        principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
+        prompts: list[types.Prompt] = []
+        if self._skills is not None:
+            ids, _ = self._routed_skills(principal.agent_id)
+            for sk, src in await anyio.to_thread.run_sync(self._skills.load_routed, ids):
+                prompts.append(
+                    types.Prompt(
+                        name=prompt_name(src.name, sk.name),
+                        description=redact(sk.description or ""),
+                        arguments=[],
+                    )
+                )
+        return types.ListPromptsResult(prompts=prompts, cache_scope="private", ttl_ms=0)
+
+    async def _on_get_prompt(
+        self, ctx: ServerRequestContext[Any, Any], params: types.GetPromptRequestParams
+    ) -> types.GetPromptResult:
+        principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
+        act = await self._activate(principal, params.name)
+        return types.GetPromptResult(
+            description=act.name,
+            messages=[types.PromptMessage(role="user", content=types.TextContent(text=act.body))],
+        )
+
+    async def _on_list_resources(
+        self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
+    ) -> types.ListResourcesResult:
+        principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
+        out: list[types.Resource] = []
+        if self._skills is not None:
+            ids, _ = self._routed_skills(principal.agent_id)
+            for sk, src in await anyio.to_thread.run_sync(self._skills.load_routed, ids):
+                # Malformed entries are skipped (logged) by the shared helper.
+                for path, e in manifest_entries(sk).items():
+                    size = e.get("size")
+                    out.append(
+                        types.Resource(
+                            name=f"{prompt_name(src.name, sk.name)}/{path}",
+                            uri=resource_uri(src.name, sk.name, path),
+                            mime_type=resource_mime(path, e.get("kind") == "text"),
+                            size=size if isinstance(size, int) else None,
+                        )
+                    )
+        return types.ListResourcesResult(resources=out, cache_scope="private", ttl_ms=0)
+
+    async def _on_read_resource(
+        self, ctx: ServerRequestContext[Any, Any], params: types.ReadResourceRequestParams
+    ) -> types.ReadResourceResult:
+        principal = self._principal(ctx)
+        self._track_session(ctx, principal.agent_id)
+        parsed = _parse_skill_uri(str(params.uri))
+        if parsed is None or self._skills is None:
+            raise MCPError(types.INVALID_PARAMS, _SKILL_UNKNOWN)
+        content = await self._read_skill_resource(principal, parsed[0], parsed[1])
+        contents: list[types.TextResourceContents | types.BlobResourceContents]
+        if content.text is not None:
+            contents = [
+                types.TextResourceContents(
+                    uri=str(params.uri), mime_type=content.mime_type, text=content.text
+                )
+            ]
+        else:
+            contents = [
+                types.BlobResourceContents(
+                    uri=str(params.uri),
+                    mime_type=content.mime_type,
+                    blob=base64.b64encode(content.blob or b"").decode("ascii"),
+                )
+            ]
+        return types.ReadResourceResult(contents=contents, cache_scope="private", ttl_ms=0)
+
+    # The ONE path into SkillExposure for prompts/get, resources/read and the
+    # meta-tools: visibility (routed ids) -> limiter -> policy -> audit inside it.
+    async def _activate(self, principal: AgentPrincipal, name: str) -> Activation:
+        if self._skills is None:
+            raise MCPError(types.INVALID_PARAMS, _SKILL_UNKNOWN)
+        skills = self._skills
+        ids, rid = self._routed_skills(principal.agent_id)
+        try:
+            return await anyio.to_thread.run_sync(
+                lambda: skills.activate(principal.agent_id, name, ids, rid)
+            )
+        except Exception as exc:  # noqa: BLE001 — curated boundary (_skill_mcp_error)
+            raise _skill_mcp_error(exc) from None
+
+    async def _read_skill_resource(
+        self, principal: AgentPrincipal, name: str, path: str
+    ) -> ResourceContent:
+        if self._skills is None:
+            raise MCPError(types.INVALID_PARAMS, _SKILL_UNKNOWN)
+        skills = self._skills
+        ids, rid = self._routed_skills(principal.agent_id)
+        try:
+            return await anyio.to_thread.run_sync(
+                lambda: skills.read_resource(principal.agent_id, name, path, ids, rid)
+            )
+        except Exception as exc:  # noqa: BLE001 — curated boundary (_skill_mcp_error)
+            raise _skill_mcp_error(exc) from None
+
+    async def _skill_tool(
+        self, principal: AgentPrincipal, tool: str, args: dict[str, Any]
+    ) -> types.CallToolResult:
+        name, path = args.get("name"), args.get("path")
+        allowed = {"name"} if tool == ACTIVATE_SKILL_TOOL else {"name", "path"}
+        if not isinstance(name, str) or set(args) - allowed:
+            return _text("Refused: invalid arguments", is_error=True)
+        try:
+            if tool == ACTIVATE_SKILL_TOOL:
+                act = await self._activate(principal, name)
+                listing = json.dumps(act.resources)
+                return _text(f"{act.body}\n\n[skill resources] {listing}", is_error=False)
+            if not isinstance(path, str):
+                return _text("Refused: invalid arguments", is_error=True)
+            content = await self._read_skill_resource(principal, name, path)
+        except MCPError as exc:
+            return _text(f"Refused: {exc.error.message}", is_error=True)
+        if content.text is not None:
+            return _text(content.text, is_error=False)
+        blob = base64.b64encode(content.blob or b"").decode("ascii")
+        return _text(f"[base64 {content.mime_type}] {blob}", is_error=False)
+
     # ------------------------------------------------------------ re-route
     async def apply_route(self, agent_id: str, result: RouteResult) -> bool:
         """Install an agent's route result; notify its sessions if it changed."""
-        changed = self.exposure.set(agent_id, [t.tool_id for t in result.tools], result.request_id)
+        tool_ids = [t.tool_id for t in result.tools if t.kind == "tool"]
+        skill_ids = tuple(t.tool_id for t in result.tools if t.kind == "skill")
+        changed = self.exposure.set(agent_id, tool_ids, result.request_id)
+        with self._lock:
+            if self._skill_ids.get(agent_id, ()) != skill_ids:
+                self._skill_ids[agent_id] = skill_ids
+                changed = True
         if changed:
             await self.notify_tools_changed(agent_id)
         return changed
@@ -494,6 +737,9 @@ class GatewayServer:
     async def notify_tools_changed(self, agent_id: str) -> None:
         bus, _ = self._bus(agent_id)
         await bus.publish(ToolsListChanged())
+        if self._skills is not None:
+            await bus.publish(PromptsListChanged())
+            await bus.publish(ResourcesListChanged())
         with self._lock:
             sessions = list(self._legacy.get(agent_id, {}).items())
         dead: list[str] = []
@@ -502,6 +748,9 @@ class GatewayServer:
             with anyio.move_on_after(NOTIFY_TIMEOUT_S) as scope:
                 try:
                     await session.send_tool_list_changed()
+                    if self._skills is not None:
+                        await session.send_prompt_list_changed()
+                        await session.send_resource_list_changed()
                 except (anyio.BrokenResourceError, anyio.ClosedResourceError):
                     dead.append(sid)
             if scope.cancelled_caught:
@@ -527,6 +776,7 @@ def build_gateway(
     route_fn: RouteFn | None,
     transport_security: TransportSecuritySettings | None = None,
     host: str = "127.0.0.1",
+    skills: SkillExposure | None = None,
 ) -> GatewayServer:
     """Integrator helper: build from app.state and mount at /mcp."""
     gw = GatewayServer(
@@ -537,6 +787,7 @@ def build_gateway(
         route_fn=route_fn,
         transport_security=transport_security,
         host=host,
+        skills=skills,
     )
     gw.mount(app)
     app.state.gateway = gw

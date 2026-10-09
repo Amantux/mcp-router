@@ -206,3 +206,62 @@ legitimately return a credential the agent asked for.
 - **Approval approve path** does not consume the agent's rate-limit budget.
 - **Tool `input_schema`** is shown to agents verbatim. Only descriptions are
   redacted.
+
+## Skills (wave 4, S3)
+
+Skill bodies and resource files are **untrusted author content** handed to
+agents. Posture:
+
+- **Never executed, never interpolated** into the router's own model prompts.
+  The routing track only embeds/classifies `description` + a ~1 KB body prefix.
+  Served bodies are returned verbatim; redaction is NOT applied (author content),
+  and ingest flags (secret-shaped strings, S1) are exposed via REST only —
+  prompt/resource descriptions stay verbatim.
+- **Prompt injection** is the agent's problem to contain, the router's job is to
+  make activation *deliberate, authorized and audited*: a skill is only visible
+  to an agent whose last route surfaced it (default exposure: none), and every
+  activation re-checks policy (defense in depth — routing already filtered).
+- **Activation order** (`gateway/skills.py::SkillExposure`, one implementation
+  for MCP prompts/resources, meta-tools and REST): visibility (routed set only;
+  another agent's skill is indistinguishable from a nonexistent one) → per-principal
+  sliding-window rate limit (`skill:<agent>` key) → policy re-check (`SkillPolicy`;
+  fail-closed `DenyAllSkillPolicy` until wired) → `ExecutionRecord(resource_kind="skill")`
+  committed → body returned. Audit failure ⇒ no body. Denials/rate limits are
+  audited with curated detail only (never the body; resource reads log the path).
+- **File access** (`skills/serve.py`): relative POSIX path only (no absolute,
+  drive, backslash, NUL, `..`); must be listed in the ingest `resource_manifest`;
+  realpath must stay inside the realpath of the skill dir (symlink escapes
+  refused); size capped by `MCPR_SKILL_RESOURCE_MAX_BYTES` at stat *and* after
+  read. Errors are typed (`SkillServeError.code`) with curated messages that
+  never contain filesystem paths.
+- **Bundle** (`skills/bundle.py`): entries are normalized relative paths
+  (zip-slip guard), top-level dir = validated single-segment skill name, ≤50
+  skills, ≤50 MiB total, per-file cap = resource cap; unreadable/escaping files
+  are skipped and reported, never followed. SKILL.md frontmatter is rebuilt with
+  JSON-quoted scalars so author text cannot inject YAML keys.
+- **Final wave-4 decisions** (as merged on `integrate/wave4`):
+  - *Unrouted access is audited as denied.* A request for an unknown skill, or
+    one outside the agent's routed set (including another agent's skill), writes
+    an `ExecutionRecord` with outcome `denied` and detail `not routed`. It
+    returns the same 404 "Unknown skill or resource." as a nonexistent skill,
+    so a caller cannot probe the catalog. The routed set comes from the server,
+    from the agent's latest `RoutingDecisionRecord`. It is never taken from the
+    client.
+  - *Bundle outcome.* A bundle ships bodies, so it counts as an activation:
+    each routed skill is policy-checked, denied ones are audited and left out,
+    and the rest are audited with outcome `bundle` (counted as an activation in
+    the funnel; never bumps `activation_count`). A failed bundle (`too_many`, `too_large`,
+    `invalid_name`, `duplicate_name`) writes **one** `error` row
+    (`bundle: <code>`), and a rate-limited bundle writes **one** `rate_limited`
+    row. Neither writes a row per skill.
+  - *A disabled principal cannot be impersonated.* An admin acting as an agent
+    must name `agentId` (otherwise 400). An unknown agent gets 404, and a
+    **disabled** agent gets 403. An agent key that names a different agent
+    gets 403. Admin calls are audited `initiated_by="admin"`.
+  - *`routeRequestId` ownership.* An agent-supplied `routeRequestId` is used for
+    attribution only when it is one of **that agent's own** routing decisions
+    (`ExecutionManager.owned_route_request_id`). A malformed, unknown or
+    other-agent id is stored as NULL rather than raising an error. For admin
+    calls the id is ignored, because an admin trial is not the agent choosing
+    the skill.
+  - Operator guide: [`skills.md`](skills.md).

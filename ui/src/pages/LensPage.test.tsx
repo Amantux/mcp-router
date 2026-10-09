@@ -152,6 +152,48 @@ describe("LensPage", () => {
     renderWithProviders(<LensPage />);
     expect(await screen.findByText("No agents yet")).toBeTruthy();
   });
+  it("renders tools and skills sections, kind badges and the maxSkills clamp", () => {
+    const sim = normaliseSimulation(
+      {
+        agentId: "sk",
+        tools: [{ toolId: "t1", server: "docs", tool: "fill_pdf_form", score: 0.91 }],
+        skills: [{ skillId: "s1", source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 1200 }],
+        maxSkillsApplied: 1,
+        diagnostics: {
+          stages: [{ stage: "maxSkills", before: 2, after: 1, pruned: [{ toolId: "s2", server: "src-pdf", tool: "pdf-helper", kind: "skill" }] }],
+          policyFiltered: [{ server: "src-x", tool: "secret-skill", kind: "skill", reason: "no matching policy rule" }],
+          budgetClamps: [{ budget: "maxSkills", requested: 5, principal: 1, globalCap: 3, applied: 1, clampedBy: "principal" }],
+        },
+      },
+      "sk",
+    );
+    renderWithProviders(<LensResult result={sim} showFiltered />);
+    expect(within(screen.getByRole("table", { name: "Exposed tools" })).getByText("fill_pdf_form")).toBeTruthy();
+    const skills = within(screen.getByRole("table", { name: "Surfaced skills" }));
+    expect(skills.getByText("pdf-form-filler")).toBeTruthy();
+    expect(skills.getByText("~1,200")).toBeTruthy();
+    expect(screen.getByTestId("clamp-maxSkills")).toBeTruthy();
+    expect(screen.getByTestId("clamp-maxSkills-by").textContent).toContain("agent's own cap");
+    expect(screen.getByText(/maxSkills: 2 → 1.*1 skill\]/)).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "Filtered tools" })).getByText("skill")).toBeTruthy();
+  });
+
+  it("re-queries with maxSkills when the skills slider moves", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-10-01T00:00:00Z" }] }),
+      "POST /api/v1/route/simulate": () => ({ json: SIM }),
+    });
+    renderWithProviders(<LensPage debounceMs={10} />);
+    await waitFor(() => expect(screen.getByRole("option", { name: /billing-bot/ })).toBeTruthy());
+    await user.selectOptions(screen.getByRole("combobox", { name: /Agent/ }), "billing-bot");
+    await user.type(screen.getByRole("textbox", { name: /Task query/ }), "fill pdf");
+    await user.click(screen.getByRole("button", { name: "Show agent's view" }));
+    await screen.findByTestId("clamp-maxTools");
+    fireEvent.change(screen.getByRole("slider", { name: "Requested max skills" }), { target: { value: "2" } });
+    const sims = () => calls.filter((c) => c.url === "/api/v1/route/simulate");
+    await waitFor(() => expect(sims().at(-1)!.body).toEqual({ agentId: "billing-bot", query: "fill pdf", maxTools: 8, maxSkills: 2 }));
+  });
 });
 
 /** The client camelises responses before normaliseSimulation sees them; mirror that for direct calls. */

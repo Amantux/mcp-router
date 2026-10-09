@@ -193,3 +193,53 @@ describe("ExecutionOutcomeView — pending approval", () => {
     expect(calls.every((c) => c.headers.authorization === "Bearer agt")).toBe(true);
   });
 });
+
+const SKILL = { id: "k1", source_id: "src1", source_name: "team-skills", name: "deploy-helper", description: "Deploys things", operation: "execute", enabled: true };
+
+function mockSkill(activate: (body: unknown) => { status?: number; json?: unknown }) {
+  return mockFetch({
+    "GET /api/v1/skills": () => ({ json: { items: [SKILL], total: 1 } }),
+    "GET /api/v1/skills/k1": () => ({ json: SKILL }),
+    "POST /api/v1/skills/k1/activate": activate,
+    "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
+  });
+}
+
+describe("PlaygroundPage skills tab", () => {
+  it("admin-only activation needs an agent, confirms execute skills by name, posts agentId, and renders the body inert", async () => {
+    const user = userEvent.setup();
+    setCredentials({ adminToken: "adm" });
+    const { calls } = mockSkill(() => ({
+      json: { body: "<img src=x onerror=alert(1)><b>bold</b>", resources: [{ path: "scripts/run.sh", size: 120, kind: "script" }], record_id: "rec-9" },
+    }));
+    const { container } = renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
+    const btn = await screen.findByRole("button", { name: /^Activate as/ });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    await screen.findByRole("option", { name: "billing-bot" });
+    await user.selectOptions(screen.getByTestId("skill-run-as-picker"), "billing-bot");
+    await user.click(screen.getByRole("button", { name: "Activate as agent “billing-bot” (admin-initiated)" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Activate deploy-helper as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    const ok = await screen.findByTestId("activation-ok");
+    expect(within(ok).getByText(/Audit record rec-9/)).toBeTruthy();
+    expect(within(ok).getByText(/scripts\/run.sh/)).toBeTruthy();
+    expect(within(ok).getByLabelText("Skill body").textContent).toBe("<img src=x onerror=alert(1)><b>bold</b>");
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("pre b")).toBeNull();
+    const post = calls.find((c) => c.method === "POST")!;
+    expect((post.body as Record<string, unknown>).agentId).toBe("billing-bot");
+  });
+
+  it("maps a 429 activation onto the shared outcome renderer", async () => {
+    const user = userEvent.setup();
+    setCredentials({ adminToken: "adm", agentKey: "agt" });
+    mockSkill(() => ({ status: 429, json: { detail: "slow down" } }));
+    renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
+    await user.click(await screen.findByRole("button", { name: /^Activate as/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    expect(await screen.findByTestId("outcome-rate_limited")).toBeTruthy();
+  });
+});

@@ -137,7 +137,12 @@ def test_evaluate_endpoint_runs_and_persists(db: sessionmaker[Session]) -> None:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["case_count"] >= 60 and body["dataset"] == "synthetic_v1"
-        assert body["metrics"]["fallback_rate"] == 1.0
+        # Tools-only catalog: skill-only cases are no_match and never reach
+        # the model, so only the tool-exercising share falls back.
+        cases = load_named("synthetic_v1")
+        tool_share = sum("tool" in c.kinds for c in cases) / len(cases)
+        assert body["metrics"]["fallback_rate"] == pytest.approx(tool_share)
+        assert tool_share < 1.0  # the dataset does carry skill-only cases
         # Security invariant holds even on the dumbest backend.
         assert body["metrics"]["unauthorized_exposures"] == 0
         with factory() as s:

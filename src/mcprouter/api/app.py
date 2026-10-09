@@ -25,13 +25,14 @@ import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 
 import anyio.to_thread
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
 from mcprouter.analytics.scheduler import RollupLoop
-from mcprouter.api import routes_dedup, routes_tools
+from mcprouter.api import routes_dedup, routes_skill_sources, routes_skills, routes_tools
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.routes_analytics import install_analytics
@@ -46,15 +47,22 @@ from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.discovery import DiscoveryService, SyncLoop
 from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.execution.manager import ExecutionManager
+from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.gateway.server import build_gateway
+from mcprouter.gateway.skills import SkillExposure
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
 from mcprouter.inference.engine import InferenceEngine
 from mcprouter.interfaces import RouteRequest, RouteResult
-from mcprouter.lifecycle import make_post_sync_hook
+from mcprouter.lifecycle import (
+    make_post_sync_hook,
+    run_due_skill_syncs,
+    run_skill_post_sync,
+)
 from mcprouter.policy.scope import policy_scope_resolver
+from mcprouter.policy.skill_bridge import EngineSkillPolicy
 from mcprouter.registry.schema import init_registry
 from mcprouter.routing.pipeline import RoutePipeline
-from mcprouter.routing.retriever import HybridRetriever
+from mcprouter.routing.retriever import HybridRetriever, ensure_skill_keyword_index
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -94,7 +102,19 @@ def create_app(
         rollups: RollupLoop | None = None
         try:
             if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
-                loop = SyncLoop(_app.state.discovery)
+                attempts: dict[str, datetime] = {}
+
+                async def _skill_tick() -> object:
+                    return await anyio.to_thread.run_sync(
+                        run_due_skill_syncs,
+                        _app.state.session_factory,
+                        settings,
+                        _app.state.skill_post_sync,
+                        datetime.now(UTC),
+                        attempts,
+                    )
+
+                loop = SyncLoop(_app.state.discovery, skill_tick=_skill_tick)
                 await loop.start()
                 _app.state.sync_loop = loop
             if settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
@@ -110,10 +130,11 @@ def create_app(
                 await loop.stop()
             await anyio.to_thread.run_sync(inference.unload)
 
-    app = FastAPI(title="MCP Router", version="0.1.0", docs_url="/docs", lifespan=lifespan)
+    app = FastAPI(title="MCP Router", version="0.4.0", docs_url="/docs", lifespan=lifespan)
     engine = make_engine(settings)
     init_db(engine)  # Base + approval_requests + eval_results (Alembic deferred)
     init_registry(engine)  # FTS + dedup-pair indexes (idempotent)
+    ensure_skill_keyword_index(engine)  # skills FTS leg (idempotent)
     factory = make_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine
@@ -138,6 +159,13 @@ def create_app(
             factory, embedder, embed_batch_size=settings.embed_batch_size
         ),
     )
+
+    def skill_post_sync(source_id: str, before: dict[str, str]) -> None:
+        run_skill_post_sync(
+            factory, embedder, source_id, before, embed_batch_size=settings.embed_batch_size
+        )
+
+    app.state.skill_post_sync = skill_post_sync
     app.state.sync_loop = None  # started in the lifespan when MCPR_SYNC_ENABLED
     app.state.rollup_loop = None  # started in the lifespan when MCPR_ANALYTICS_ROLLUP_ENABLED
 
@@ -171,7 +199,23 @@ def create_app(
     app.include_router(execute_router)
     # /api/v1/analytics/* (admin) + the Prometheus funnel collector.
     install_analytics(app)
-    build_gateway(app, manager=manager, route_fn=route_fn)  # /mcp; wraps the lifespan
+    # Skills: S3 exposure gated by the ONE kind-aware policy engine (bridge).
+    skill_exposure = SkillExposure(
+        factory,
+        manager,
+        EngineSkillPolicy(factory),
+        SlidingWindowLimiter(settings.rate_limit_per_agent_per_min, 60.0),
+        cache_dir=settings.skills_cache_dir,
+        body_max_bytes=settings.skill_body_max_bytes,
+        resource_max_bytes=settings.skill_resource_max_bytes,
+    )
+    app.state.skill_exposure = skill_exposure
+    app.include_router(routes_skill_sources.router)
+    app.include_router(routes_skills.agent_router)  # BEFORE router: /skills/bundle
+    app.include_router(routes_skills.router)
+    build_gateway(
+        app, manager=manager, route_fn=route_fn, skills=skill_exposure
+    )  # /mcp; wraps the lifespan
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

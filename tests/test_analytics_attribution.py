@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 
 import pytest
@@ -44,9 +43,20 @@ def _rrids(factory: sessionmaker[Session]) -> list[tuple[str, str | None]]:
         return [(r.outcome, r.route_request_id) for r in s.scalars(select(ExecutionRecord))]
 
 
+def _owned_decision(factory: sessionmaker[Session], agent: str) -> str:
+    """A route id only counts when the decision belongs to the agent (ownership guard)."""
+    from mcprouter.models import RoutingDecisionRecord
+
+    with factory() as s:
+        d = RoutingDecisionRecord(agent_id=agent, query="q", selected_tool_ids=[])
+        s.add(d)
+        s.commit()
+        return d.id
+
+
 async def test_attribution_recorded_on_ok_call(sec_db: sessionmaker[Session], cat: Catalog) -> None:
     add_rule(sec_db, "alice")
-    rid = str(uuid.uuid4())
+    rid = _owned_decision(sec_db, "alice")
     res = await _mgr(sec_db).execute(
         cat.principals["alice"], cat.tools["github.list_issues"], ARGS, route_request_id=rid
     )
@@ -61,7 +71,7 @@ async def test_attribution_recorded_on_refusals_and_approvals(
 ) -> None:
     add_rule(sec_db, "alice", tool_name="list_issues", requires_approval=True)
     mgr = _mgr(sec_db)
-    rid = str(uuid.uuid4())
+    rid = _owned_decision(sec_db, "alice")
     p = cat.principals["alice"]
     await mgr.execute(p, cat.tools["shell.run"], ARGS, route_request_id=rid)  # denied
     await mgr.execute(p, "no-such-tool", ARGS, route_request_id=rid)  # unknown -> denied
@@ -112,3 +122,24 @@ def test_attribution_column_is_added_idempotently(sec_db: sessionmaker[Session])
             text("SELECT indexname FROM pg_indexes WHERE tablename = 'execution_records'")
         ).scalars()
         assert "ix_execution_records_route_request_id" in set(idx)
+
+
+async def test_simulated_decision_never_attributes(
+    sec_db: sessionmaker[Session], cat: Catalog
+) -> None:
+    """An admin /route/simulate row is persisted under the agent id but is not an
+    exposure the agent acted on: attribution to it is dropped to NULL."""
+    from mcprouter.models import RoutingDecisionRecord
+
+    add_rule(sec_db, "alice")
+    with sec_db() as s:
+        d = RoutingDecisionRecord(
+            agent_id="alice", query="q", selected_tool_ids=[], model_version="simulated/x"
+        )
+        s.add(d)
+        s.commit()
+        sim_id = d.id
+    await _mgr(sec_db).execute(
+        cat.principals["alice"], cat.tools["github.list_issues"], ARGS, route_request_id=sim_id
+    )
+    assert _rrids(sec_db) == [("ok", None)]

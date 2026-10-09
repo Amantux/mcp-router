@@ -55,7 +55,8 @@ const useStyles = makeStyles({
 
 export const TOOL_LIMIT = 64; // PrincipalIn.max_tools le=64
 const SERVER_LIMIT = 16;
-const BUDGET_LABEL: Record<string, string> = { maxTools: "Max tools", maxServers: "Max servers" };
+const SKILL_LIMIT = 10;
+const BUDGET_LABEL: Record<string, string> = { maxTools: "Max tools", maxServers: "Max servers", maxSkills: "Max skills" };
 const BY_LABEL: Record<string, string> = { principal: "the agent's own cap", global: "the global cap (MCPR_MAX_EXPOSED_*)" };
 
 /** Requested vs applied for one budget: a track scaled to the largest term, filled to `applied`, red marker at `requested`. */
@@ -100,6 +101,7 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
   const s = useStyles();
   const c = useCommonStyles();
   const ranked = [...result.tools].sort((a, b) => b.score - a.score);
+  const rankedSkills = [...result.skills].sort((a, b) => b.score - a.score);
   return (
     <section className={s.result} aria-label="Lens result">
       <div className={s.readout}>
@@ -138,13 +140,18 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
               <Badge appearance="outline">
                 {st.stage}: {st.before} → {st.after}
                 {st.before > st.after ? ` (−${st.before - st.after})` : ""}
+                {st.prunedByKind
+                  ? ` [${Object.entries(st.prunedByKind)
+                      .map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`)
+                      .join(", ")}]`
+                  : ""}
               </Badge>
             </span>
           ))}
         </div>
       )}
       <div>
-        <Subtitle2 as="h2">Exposed to the agent</Subtitle2>
+        <Subtitle2 as="h2">Tools exposed to the agent</Subtitle2>
         {result.noMatch ? (
           <MessageBar intent="info" data-testid="no-match-banner">
             <MessageBarBody>
@@ -187,6 +194,48 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
           </Table>
         )}
       </div>
+      <div aria-label="Skills section">
+        <Subtitle2 as="h2">
+          Skills surfaced{result.maxSkillsApplied != null ? ` (up to ${result.maxSkillsApplied})` : ""}
+        </Subtitle2>
+        {rankedSkills.length === 0 ? (
+          <Caption1 className={c.muted}>No skill was surfaced for this task.</Caption1>
+        ) : (
+          <Table size="small" aria-label="Surfaced skills">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell className={c.num} style={{ width: 40 }}>
+                  #
+                </TableHeaderCell>
+                <TableHeaderCell>Skill</TableHeaderCell>
+                <TableHeaderCell>Source</TableHeaderCell>
+                <TableHeaderCell className={c.num}>Body tokens</TableHeaderCell>
+                <TableHeaderCell>Score</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rankedSkills.map((k, i) => (
+                <TableRow key={`${k.source}/${k.skill}`}>
+                  <TableCell className={c.num}>{i + 1}</TableCell>
+                  <TableCell>
+                    <strong>{k.skill}</strong>
+                  </TableCell>
+                  <TableCell>{k.source}</TableCell>
+                  <TableCell className={c.num}>~{k.bodyTokensEst.toLocaleString()}</TableCell>
+                  <TableCell>
+                    <div className={s.bar}>
+                      <ProgressBar value={Math.max(0, Math.min(1, k.score))} max={1} thickness="large" style={{ flex: 1 }} aria-label={`${k.skill} score`} />
+                      <span className={c.num} style={{ width: 48 }}>
+                        {fmtScore(k.score)}
+                      </span>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
       {showFiltered && (
         <div aria-label="Filtered out">
           <Subtitle2 as="h2">Filtered out</Subtitle2>
@@ -199,8 +248,9 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
             <Table size="small" aria-label="Filtered tools">
               <TableHeader>
                 <TableRow>
-                  <TableHeaderCell>Tool</TableHeaderCell>
-                  <TableHeaderCell>Server</TableHeaderCell>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Kind</TableHeaderCell>
+                  <TableHeaderCell>Server / source</TableHeaderCell>
                   <TableHeaderCell>Stage</TableHeaderCell>
                   <TableHeaderCell>Reason</TableHeaderCell>
                 </TableRow>
@@ -209,6 +259,9 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
                 {result.filtered.map((f, i) => (
                   <TableRow key={`${f.serverName}/${f.toolName}/${i}`}>
                     <TableCell>{f.toolName}</TableCell>
+                    <TableCell>
+                      <Badge appearance="tint" color={f.kind === "skill" ? "brand" : "informative"}>{f.kind ?? "tool"}</Badge>
+                    </TableCell>
                     <TableCell>{f.serverName}</TableCell>
                     <TableCell>{f.stage ?? "policy"}</TableCell>
                     <TableCell>{f.reason}</TableCell>
@@ -231,6 +284,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
   const [query, setQuery] = useState("");
   const [maxTools, setMaxTools] = useState(8);
   const [maxServers, setMaxServers] = useState(0); // 0 = don't request a server cap
+  const [maxSkills, setMaxSkills] = useState(0); // 0 = don't request a skills cap
   const [showFiltered, setShowFiltered] = useState(true);
   const [errors, setErrors] = useState<{ agentId?: string; query?: string }>({});
   const [pending, setPending] = useState(false);
@@ -240,13 +294,15 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
   // Debounce primitives (an object literal would be a new value every render).
   const dTools = useDebounced(maxTools, debounceMs);
   const dServers = useDebounced(maxServers, debounceMs);
+  const dSkills = useDebounced(maxSkills, debounceMs);
 
-  const simulate = async (base: { agentId: string; query: string }, b: { maxTools: number; maxServers: number }) => {
+  const simulate = async (base: { agentId: string; query: string }, b: { maxTools: number; maxServers: number; maxSkills: number }) => {
     inflight.current?.abort();
     const ctrl = new AbortController();
     inflight.current = ctrl;
     const body: SimulateRequest = { agentId: base.agentId, query: base.query, maxTools: b.maxTools };
     if (b.maxServers > 0) body.maxServers = b.maxServers;
+    if (b.maxSkills > 0) body.maxSkills = b.maxSkills;
     setPending(true);
     try {
       setResult(await simulateAgent(body, ctrl.signal));
@@ -260,9 +316,9 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
 
   // Live budget sliders: once a lens is showing, re-query (debounced) with the new budgets.
   useEffect(() => {
-    if (last.current) void simulate(last.current, { maxTools: dTools, maxServers: dServers });
+    if (last.current) void simulate(last.current, { maxTools: dTools, maxServers: dServers, maxSkills: dSkills });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the debounced budgets change
-  }, [dTools, dServers]);
+  }, [dTools, dServers, dSkills]);
 
   useEffect(() => () => inflight.current?.abort(), []);
 
@@ -277,7 +333,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
     if (!query.trim()) e.query = "Describe the task the agent is trying to do.";
     setErrors(e);
     if (Object.keys(e).length) return;
-    void simulate({ agentId, query: query.trim() }, { maxTools, maxServers });
+    void simulate({ agentId, query: query.trim() }, { maxTools, maxServers, maxSkills });
   };
 
   const list = principals.data ?? [];
@@ -312,6 +368,9 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
           </Field>
           <Field label={`Requested max servers: ${maxServers === 0 ? "no limit requested" : maxServers}`}>
             <Slider min={0} max={SERVER_LIMIT} value={maxServers} onChange={(_, d) => setMaxServers(d.value)} aria-label="Requested max servers" />
+          </Field>
+          <Field label={`Requested max skills: ${maxSkills === 0 ? "no limit requested" : maxSkills}`} hint="Can only lower the agent's and global skills caps.">
+            <Slider min={0} max={SKILL_LIMIT} value={maxSkills} onChange={(_, d) => setMaxSkills(d.value)} aria-label="Requested max skills" />
           </Field>
           <Switch checked={showFiltered} onChange={(_, d) => setShowFiltered(d.checked)} label="Show filtered-out tools" />
           <div>

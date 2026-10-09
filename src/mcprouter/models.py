@@ -145,6 +145,8 @@ class AgentPrincipal(Base):
     # Cap on DISTINCT servers in this agent's exposure; None = unlimited.
     max_servers: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Wave 4: cap on routed skills per request (skill bodies cost far more context than tool schemas).
+    max_skills: Mapped[int] = mapped_column(Integer, default=3)
 
 
 class PolicyRule(Base):
@@ -163,6 +165,10 @@ class PolicyRule(Base):
     max_operation: Mapped[str] = mapped_column(String(10), default="read")  # read<write<execute
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Wave 4: which catalog this rule governs. Existing rows are tool rules; skill
+    # rules are explicit (deny-by-default => no skill rule, no skills). For skill
+    # rules, server_id holds the skill SOURCE id and tool_name the skill-name glob.
+    resource_kind: Mapped[str] = mapped_column(String(8), default="tool")  # tool | skill
 
 
 class RoutingDecisionRecord(Base):
@@ -205,6 +211,9 @@ class ExecutionRecord(Base):
     # Wave-2 integration: who started the attempt when it was not the agent
     # itself ("admin" = admin impersonation via REST). NULL = the agent.
     initiated_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Wave 4: skill ACTIVATIONS (body served to an agent) are audited here too.
+    resource_kind: Mapped[str] = mapped_column(String(8), default="tool")  # tool | skill
+    skill_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
 
 
 class ToolStatsDaily(Base):
@@ -217,7 +226,7 @@ class ToolStatsDaily(Base):
 
     __tablename__ = "tool_stats_daily"
 
-    tool_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tool_id: Mapped[str] = mapped_column(String(48), primary_key=True)
     day: Mapped[date] = mapped_column(Date, primary_key=True, index=True)
     surfaced: Mapped[int] = mapped_column(Integer, default=0)
     selected: Mapped[int] = mapped_column(Integer, default=0)
@@ -234,11 +243,11 @@ class DuplicateSuggestion(Base):
     __tablename__ = "duplicate_suggestions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    tool_a_id: Mapped[str] = mapped_column(String(36), index=True)
-    tool_b_id: Mapped[str] = mapped_column(String(36), index=True)
+    tool_a_id: Mapped[str] = mapped_column(String(48), index=True)
+    tool_b_id: Mapped[str] = mapped_column(String(48), index=True)
     similarity: Mapped[float] = mapped_column(Float)
     rationale: Mapped[str] = mapped_column(Text, default="")
-    preferred_tool_id: Mapped[str | None] = mapped_column(String(36))
+    preferred_tool_id: Mapped[str | None] = mapped_column(String(48))
     status: Mapped[str] = mapped_column(String(16), default="open")  # open|accepted|dismissed
     resolved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -266,3 +275,111 @@ class ServerCredentialRecord(Base):
         return (
             f"ServerCredentialRecord(server_id={self.server_id!r}, env=<{len(self.env)} redacted>)"
         )
+
+
+# --------------------------------------------------------------------------
+# Wave 4: Agent Skills (agentskills.io spec) — the same catalog/routing/policy
+# machinery applied to SKILL.md directories. A skill source is to a skill what
+# an MCP server is to a tool.
+# --------------------------------------------------------------------------
+
+
+class SkillSourceRecord(Base):
+    """Where skills come from: a local directory tree or a git repository."""
+
+    __tablename__ = "skill_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    kind: Mapped[str] = mapped_column(String(16))  # directory | git
+    location: Mapped[str] = mapped_column(Text)  # absolute path or https git URL
+    git_ref: Mapped[str | None] = mapped_column(String(200))  # branch/tag; git only
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(
+        String(16), default="unknown"
+    )  # healthy|degraded|offline|unknown
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_commit: Mapped[str | None] = mapped_column(String(64))  # git only
+    sync_interval_s: Mapped[int] = mapped_column(Integer, default=3600)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    skills: Mapped[list[SkillRecord]] = relationship(
+        back_populates="source", cascade="all, delete-orphan"
+    )
+
+
+class SkillRecord(Base):
+    """One SKILL.md directory. Mirrors MCPToolRecord's classification/embedding
+    columns so retrieval, dedup, policy and analytics treat both kinds alike.
+
+    `operation` is the skill's RISK CLASS on the same read<write<execute scale:
+    guidance-only = read; declares writes/sends = write; ships scripts/ or
+    pre-approves executing tools (allowed-tools) = execute; undeterminable =
+    unknown (policy treats unknown as execute — fail closed).
+    """
+
+    __tablename__ = "skills"
+    __table_args__ = (
+        Index("ix_skills_source_name", "source_id", "name", unique=True),
+        Index("ix_skills_domain", "domain"),
+        Index("ix_skills_operation", "operation"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    source_id: Mapped[str] = mapped_column(ForeignKey("skill_sources.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(64))  # spec: [a-z0-9-], 1..64, == dir name
+    description: Mapped[str] = mapped_column(Text)  # spec: 1..1024
+    body: Mapped[str] = mapped_column(Text, default="")  # SKILL.md after the frontmatter
+    relative_path: Mapped[str] = mapped_column(Text)  # skill dir relative to the source root
+    license: Mapped[str | None] = mapped_column(Text)
+    compatibility: Mapped[str | None] = mapped_column(String(500))
+    skill_metadata: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    allowed_tools: Mapped[list[str]] = mapped_column(JSON, default=list)  # split on whitespace
+    # [{"path": "scripts/x.py", "size": 123, "sha256": "...", "kind": "script|reference|asset|other"}]
+    resource_manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    has_scripts: Mapped[bool] = mapped_column(Boolean, default=False)
+    content_hash: Mapped[str] = mapped_column(String(64))  # sha256 of SKILL.md bytes
+    manifest_hash: Mapped[str] = mapped_column(String(64))  # sha256 over sorted (path, sha256)
+    body_tokens_est: Mapped[int] = mapped_column(Integer, default=0)  # chars/4, for budgets/economy
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    # Classification (same semantics as MCPToolRecord)
+    domain: Mapped[str | None] = mapped_column(String(40))
+    capabilities: Mapped[list[str]] = mapped_column(JSON, default=list)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    operation: Mapped[str] = mapped_column(String(10), default="unknown")
+    required_scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    classification_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    classification_source: Mapped[str | None] = mapped_column(String(80))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Ingest-time findings (never auto-applied): e.g. secret-shaped strings in the body.
+    ingest_flags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    # Stats
+    activation_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Embedding (same 384-dim space + provenance rules as tools)
+    embedding: Mapped[Any | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_backend: Mapped[str | None] = mapped_column(String(20))
+    embedding_text_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    source: Mapped[SkillSourceRecord] = relationship(back_populates="skills")
+
+
+class SkillVersionRecord(Base):
+    """Append-only history of a skill: one row per observed content/manifest change."""
+
+    __tablename__ = "skill_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    skill_id: Mapped[str] = mapped_column(ForeignKey("skills.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    manifest_hash: Mapped[str] = mapped_column(String(64))
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)  # frontmatter + body + manifest
+    change_kind: Mapped[str] = mapped_column(
+        String(16)
+    )  # added|content|resources|metadata|removed|restored
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

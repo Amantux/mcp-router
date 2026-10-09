@@ -3,6 +3,8 @@ import { NavLink, Outlet } from "react-router";
 import { Button, makeStyles, mergeClasses, Text, tokens } from "@fluentui/react-components";
 import {
   ServerRegular,
+  LibraryRegular,
+  BookRegular,
   WrenchRegular,
   BranchForkRegular,
   DirectionsRegular,
@@ -22,6 +24,8 @@ import { useAuth } from "../api/auth";
 export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
+  { to: "/skill-sources", label: "Skill sources", icon: <LibraryRegular /> },
+  { to: "/skills", label: "Skills", icon: <BookRegular /> },
   { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
   { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
   { to: "/analytics", label: "Analytics", icon: <DataBarVerticalRegular /> },

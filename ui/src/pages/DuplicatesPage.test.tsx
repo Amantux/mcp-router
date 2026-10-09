@@ -106,3 +106,31 @@ describe("DuplicatesPage", () => {
     await waitFor(() => expect(calls.find((c) => c.url.endsWith("/accept"))?.body).toEqual({ preferredToolId: "a" }));
   });
 });
+
+describe("DuplicatesPage cross-kind pairs", () => {
+  it("badges a skill↔tool pair by kind on each side and keeps the no-auto-disable copy", async () => {
+    mockFetch({
+      "GET /api/v1/dedup/suggestions": () => ({
+        json: [
+          {
+            id: "d9",
+            tool_a_id: "skill:k1",
+            tool_b_id: "b",
+            similarity: 0.91,
+            rationale: "Skill duplicates a tool",
+            status: "open",
+            created_at: "2026-10-01T00:00:00Z",
+            tool_b: tool("b", "find_issues", "gitea"),
+          },
+        ],
+      }),
+      "GET /api/v1/skills/k1": () => ({ json: { id: "k1", source_id: "s1", source_name: "team", name: "issue-finder", description: "Finds issues", operation: "read", enabled: true, body_tokens_est: 420 } }),
+    });
+    renderWithProviders(<DuplicatesPage />);
+    const a = await screen.findByLabelText("Tool A: issue-finder");
+    expect(a.textContent).toContain("skill");
+    const b = await screen.findByLabelText("Tool B: find_issues");
+    expect(b.textContent).toContain("tool");
+    expect(screen.getByText(/Nothing is ever auto-disabled/)).toBeTruthy();
+  });
+});

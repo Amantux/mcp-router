@@ -30,6 +30,10 @@ class AllowAllScope:
     def permits(self, candidate: ToolCandidate) -> bool:
         return True
 
+    def principal_max_skills(self) -> int | None:
+        # No principal: no principal skills ceiling (the global cap applies).
+        return None
+
 
 @dataclass(frozen=True)
 class StaticScope:
@@ -42,6 +46,9 @@ class StaticScope:
     def fingerprint(self) -> str:  # route-cache key component
         servers = "*" if self.servers is None else ",".join(sorted(self.servers))
         return f"static:{self.max_operation}:{servers}"
+
+    def principal_max_skills(self) -> int | None:
+        return None  # eval scope: no principal ceiling; the global cap applies
 
     def permits(self, candidate: ToolCandidate) -> bool:
         # Deny by default: an unknown/unclassified operation is not provably
@@ -64,3 +71,20 @@ class UncachedScope:
 
     def permits(self, candidate: ToolCandidate) -> bool:
         return self._inner.permits(candidate)
+
+    def principal_max_skills(self) -> int | None:
+        # Delegate, or the wrapped principal's skills budget is lost (S2d review A).
+        return principal_skill_cap(self._inner)
+
+
+def principal_skill_cap(scope: ScopeFilter) -> int | None:
+    """The principal's skills ceiling for `scope`; None = no principal ceiling.
+
+    Resolution: the scope's public `principal_max_skills()`, else FAIL
+    CLOSED to 0. A scope that cannot say what its principal may see gets no
+    skills, never the global cap."""
+    public = getattr(scope, "principal_max_skills", None)
+    if callable(public):
+        value = public()
+        return value if value is None or isinstance(value, int) else 0
+    return 0

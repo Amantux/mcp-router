@@ -75,3 +75,37 @@
 {"id": "n06", "category": "no_match", "query": "What is 17 times 23?", "expect_no_match": true}
 {"id": "n07", "category": "no_match", "query": "Turn off the living room lights", "expect_no_match": true}
 {"id": "n08", "category": "no_match", "query": "Tell me a joke about cats", "expect_no_match": true}
+{"id": "s01", "category": "skill_direct", "query": "Pull the text and the tables out of this PDF report", "expected_skills": ["team-skills/pdf-extract"]}
+{"id": "s02", "category": "skill_direct", "query": "Draft the release notes for everything merged since v2.3", "expected_skills": ["team-skills/release-notes"]}
+{"id": "s03", "category": "skill_direct", "query": "Deploy the billing service to staging", "expected_skills": ["team-skills/deploy-service"]}
+{"id": "s04", "category": "skill_direct", "query": "Answer 'which region had the most refunds last quarter' with a SQL report", "expected_skills": ["team-skills/sql-report"]}
+{"id": "s05", "category": "skill_direct", "query": "Apply the pending database schema migration to production", "expected_skills": ["team-skills/schema-migration"]}
+{"id": "s06", "category": "skill_direct", "query": "Give me a standup digest of what happened in Slack yesterday", "expected_skills": ["team-skills/standup-summary"]}
+{"id": "s07", "category": "skill_direct", "query": "Triage my unread email and tell me what is urgent", "expected_skills": ["team-skills/email-triage"]}
+{"id": "s08", "category": "skill_direct", "query": "Write up meeting notes with the decisions and action items from today's sync", "expected_skills": ["team-skills/meeting-notes"]}
+{"id": "s09", "category": "skill_direct", "query": "Clean up this CSV: trim whitespace and normalize the dates", "expected_skills": ["community-skills/csv-cleanup"]}
+{"id": "s10", "category": "skill_direct", "query": "Write a blameless postmortem for last night's outage from this timeline", "expected_skills": ["community-skills/incident-postmortem"]}
+{"id": "s11", "category": "skill_direct", "query": "Plan a meeting with the design team next week and book the slot", "expected_skills": ["team-skills/meeting-scheduler"]}
+{"id": "s12", "category": "skill_ambiguous", "query": "Fill out this PDF form with my details", "expected_skills": ["team-skills/pdf-fill", "community-skills/pdf-form-filler"]}
+{"id": "s13", "category": "skill_ambiguous", "query": "Review pull request 412 for bugs", "expected_skills": ["team-skills/pr-review", "community-skills/pr-reviewer"]}
+{"id": "s14", "category": "skill_ambiguous", "query": "Complete the PDF application form from this JSON data", "expected_skills": ["community-skills/pdf-form-filler", "team-skills/pdf-fill"]}
+{"id": "s15", "category": "skill_ambiguous", "query": "Look over the changes in this PR and flag risky code", "expected_skills": ["team-skills/pr-review", "community-skills/pr-reviewer"]}
+{"id": "s16", "category": "skill_unauthorized", "query": "Deploy the api service to production", "forbidden_skills": ["team-skills/deploy-service"], "agent_id": "readonly-agent", "kinds": ["skill"]}
+{"id": "s17", "category": "skill_unauthorized", "query": "Run the schema migration on the orders database", "forbidden_skills": ["team-skills/schema-migration"], "agent_id": "readonly-agent", "kinds": ["skill"]}
+{"id": "s18", "category": "skill_unauthorized", "query": "Review this pull request diff before I merge", "expected_skills": ["team-skills/pr-review", "community-skills/pr-reviewer"], "forbidden_skills": ["team-skills/deploy-service"], "agent_id": "readonly-agent"}
+{"id": "s19", "category": "skill_unauthorized", "query": "Summarize the incident channel into a standup digest", "expected_skills": ["team-skills/standup-summary"], "forbidden_skills": ["team-skills/deploy-service", "team-skills/schema-migration"], "agent_id": "readonly-agent"}
+{"id": "s20", "category": "skill_unauthorized", "query": "Extract the tables from the vendor contract PDF", "expected_skills": ["team-skills/pdf-extract"], "forbidden_skills": ["team-skills/pdf-fill", "community-skills/pdf-form-filler"], "agent_id": "readonly-agent"}
+{"id": "s21", "category": "skill_unauthorized", "query": "Write a SQL report on weekly signups", "expected_skills": ["team-skills/sql-report"], "forbidden_skills": ["team-skills/schema-migration"], "agent_id": "readonly-agent"}
+{"id": "s22", "category": "skill_direct", "query": "Triage the support inbox by priority", "expected_skills": ["team-skills/email-triage"]}
+{"id": "mx01", "category": "mixed", "query": "Fill this PDF form and email it to hr@example.com", "expected_tools": ["email/send_email"], "expected_skills": ["team-skills/pdf-fill", "community-skills/pdf-form-filler"]}
+{"id": "mx02", "category": "mixed", "query": "Write release notes for the merged PRs and post them to #releases on Slack", "expected_tools": ["slack/send_message"], "expected_skills": ["team-skills/release-notes"]}
+{"id": "mx03", "category": "mixed", "query": "Review pull request 88 and leave the findings as a comment on it", "expected_tools": ["github/add_issue_comment"], "expected_skills": ["team-skills/pr-review", "community-skills/pr-reviewer"]}
+{"id": "mx04", "category": "mixed", "query": "Compose a SQL report on churn by plan from the postgres database", "expected_tools": ["postgres/run_query"], "expected_skills": ["team-skills/sql-report"]}
+{"id": "mx05", "category": "mixed", "query": "Summarize the #eng Slack channel history into a standup digest", "expected_tools": ["slack/get_channel_history"], "expected_skills": ["team-skills/standup-summary"]}
+{"id": "mx06", "category": "mixed", "query": "Triage my unread email and draft replies to the urgent ones", "expected_tools": ["email/create_draft"], "expected_skills": ["team-skills/email-triage"]}
+{"id": "mx07", "category": "mixed", "query": "Find a free slot for Ana and Ben and create the calendar invite", "expected_tools": ["calendar/find_free_time", "calendar/create_event"], "expected_skills": ["team-skills/meeting-scheduler"]}
+{"id": "mx08", "category": "mixed", "query": "Write meeting notes for the planning sync into a new Notion page", "expected_tools": ["notion/create_page"], "expected_skills": ["team-skills/meeting-notes"]}
+{"id": "mx09", "category": "mixed", "query": "Read report.pdf from the shared folder and extract its tables", "expected_tools": ["filesystem/read_file"], "expected_skills": ["team-skills/pdf-extract"]}
+{"id": "mx10", "category": "mixed", "query": "Clean up data/export.csv and write the cleaned file back to disk", "expected_tools": ["filesystem/write_file"], "expected_skills": ["community-skills/csv-cleanup"]}
+{"id": "mx11", "category": "mixed", "query": "Write a postmortem for the outage and file a Jira ticket for each follow-up", "expected_tools": ["jira/create_ticket"], "expected_skills": ["community-skills/incident-postmortem"]}
+{"id": "mx12", "category": "mixed", "query": "Review the open GitHub pull requests for bugs", "expected_tools": ["github/list_pull_requests"], "expected_skills": ["team-skills/pr-review", "community-skills/pr-reviewer"], "allowed_servers": ["github"]}

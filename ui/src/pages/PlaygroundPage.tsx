@@ -21,9 +21,9 @@ import {
 } from "@fluentui/react-components";
 import { PlayRegular, WrenchRegular } from "@fluentui/react-icons";
 import { Link, useSearchParams } from "react-router";
-import { ApiError, executeTool, getApproval, getMe, getTool, isAbort, listPrincipals, listServers, listTools } from "../api/client";
+import { activateSkill, ApiError, executeTool, getSkill, listSkills, getApproval, getMe, getTool, isAbort, listPrincipals, listServers, listTools } from "../api/client";
 import { useAuth } from "../api/auth";
-import type { Approval, ExecuteResult, JsonObject, MCPTool } from "../api/types";
+import type { Approval, ExecuteResult, SkillActivation, SkillDetail, JsonObject, MCPTool } from "../api/types";
 import { ConfirmDialog, EmptyState, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useDebounced } from "../hooks/useDebounced";
@@ -528,6 +528,272 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
   );
 }
 
+/** Activation failures the backend reports as HTTP status, mapped onto the shared outcome renderer. */
+const ACTIVATION_STATUS: Record<
+  number,
+  { status: ExecuteResult["status"]; detail: string }
+> = {
+  403: {
+    status: "denied",
+    detail: "Policy denied this activation for the chosen identity.",
+  },
+  404: {
+    status: "unavailable",
+    detail: "This skill is not routed to the chosen identity.",
+  },
+  429: {
+    status: "rate_limited",
+    detail:
+      "Activation rate limit reached for this identity. Try again shortly.",
+  },
+};
+
+function SkillActivator({ skill }: { skill: SkillDetail }) {
+  const s = useStyles();
+  const c = useCommonStyles();
+  const notify = useNotify();
+  const auth = useAuth();
+  // Same Run-as rules as tools: an admin-only session must name the agent it activates as.
+  const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
+  const [runAs, setRunAs] = useState("");
+  const [agents, setAgents] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!adminOnly) return;
+    const ctl = new AbortController();
+    listPrincipals(ctl.signal)
+      .then((ps) =>
+        setAgents(ps.filter((p) => p.enabled).map((p) => p.agentId)),
+      )
+      .catch((e) => {
+        if (!isAbort(e)) setAgents([]);
+      });
+    return () => ctl.abort();
+  }, [adminOnly]);
+  const [confirming, setConfirming] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<SkillActivation | null>(null);
+  const [failure, setFailure] = useState<ExecuteResult | null>(null);
+  const who = auth.hasAgentKey
+    ? auth.agentId
+      ? `agent “${auth.agentId}”`
+      : "the agent key"
+    : auth.hasAdminToken
+      ? runAs
+        ? `agent “${runAs}” (admin-initiated)`
+        : "the admin token"
+      : "dev mode";
+
+  const activate = async () => {
+    setConfirming(false);
+    setRunning(true);
+    setResult(null);
+    setFailure(null);
+    try {
+      setResult(
+        await activateSkill(
+          skill.id,
+          adminOnly && runAs ? { agentId: runAs } : {},
+        ),
+      );
+    } catch (e) {
+      const mapped =
+        e instanceof ApiError ? ACTIVATION_STATUS[e.status] : undefined;
+      if (mapped) setFailure({ ...mapped, recordId: null });
+      else notify.error(`Activate ${skill.name}`, e);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <section className={s.runner} aria-label={`Activate ${skill.name}`}>
+      <div className={s.head}>
+        <Subtitle2 as="h2">{skill.name}</Subtitle2>
+        <OperationBadge op={skill.operation} />
+      </div>
+      {skill.description && <Body1>{skill.description}</Body1>}
+      <RunAsLine impersonating={adminOnly && runAs ? runAs : undefined} />
+      {adminOnly && (
+        <Field
+          label="Activate as agent"
+          hint="Admin-initiated activations run under the chosen agent's own policy and are audited as impersonation."
+        >
+          <Select
+            data-testid="skill-run-as-picker"
+            value={runAs}
+            onChange={(_, d) => setRunAs(d.value)}
+          >
+            <option value="">Choose an agent…</option>
+            {(agents ?? []).map((a) => (
+              <option key={a} value={a}>
+                {a}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
+      <div>
+        <Button
+          appearance="primary"
+          icon={<PlayRegular />}
+          disabled={running || (adminOnly && !runAs)}
+          onClick={() =>
+            skill.operation === "execute"
+              ? setConfirming(true)
+              : void activate()
+          }
+        >
+          {running ? "Activating…" : `Activate as ${who}`}
+        </Button>
+      </div>
+      {failure && (
+        <ExecutionOutcomeView
+          tool={skill}
+          outcome={failure}
+          asAgent={auth.hasAgentKey}
+        />
+      )}
+      {result && (
+        <section
+          className={s.outcome}
+          aria-label="Activation result"
+          data-testid="activation-ok"
+        >
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Activated {skill.name}</MessageBarTitle>
+              {result.recordId
+                ? `Audit record ${result.recordId}`
+                : "No audit record id returned."}
+            </MessageBarBody>
+          </MessageBar>
+          <Subtitle2 as="h3">Body</Subtitle2>
+          {/* Skill bodies are untrusted text: a text node in <pre>, never Markdown/HTML. */}
+          <pre aria-label="Skill body" className={c.muted}>
+            {result.body}
+          </pre>
+          <Subtitle2 as="h3">Resources</Subtitle2>
+          {result.resources.length === 0 ? (
+            <Caption1>No resources.</Caption1>
+          ) : (
+            <ul aria-label="Skill resources">
+              {result.resources.map((r) => (
+                <li key={r.path}>
+                  {r.path} · {r.kind} · {r.size} B
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      <ConfirmDialog
+        open={confirming}
+        title={`Activate ${skill.name} as ${who}?`}
+        body={
+          <>
+            <strong>{skill.name}</strong> is classified as an{" "}
+            <strong>execute</strong> skill: its instructions may tell an agent
+            to run scripts or act on real systems. Activation is audited and
+            subject to policy as for any agent.
+          </>
+        }
+        confirmLabel="Activate skill"
+        pendingLabel="Activating…"
+        pending={running}
+        onConfirm={() => void activate()}
+        onCancel={() => setConfirming(false)}
+      />
+    </section>
+  );
+}
+
+function SkillsPlayground() {
+  const s = useStyles();
+  const c = useCommonStyles();
+  const [params, setParams] = useSearchParams();
+  const selectedId = params.get("skill");
+  const [query, setQuery] = useState("");
+  const q = useDebounced(query, 200);
+  const skills = useLoader(
+    "Load skills",
+    (sig) =>
+      listSkills(
+        { q: q.trim() || undefined, enabled: true, limit: 50, offset: 0 },
+        sig,
+      ),
+    [q],
+  );
+  const detail = useLoader(
+    "Load skill",
+    (sig) =>
+      selectedId ? getSkill(selectedId, sig) : Promise.resolve(undefined),
+    [selectedId],
+  );
+  const items = skills.data?.items ?? [];
+  const selected =
+    selectedId && detail.data?.id === selectedId ? detail.data : undefined;
+  return (
+    <div className={s.layout}>
+      <div className={s.picker}>
+        <Field label="Find a skill">
+          <SearchBox
+            value={query}
+            onChange={(_, d) => setQuery(d.value)}
+            placeholder="Name or description"
+          />
+        </Field>
+        {skills.loading && !skills.data ? (
+          <LoadingRow label="Loading skills…" />
+        ) : items.length === 0 ? (
+          <Caption1>
+            {q
+              ? "No enabled skills match."
+              : "No enabled skills yet. Add a skill source first."}
+          </Caption1>
+        ) : (
+          <ul className={s.list} aria-label="Skills">
+            {items.map((k) => (
+              <li key={k.id}>
+                <button
+                  type="button"
+                  className={mergeClasses(
+                    s.item,
+                    k.id === selectedId && s.itemActive,
+                  )}
+                  aria-current={k.id === selectedId ? "true" : undefined}
+                  onClick={() => setParams({ skill: k.id })}
+                >
+                  <strong>{k.name}</strong>
+                  <Caption1 className={c.muted}>
+                    {k.sourceName ?? ""} · {k.operation}
+                  </Caption1>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div>
+        {!selectedId ? (
+          <EmptyState
+            icon={<WrenchRegular />}
+            title="Pick a skill to activate it"
+            body="Activation returns the skill's body and resource list exactly as an agent would receive them, through the same policy and audit path."
+          />
+        ) : !selected ? (
+          detail.loading ? (
+            <LoadingRow label="Loading skill…" />
+          ) : (
+            <Caption1>That skill couldn't be loaded.</Caption1>
+          )
+        ) : (
+          <SkillActivator key={selected.id} skill={selected} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PlaygroundPage() {
   const s = useStyles();
   const c = useCommonStyles();
@@ -556,10 +822,19 @@ export function PlaygroundPage() {
   const items = tools.data?.items ?? [];
   const selected = selectedId && detail.data?.id === selectedId ? detail.data : undefined;
 
+  const tab = params.has("skill") || params.get("tab") === "skills" ? "skills" : "tools";
+
   return (
     <>
-      <PageHeader title="Tool playground" />
-      <div className={s.layout}>
+      <PageHeader title="Playground" />
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setParams(d.value === "skills" ? { tab: "skills" } : {})} aria-label="Playground kind">
+        <Tab value="tools">Tools</Tab>
+        <Tab value="skills">Skills</Tab>
+      </TabList>
+      {tab === "skills" ? (
+        <SkillsPlayground />
+      ) : (
+        <div className={s.layout}>
         <div className={s.picker}>
           <Field label="Server">
             <Select value={serverId} onChange={(_, d) => setServerId(d.value)}>
@@ -615,7 +890,8 @@ export function PlaygroundPage() {
             <ToolRunner key={`${selected.id}:${selected.schemaHash}`} tool={selected} />
           )}
         </div>
-      </div>
+        </div>
+      )}
     </>
   );
 }

@@ -218,6 +218,9 @@ class SuggestionOut(Wire):
     created_at: datetime
     # Populated by the list endpoint for OPEN suggestions (wave-2 analytics).
     usage_evidence: SuggestionEvidence | None = None
+    # Wave-4: "tool" | "skill" per side (skill sides carry a "skill:<id>" ref).
+    kind_a: str = "tool"
+    kind_b: str = "tool"
 
 
 class SuggestionPageOut(Wire):
@@ -257,4 +260,6 @@ def suggestion_out(sug: DuplicateSuggestion, refs: dict[str, SuggestionToolRef])
         resolved_at=sug.resolved_at,
         resolution_note=sug.resolution_note,
         created_at=sug.created_at,
+        kind_a="skill" if sug.tool_a_id.startswith("skill:") else "tool",
+        kind_b="skill" if sug.tool_b_id.startswith("skill:") else "tool",
     )

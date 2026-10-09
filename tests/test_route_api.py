@@ -88,11 +88,13 @@ def test_route_happy_path_wire_shape(seeded: dict[str, str]) -> None:
     assert set(body) == {
         "request_id",
         "tools",
+        "skills",
         "fallback_used",
         "latency_ms",
         "no_match",
         "max_tools_applied",
         "max_servers_applied",
+        "max_skills_applied",
         "cached",
     }
     assert body["fallback_used"] is False and body["no_match"] is False

@@ -29,6 +29,7 @@ from mcprouter.analytics.wire import (
     RollupDayOut,
     RollupOut,
     RoutingOut,
+    SkillsOverviewOut,
     StaleToolOut,
     SuggestionsOut,
     ToolDetailOut,
@@ -37,7 +38,7 @@ from mcprouter.analytics.wire import (
     WastedOut,
     WindowOut,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
 
 SortKey = Literal[
     "surfaced",
@@ -78,6 +79,9 @@ def _economy_out(e: Economy, *, per_agent: bool = False) -> EconomyOut:
         tokens_not_sent=e.tokens_not_sent,
         savings=e.savings,
         catalog_tokens_per_decision=e.catalog_tokens_per_decision if per_agent else None,
+        skill_metadata_tokens=e.skill_metadata_tokens,
+        skill_body_tokens_exposed=e.skill_body_tokens_exposed,
+        skill_body_tokens_not_sent=e.skill_body_tokens_not_sent,
         estimator=ESTIMATOR,
         catalog_basis=CATALOG_BASIS,
     )
@@ -89,8 +93,20 @@ def _curve_out(points: list[fn.RankPoint]) -> list[RankPointOut]:
     ]
 
 
+SKILL_PREFIX = "skill:"
+Kind = Literal["tool", "skill", "all"]
+
+
+def kind_of(tid: str) -> Literal["tool", "skill"]:
+    """Funnel ids are kind-keyed: "skill:<skill id>" vs a bare tool id."""
+    return "skill" if tid.startswith(SKILL_PREFIX) else "tool"
+
+
 def _meta(session: Session) -> dict[str, _Meta]:
-    return {
+    """Catalog metadata keyed by funnel id. Skills resolve name from
+    SkillRecord and "server" from their SkillSourceRecord; enabled is the
+    source's enabled flag (skills have no per-skill toggle)."""
+    out = {
         tid: _Meta(name, srv, enabled)
         for tid, name, srv, enabled in session.execute(
             select(
@@ -98,6 +114,13 @@ def _meta(session: Session) -> dict[str, _Meta]:
             ).join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
         ).all()
     }
+    for sid, name, src, enabled in session.execute(
+        select(
+            SkillRecord.id, SkillRecord.name, SkillSourceRecord.name, SkillSourceRecord.enabled
+        ).join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+    ).all():
+        out[SKILL_PREFIX + sid] = _Meta(name, src, enabled)
+    return out
 
 
 def _tool_out(
@@ -106,6 +129,7 @@ def _tool_out(
     m = meta.get(tid)
     return ToolFunnelOut(
         tool_id=tid,
+        kind=kind_of(tid),
         tool_name=m.name if m else None,
         server_name=m.server if m else None,
         enabled=m.enabled if m else None,
@@ -156,6 +180,12 @@ def overview(session: Session, window: Window) -> OverviewOut:
             off_funnel_selections=off_funnel_selections(session, window),
         ),
         position_curve=_curve_out(fn.position_curve(session, window)),
+        skills=SkillsOverviewOut(
+            surfaced=total.skills_surfaced,
+            activated=total.skills_activated,
+            activation_rate=total.skill_activation_rate,
+            body_tokens_not_sent=econ.skill_body_tokens_not_sent,
+        ),
         catalog_drift=catalog_drift(session, window),
     )
 
@@ -183,6 +213,7 @@ def tool_table(
     descending: bool,
     limit: int,
     offset: int,
+    kind: Kind = "all",
 ) -> ToolFunnelPageOut:
     """Every catalog tool (zero rows included) plus removed tools that still
     have funnel data. None values sort LAST in either direction; ties break
@@ -193,6 +224,7 @@ def tool_table(
     rows = [
         _tool_out(tid, funnel.get(tid, fn.ToolCounts()), meta, tokens)
         for tid in sorted(set(meta) | set(funnel))
+        if kind == "all" or kind_of(tid) == kind
     ]
     present = [r for r in rows if _sort_value(r, sort) is not None]
     missing = [r for r in rows if _sort_value(r, sort) is None]
@@ -225,6 +257,7 @@ def tool_detail(session: Session, window: Window, tool_id: str) -> ToolDetailOut
         co_surfaced=[
             CoSurfacedOut(
                 tool_id=c.tool_id,
+                kind=kind_of(c.tool_id),
                 tool_name=meta[c.tool_id].name if c.tool_id in meta else None,
                 server_name=meta[c.tool_id].server if c.tool_id in meta else None,
                 co_surfaced=c.co_surfaced,
@@ -250,6 +283,9 @@ def agent_profiles(session: Session, window: Window) -> AgentPageOut:
             AgentProfileOut(
                 agent_id=agent,
                 decisions=p.decisions,
+                skills_surfaced=p.skills_surfaced,
+                skills_activated=p.skills_activated,
+                skill_activation_rate=p.skill_activation_rate,
                 no_match=p.no_match,
                 no_match_rate=p.no_match_rate,
                 fallback=p.fallback,
@@ -297,6 +333,7 @@ def suggestions(
         wasted_exposure=[
             WastedOut(
                 tool_id=w.tool_id,
+                kind=kind_of(w.tool_id),
                 tool_name=meta[w.tool_id].name if w.tool_id in meta else None,
                 server_name=meta[w.tool_id].server if w.tool_id in meta else None,
                 surfaced=w.counts.surfaced,

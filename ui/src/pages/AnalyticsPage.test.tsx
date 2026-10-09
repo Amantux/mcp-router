@@ -174,4 +174,35 @@ describe("ToolDetailDrawer funnel tab", () => {
     expect(screen.getByRole("table", { name: "Co-surfaced tools" }).textContent).toContain("get_pr");
     expect(calls[0].url).toContain("window=30d");
   });
+  it("filters tool rows by kind (client-side fallback) and sends ?kind=", async () => {
+    const mixed = {
+      ...TOOLS,
+      items: [
+        { ...TOOLS.items[0], kind: "tool" },
+        { ...TOOLS.items[0], tool_id: "s1", tool_name: "pdf-form-filler", server_name: "src-pdf", kind: "skill" },
+      ],
+      total: 2,
+    };
+    const { calls } = mockFetch({
+      "GET /api/v1/analytics/overview": () => ({ json: OVERVIEW }),
+      "GET /api/v1/analytics/suggestions": () => ({ json: SUGGESTIONS }),
+      "GET /api/v1/analytics/tools": () => ({ json: mixed }),
+      "GET /api/v1/analytics/agents": () => ({ json: AGENTS }),
+    });
+    renderWithProviders(<AnalyticsPage />);
+    await screen.findByText("pdf-form-filler");
+    await userEvent.click(screen.getByRole("button", { name: "Skills" }));
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/analytics/tools") && c.url.includes("kind=skill"))).toBe(true));
+    await waitFor(() => expect(screen.queryByText("list_prs")).toBeNull());
+    expect(screen.getByText("pdf-form-filler")).toBeTruthy();
+  });
+
+  it("renders the skills overview card and the skill-body economy caption", async () => {
+    mockAnalytics({ ...OVERVIEW, skills: { surfaced: 40, activated: 10, activation_rate: 0.25, body_tokens_not_sent: 36000 } });
+    renderWithProviders(<AnalyticsPage />);
+    const card = await screen.findByTestId("card-skills");
+    expect(card.textContent).toContain("25");
+    expect(card.textContent).toContain("10 of 40");
+    expect(screen.getByTestId("card-savings").textContent).toMatch(/36,000 skill-body tokens not sent/);
+  });
 });

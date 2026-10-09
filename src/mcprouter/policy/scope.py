@@ -23,8 +23,15 @@ from mcprouter.api.deps_auth import (
     dev_principal,
 )
 from mcprouter.interfaces import ScopeFilter, ToolCandidate
-from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
-from mcprouter.policy.engine import Decision, evaluate
+from mcprouter.models import (
+    AgentPrincipal,
+    MCPServerRecord,
+    MCPToolRecord,
+    PolicyRule,
+    SkillRecord,
+    SkillSourceRecord,
+)
+from mcprouter.policy.engine import Decision, evaluate, evaluate_skill, rule_kind
 
 ScopeResolver = Callable[[str], ScopeFilter]
 
@@ -47,10 +54,21 @@ class PolicyScope:
         self._principal = principal
         self._rules = list(rules)
 
+    def principal_max_skills(self) -> int | None:
+        """The principal's skills ceiling; None = no ceiling of its own.
+        Non-int (corrupt) values fail closed to 0."""
+        value = self._principal.max_skills
+        return value if value is None or isinstance(value, int) else 0
+
     def server_ids(self) -> list[str] | None:
         if not self._principal.enabled:
             return []
-        mine = [r for r in self._rules if r.agent_id == self._principal.agent_id]
+        # MCP servers only: skill rules key on skill SOURCE ids, never servers.
+        mine = [
+            r
+            for r in self._rules
+            if r.agent_id == self._principal.agent_id and rule_kind(r) == "tool"
+        ]
         if any(r.server_id is None for r in mine):
             return None  # some rule spans every server; per-tool checks still apply
         return sorted({r.server_id for r in mine if r.server_id is not None})
@@ -63,6 +81,7 @@ class PolicyScope:
         rules = sorted(
             (
                 r.id or "",
+                rule_kind(r),
                 r.agent_id,
                 r.server_id or "",
                 r.tool_name or "",
@@ -83,6 +102,14 @@ class PolicyScope:
 
     def _decide(self, candidate: ToolCandidate) -> Decision:
         # Transient (never-added) records carrying exactly the fields evaluate reads.
+        if candidate.kind == "skill":
+            source = SkillSourceRecord(id=candidate.server_id, name=candidate.server_name)
+            skill = SkillRecord(
+                source_id=candidate.server_id,
+                name=candidate.tool_name,
+                operation=candidate.operation,
+            )
+            return evaluate_skill(self._principal, source, skill, self._rules)
         server = MCPServerRecord(id=candidate.server_id, name=candidate.server_name)
         tool = MCPToolRecord(
             server_id=candidate.server_id,

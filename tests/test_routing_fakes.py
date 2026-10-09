@@ -22,7 +22,13 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from mcprouter.interfaces import ChoiceResult, ScoreResult
-from mcprouter.models import EMBEDDING_DIM, MCPServerRecord, MCPToolRecord
+from mcprouter.models import (
+    EMBEDDING_DIM,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillRecord,
+    SkillSourceRecord,
+)
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -154,3 +160,22 @@ def pick(option: str, p: float = 0.9) -> Callable[[str, str, list[str]], ChoiceR
         return ChoiceResult(option=chosen, probabilities=probs)
 
     return fn
+
+
+def add_skill(
+    s: Session, name: str, description: str, *, embedder: FakeHashEmbedder, op: str = "read"
+) -> SkillRecord:
+    """S2d: an eligible, embedded skill under its own directory source."""
+    src = SkillSourceRecord(name=f"src-{name}", kind="directory", location=f"/x/{name}")
+    s.add(src)
+    s.flush()
+    sk = SkillRecord(
+        source_id=src.id, name=name, description=description, relative_path=name,
+        content_hash="0" * 64, manifest_hash="0" * 64, operation=op,
+        classification_reviewed=True, classification_source="human", ingest_flags=[],
+    )  # fmt: skip
+    sk.embedding = embedder.embed([f"{name} {description}"])[0]
+    sk.embedding_backend = embedder.name
+    s.add(sk)
+    s.flush()
+    return sk

@@ -69,7 +69,9 @@ _SELECTION_SQL = text(
     + ","
     + ATT_CTE
     + """
-SELECT s.agent_id, count(*) AS surfaced, count(a.decision_id) AS selected
+SELECT s.agent_id, count(*) AS surfaced, count(a.decision_id) AS selected,
+       count(*) FILTER (WHERE starts_with(s.tool_id, 'skill:')) AS skills_surfaced,
+       count(a.decision_id) FILTER (WHERE starts_with(s.tool_id, 'skill:')) AS skills_activated
 FROM surf s
 LEFT JOIN att a ON a.decision_id = s.decision_id AND a.tool_id = s.tool_id
 GROUP BY GROUPING SETS ((s.agent_id), ())
@@ -116,6 +118,10 @@ class Profile:
     attributed: int = 0
     surfaced: int = 0
     selected: int = 0
+    # Subset of surfaced/selected whose funnel id is "skill:<id>" (a skill
+    # activation attributed to the decision that surfaced it).
+    skills_surfaced: int = 0
+    skills_activated: int = 0
     economy: Economy = field(default_factory=Economy)
 
     @property
@@ -133,6 +139,10 @@ class Profile:
     @property
     def attribution_coverage(self) -> float | None:
         return ratio(self.attributed, self.attempts)
+
+    @property
+    def skill_activation_rate(self) -> float | None:
+        return ratio(self.skills_activated, self.skills_surfaced)
 
     @property
     def selection_rate(self) -> float | None:
@@ -159,9 +169,10 @@ def profiles(session: Session, window: Window) -> tuple[Profile, dict[str, Profi
     for agent, attempts, denied, attributed in session.execute(_EXEC_SQL, params).all():
         p = acc.setdefault(_key(agent), Profile())
         p.attempts, p.denied, p.attributed = int(attempts), int(denied), int(attributed)
-    for agent, surfaced, selected in session.execute(_SELECTION_SQL, params).all():
+    for agent, surfaced, selected, sk_s, sk_a in session.execute(_SELECTION_SQL, params).all():
         p = acc.setdefault(_key(agent), Profile())
         p.surfaced, p.selected = int(surfaced), int(selected)
+        p.skills_surfaced, p.skills_activated = int(sk_s), int(sk_a)
     total = acc.pop(_ALL, Profile())
     return total, acc
 

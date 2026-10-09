@@ -78,9 +78,17 @@ curl -s -X POST localhost:8400/api/v1/policy-rules -H "$ADMIN" \
        "maxOperation":"write","requiresApproval":true}'
 ```
 
-> **Skill rules: available from v0.4.** Policy rules for skills (a
-> skill resource kind) are not on `master` yet. Until they land, `RuleIn`
-> accepts only the server/tool fields shown above.
+**Skill rules.** A skill rule uses `resourceKind: "skill"`. Its `serverId` is
+the skill source id and its `toolName` is a skill-name glob. An `unknown`-class
+skill needs an `execute` ceiling. `resourceKind` cannot be changed after
+create.
+
+```bash
+curl -s -X POST localhost:8400/api/v1/policy-rules -H "$ADMIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"agentId":"copilot","resourceKind":"skill","serverId":"<skill-source-id>",
+       "toolName":"pdf-*","maxOperation":"read"}'
+```
 
 ## 3. Register MCP servers (and skill sources)
 
@@ -96,8 +104,18 @@ To add one server, use `POST /api/v1/servers` or the dashboard's **Servers**
 page. After that, add the policy rules from section 2 that reference the new
 server ids.
 
-> **Skill sources: available from v0.4.** `POST /api/v1/skill-sources`
-> (a local skill directory or a git source) is not on `master` yet.
+**Skill sources.** Register a local skill directory (absolute path) or a git
+source (https only), then sync it:
+
+```bash
+curl -s -X POST localhost:8400/api/v1/skill-sources -H "$ADMIN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"team-skills","kind":"directory","location":"/srv/skills"}'
+curl -s -X POST localhost:8400/api/v1/skill-sources/<id>/sync -H "$ADMIN"
+```
+
+For git, use `"kind":"git","location":"https://…","gitRef":"main"`. Ingest
+rules, risk classes and exposure are covered in [`skills.md`](skills.md).
 
 ## 4. Point your client at the router
 

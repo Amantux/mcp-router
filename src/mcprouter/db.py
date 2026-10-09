@@ -37,10 +37,30 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_servers INTEGER",
     # Wave-2 analytics: execution -> routing-decision attribution.
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS route_request_id VARCHAR(36)",
+    # Wave 4 (skills): kind-awareness on shared tables.
+    "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_skills INTEGER DEFAULT 3",
+    "ALTER TABLE policy_rules ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
+    # Backfill + harden resource_kind (idempotent: re-running is a no-op).
+    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET DEFAULT 'tool'",
+    "UPDATE policy_rules SET resource_kind = 'tool' WHERE resource_kind IS NULL",
+    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET NOT NULL",
+    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET DEFAULT 'tool'",
+    "UPDATE execution_records SET resource_kind = 'tool' WHERE resource_kind IS NULL",
+    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET NOT NULL",
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS skill_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_execution_records_skill_id ON execution_records (skill_id)",
     "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
     " ON execution_records (route_request_id)",
     # Wave-2 integration: structured provenance of admin-impersonated attempts.
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS initiated_by VARCHAR(16)",
+    # Wave-4 (owner decision): these columns may hold "skill:<uuid>" (42 chars).
+    # Widening VARCHAR is metadata-only on Postgres and idempotent (re-running
+    # TYPE VARCHAR(48) on a VARCHAR(48) column is a no-op).
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_a_id TYPE VARCHAR(48)",
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_b_id TYPE VARCHAR(48)",
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN preferred_tool_id TYPE VARCHAR(48)",
+    "ALTER TABLE tool_stats_daily ALTER COLUMN tool_id TYPE VARCHAR(48)",
 )
 
 

@@ -86,15 +86,22 @@ def tools(
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    kind: service.Kind = "all",
 ) -> ToolFunnelPageOut:
     return service.tool_table(
-        session, window, sort=sort, descending=order == "desc", limit=limit, offset=offset
+        session,
+        window,
+        sort=sort,
+        descending=order == "desc",
+        limit=limit,
+        offset=offset,
+        kind=kind,
     )
 
 
 @router.get("/tools/{tool_id}", response_model=ToolDetailOut)
 def tool_detail(
-    tool_id: Annotated[str, Path(max_length=36)], session: SessionDep, window: WindowDep
+    tool_id: Annotated[str, Path(max_length=42)], session: SessionDep, window: WindowDep
 ) -> ToolDetailOut:
     try:
         return service.tool_detail(session, window, tool_id)

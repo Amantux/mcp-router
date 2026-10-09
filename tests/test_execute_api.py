@@ -171,10 +171,33 @@ def test_pending_approval_returns_approval_id(env: Env, sec_db: sessionmaker[Ses
     assert inv.calls == []
 
 
+def _decision(db: sessionmaker[Session], agent: str) -> str:
+    from mcprouter.models import RoutingDecisionRecord
+
+    with db() as s:
+        d = RoutingDecisionRecord(agent_id=agent, query="q", selected_tool_ids=[])
+        s.add(d)
+        s.commit()
+        return d.id
+
+
+def test_forged_route_request_id_is_stored_null(env: Env, sec_db: sessionmaker[Session]) -> None:
+    """Decision 5: bob's decision id (or an unknown id) never attributes alice's call."""
+    c, _, cat, _ = env
+    add_rule(sec_db, "alice")
+    for rrid in (_decision(sec_db, "bob"), str(uuid.uuid4())):
+        c.post(
+            _url(cat, "github.list_issues"),
+            json={"arguments": OK_ARGS, "routeRequestId": rrid},
+            headers=_agent("alice"),
+        )
+    assert [x.route_request_id for x in _records(sec_db)] == [None, None]
+
+
 def test_agent_route_request_id_is_recorded(env: Env, sec_db: sessionmaker[Session]) -> None:
     c, _, cat, _ = env
     add_rule(sec_db, "alice")
-    rrid = str(uuid.uuid4())
+    rrid = _decision(sec_db, "alice")
     r = c.post(
         _url(cat, "github.list_issues"),
         json={"arguments": OK_ARGS, "routeRequestId": rrid},
@@ -301,7 +324,7 @@ def test_executions_listing_exposes_route_request_id(sec_db: sessionmaker[Sessio
     app, _ = _build(sec_db, {"MCPR_ADMIN_TOKEN": ADMIN})
     app.include_router(executions_router)
     c = TestClient(app)
-    rrid = str(uuid.uuid4())
+    rrid = _decision(sec_db, "alice")
     c.post(
         _url(cat, "github.list_issues"),
         json={"arguments": OK_ARGS, "routeRequestId": rrid},
@@ -401,7 +424,13 @@ def test_impersonating_a_disabled_principal_is_denied(
         json={"arguments": OK_ARGS},
         headers=H_ADMIN,
     )
-    assert r.status_code == 200 and r.json()["status"] == "denied" and inv.calls == []
+    # Decision 4: refused at the boundary with a curated 403, nothing executed/audited.
+    from mcprouter.api.routes_execute import AGENT_DISABLED
+    from mcprouter.models import ExecutionRecord
+
+    assert (r.status_code, r.json()["detail"]) == (403, AGENT_DISABLED) and inv.calls == []
+    with sec_db() as s:
+        assert s.query(ExecutionRecord).count() == 0
 
 
 def test_overlong_route_request_id_is_dropped_not_refused(

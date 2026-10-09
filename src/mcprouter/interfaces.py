@@ -74,6 +74,10 @@ class ToolCandidate:
     operation: str
     retrieval_score: float  # hybrid score, higher is better
     matched_on: list[str] = field(default_factory=list)  # e.g. ["vector", "keyword:issues"]
+    # Wave 4: "tool" (MCP tool) or "skill" (tool_id = SkillRecord.id, server_id/server_name =
+    # the skill SOURCE id/name, tool_name = skill name).
+    kind: str = "tool"
+    body_tokens_est: int = 0  # skills only: context cost if activated
 
 
 @runtime_checkable
@@ -85,6 +89,7 @@ class Retriever(Protocol):
         limit: int,
         server_ids: list[str] | None = None,
         enabled_only: bool = True,
+        kinds: tuple[str, ...] = ("tool",),
     ) -> list[ToolCandidate]: ...
 
 
@@ -98,6 +103,10 @@ class RouteRequest:
     # Appended (wave 2, budgets): cap on DISTINCT servers among the routed
     # tools, applied after ranking in rank order. None = unlimited.
     max_servers: int | None = None
+    # Wave 4: cap on routed SKILLS (separate budget: bodies are expensive). None = principal default.
+    max_skills: int | None = None
+    # Wave 4 (S2d): optional NARROWING kind filter; None = tools + skills.
+    kinds: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +115,7 @@ class RoutedTool:
     server_name: str
     tool_name: str
     score: float
+    kind: str = "tool"  # Wave 4: tool | skill
 
 
 @dataclass(frozen=True)

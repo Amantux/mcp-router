@@ -12,6 +12,11 @@ All-time totals, exposed as counters:
     mcpr_analytics_tools_surfaced_total
     mcpr_analytics_tools_selected_total
     mcpr_analytics_tools_succeeded_total
+    mcpr_analytics_skills_surfaced_total
+    mcpr_analytics_skills_activated_total
+
+The tools_* counters count tools AND skills (kind-blind funnel); the
+skills_* counters are the skill-only subsets. Same single collector.
 
 No per-tool labels (cardinality). Registration is idempotent: ONE collector
 per process is registered in the default registry; `bind()` points it at the
@@ -42,14 +47,26 @@ from mcprouter.models import utcnow
 log = logging.getLogger(__name__)
 
 _NAMES = {
-    "surfaced": ("mcpr_analytics_tools_surfaced", "Tool appearances in routing decisions."),
+    "surfaced": (
+        "mcpr_analytics_tools_surfaced",
+        "Tool and skill appearances in routing decisions (skills included).",
+    ),
     "selected": (
         "mcpr_analytics_tools_selected",
-        "Surfaced (decision, tool) pairs the agent then called (attributed).",
+        "Surfaced (decision, tool|skill) pairs the agent then called/activated (attributed).",
     ),
     "succeeded": (
         "mcpr_analytics_tools_succeeded",
-        "Selected (decision, tool) pairs with at least one ok call.",
+        "Selected (decision, tool|skill) pairs with at least one ok call.",
+    ),
+    # Skill-only subsets of surfaced/selected (funnel ids "skill:<id>").
+    "skills_surfaced": (
+        "mcpr_analytics_skills_surfaced",
+        "Skill appearances in routing decisions (subset of tools_surfaced).",
+    ),
+    "skills_activated": (
+        "mcpr_analytics_skills_activated",
+        "Surfaced (decision, skill) pairs then activated (subset of tools_selected).",
     ),
 }
 
@@ -92,9 +109,17 @@ class FunnelCollector:
                 return
             with factory() as s:
                 s.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'"))
-                t = totals(merged_funnel(s, all_time(utcnow()), tool_token_map(s)))
+                f = merged_funnel(s, all_time(utcnow()), tool_token_map(s))
                 s.rollback()
-            values = {"surfaced": t.surfaced, "selected": t.selected, "succeeded": t.succeeded}
+            t = totals(f)
+            sk = [c for tid, c in f.items() if tid.startswith("skill:")]
+            values = {
+                "surfaced": t.surfaced,
+                "selected": t.selected,
+                "succeeded": t.succeeded,
+                "skills_surfaced": sum(c.surfaced for c in sk),
+                "skills_activated": sum(c.selected for c in sk),
+            }
             with self._lock:
                 if self._factory is factory:  # not re-bound meanwhile
                     self._values, self._computed_at = values, time.monotonic()
