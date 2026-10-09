@@ -1,8 +1,8 @@
 """First-run setup wizard backend (admin-gated; open only in dev mode).
 
-`app_settings` is a tiny key/value table on its OWN metadata (not models.Base),
-created once by `db.init_db` (checkfirst) so it needs no Alembic step, never
-touches the routing schema, and is never created on the request path. It holds only non-secret flags (setup completion); the
+`app_settings` is a tiny key/value table on its OWN metadata (not models.Base);
+the ORM class lives in `models.py` (P-608) and is re-exported here. It is
+never created on the request path. It holds only non-secret flags (setup completion); the
 admin token and decision keys stay in env, never in the DB.
 """
 
@@ -12,24 +12,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import String, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import SecurityConfig, require_admin
-from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, SkillSourceRecord
+from mcprouter.models import (  # AppSetting/_SettingsBase re-exported (P-608 move)
+    AgentPrincipal,
+    AppSetting,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillSourceRecord,
+    _SettingsBase,
+)
 
 SETUP_COMPLETED_KEY = "setup.completed_at"
-
-
-class _SettingsBase(DeclarativeBase):
-    pass
-
-
-class AppSetting(_SettingsBase):
-    __tablename__ = "app_settings"
-    key: Mapped[str] = mapped_column(String(120), primary_key=True)
-    value: Mapped[str] = mapped_column(String(2000))
 
 
 router = APIRouter(prefix="/api/v1/setup", tags=["setup"], dependencies=[Depends(require_admin)])
@@ -83,4 +80,4 @@ def complete(request: Request) -> dict[str, Any]:
     return {"completed": True, "completedAt": stored or now}
 
 
-__all__ = ["SETUP_COMPLETED_KEY", "AppSetting", "router"]
+__all__ = ["SETUP_COMPLETED_KEY", "AppSetting", "_SettingsBase", "router"]

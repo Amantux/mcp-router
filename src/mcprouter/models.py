@@ -26,6 +26,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    MetaData,
     String,
     Text,
     UniqueConstraint,
@@ -414,3 +415,32 @@ class RouteFeedback(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+
+
+# --------------------------------------------------------- side metadatas
+class _SettingsBase(DeclarativeBase):
+    pass
+
+
+class AppSetting(_SettingsBase):
+    """First-run wizard key/value flags (non-secret). Moved here from
+    api/routes_setup.py (P-608); still on its OWN metadata (single-Base merge
+    deferred), re-exported from routes_setup."""
+
+    __tablename__ = "app_settings"
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[str] = mapped_column(String(2000))
+
+
+# Imported at the bottom on purpose: neither module imports mcprouter.models,
+# so there is no cycle, and every MetaData the app owns is listed in ONE place
+# (migrations, init_db and the test cleanup helper all read this).
+from mcprouter.eval.store import eval_metadata  # noqa: E402
+from mcprouter.execution.models import SecurityBase  # noqa: E402
+
+ALL_METADATA: tuple[MetaData, ...] = (
+    Base.metadata,
+    SecurityBase.metadata,
+    eval_metadata,
+    AppSetting.metadata,
+)

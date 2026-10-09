@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.models import Base
+from mcprouter.models import ALL_METADATA
 from mcprouter.settings import Settings
 
 
@@ -70,17 +70,11 @@ def init_db(engine: Engine) -> None:
     Creates every table registered on `Base` plus the side metadatas owned by
     the gateway (`approval_requests`), eval (`eval_results`) and setup wizard
     (`app_settings`) tracks."""
-    from mcprouter.api.routes_setup import AppSetting
-    from mcprouter.eval.store import eval_metadata
-    from mcprouter.execution.models import SecurityBase
-
     with engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
-    Base.metadata.create_all(engine)
-    SecurityBase.metadata.create_all(engine)
-    eval_metadata.create_all(engine, checkfirst=True)
-    AppSetting.metadata.create_all(engine, checkfirst=True)
+    for metadata in ALL_METADATA:
+        metadata.create_all(engine, checkfirst=True)
     with engine.begin() as conn:
         for stmt in _ADDITIVE_COLUMNS:
             conn.execute(text(stmt))
