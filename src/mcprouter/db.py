@@ -41,6 +41,13 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_skills INTEGER DEFAULT 3",
     "ALTER TABLE policy_rules ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
+    # Backfill + harden resource_kind (idempotent: re-running is a no-op).
+    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET DEFAULT 'tool'",
+    "UPDATE policy_rules SET resource_kind = 'tool' WHERE resource_kind IS NULL",
+    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET NOT NULL",
+    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET DEFAULT 'tool'",
+    "UPDATE execution_records SET resource_kind = 'tool' WHERE resource_kind IS NULL",
+    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET NOT NULL",
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS skill_id VARCHAR(36)",
     "CREATE INDEX IF NOT EXISTS ix_execution_records_skill_id ON execution_records (skill_id)",
     "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
