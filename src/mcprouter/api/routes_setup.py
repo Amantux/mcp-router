@@ -1,8 +1,8 @@
 """First-run setup wizard backend (admin-gated; open only in dev mode).
 
 `app_settings` is a tiny key/value table on its OWN metadata (not models.Base),
-created lazily with checkfirst so it needs no Alembic step and never touches
-the routing schema. It holds only non-secret flags (setup completion); the
+created once by `db.init_db` (checkfirst) so it needs no Alembic step, never
+touches the routing schema, and is never created on the request path. It holds only non-secret flags (setup completion); the
 admin token and decision keys stay in env, never in the DB.
 """
 
@@ -36,9 +36,7 @@ router = APIRouter(prefix="/api/v1/setup", tags=["setup"], dependencies=[Depends
 
 def _session(request: Request) -> Session:
     factory: sessionmaker[Session] = request.app.state.session_factory
-    session = factory()
-    _SettingsBase.metadata.create_all(session.get_bind(), checkfirst=True)
-    return session
+    return factory()
 
 
 def _count(session: Session, model: Any) -> int:

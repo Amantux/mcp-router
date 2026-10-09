@@ -68,7 +68,9 @@ def init_db(engine: Engine) -> None:
     """The ONE schema-init path (create_all-style; Alembic deferred).
 
     Creates every table registered on `Base` plus the side metadatas owned by
-    the gateway (`approval_requests`) and eval (`eval_results`) tracks."""
+    the gateway (`approval_requests`), eval (`eval_results`) and setup wizard
+    (`app_settings`) tracks."""
+    from mcprouter.api.routes_setup import AppSetting
     from mcprouter.eval.store import eval_metadata
     from mcprouter.execution.models import SecurityBase
 
@@ -78,6 +80,7 @@ def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
     SecurityBase.metadata.create_all(engine)
     eval_metadata.create_all(engine, checkfirst=True)
+    AppSetting.metadata.create_all(engine, checkfirst=True)
     with engine.begin() as conn:
         for stmt in _ADDITIVE_COLUMNS:
             conn.execute(text(stmt))

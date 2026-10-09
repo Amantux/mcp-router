@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, delete
+from sqlalchemy import create_engine, delete, inspect
 
 from mcprouter.api.app import create_app
 from mcprouter.api.routes_setup import SETUP_COMPLETED_KEY, AppSetting
@@ -77,3 +77,34 @@ def test_dev_mode_open_or_fail_closed() -> None:
     body = r.json()
     assert body["devMode"] is True and body["hasAdminToken"] is False
     assert body["needsSetup"] == (body["counts"]["principals"] == 0 and body["completedAt"] is None)
+
+
+def test_init_db_creates_app_settings_idempotently(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcprouter.db import init_db
+
+    calls: list[object] = []
+    real = AppSetting.metadata.create_all
+
+    def spy(bind: object, *a: object, **kw: object) -> None:
+        calls.append(bind)
+        real(bind, *a, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(AppSetting.metadata, "create_all", spy)
+    eng = create_engine(S.database_url)
+    try:
+        init_db(eng)
+        init_db(eng)  # re-running is a no-op, not an error
+        assert len(calls) == 2
+        assert "app_settings" in inspect(eng).get_table_names()
+    finally:
+        eng.dispose()
+
+
+def test_routes_do_not_create_tables_per_request(client: TestClient) -> None:
+    def boom(*_a: object, **_kw: object) -> None:
+        raise AssertionError("create_all called on the request path")
+
+    with pytest.MonkeyPatch.context() as m:  # undone before the fixture's teardown
+        m.setattr(AppSetting.metadata, "create_all", boom)
+        assert client.get("/api/v1/setup/status", headers=A).status_code == 200
+        assert client.post("/api/v1/setup/complete", headers=A).status_code == 200
