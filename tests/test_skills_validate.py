@@ -78,3 +78,9 @@ def test_unknown_frontmatter_keys_accepted_and_flagged() -> None:
 def test_known_keys_only_not_flagged() -> None:
     p = parse_skill_md("---\nname: pdf\ndescription: x\n---\nb", dir_name="pdf", body_max_bytes=9)
     assert p.flags == [] and "_unknown_keys" not in p.metadata
+
+
+@pytest.mark.parametrize("fm", ["? [a]\n: 1", "name: " + "[" * 8000])
+def test_hostile_yaml_is_a_validation_error(fm: str) -> None:
+    with pytest.raises(SkillValidationError):
+        parse_skill_md(f"---\n{fm}\n---\nb", dir_name="pdf", body_max_bytes=9)

@@ -72,7 +72,11 @@ def build_manifest(
             if not _inside(root, p):
                 skipped.append({"path": _rel(root, p), "reason": "symlink escapes source root"})
                 continue
-            st = p.stat()
+            try:
+                st = p.stat()
+            except OSError:  # dangling link / vanished file: skip, never abort the sync
+                skipped.append({"path": _rel(root, p), "reason": "resource not readable"})
+                continue
             if not stat.S_ISREG(st.st_mode):
                 continue
             kind = _KINDS.get(rel_skill.split("/", 1)[0], "other") if "/" in rel_skill else "other"
@@ -81,7 +85,11 @@ def build_manifest(
                 entry["oversize"] = True
                 entry["sha256"] = None
             else:
-                entry["sha256"] = _sha256(p)
+                try:
+                    entry["sha256"] = _sha256(p)
+                except OSError:
+                    skipped.append({"path": _rel(root, p), "reason": "resource not readable"})
+                    continue
             if kind == "script" or st.st_mode & 0o111:
                 has_scripts = True
             manifest.append(entry)

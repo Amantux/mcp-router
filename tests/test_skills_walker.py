@@ -96,3 +96,11 @@ def test_parent_manifest_excludes_nested_child_skill(tmp_path: Path) -> None:
     assert [e["path"] for e in by["parent"].manifest] == ["notes.md"]
     assert not by["parent"].has_scripts
     assert [e["path"] for e in by["parent/child"].manifest] == ["scripts/run.sh"]
+
+
+def test_dangling_symlink_is_skipped_not_fatal(tmp_path: Path) -> None:
+    d = _skill(tmp_path, "dang")
+    (d / "gone").symlink_to(d / "missing")
+    res = walk_source(tmp_path, resource_max_bytes=100)
+    assert len(res.skills) == 1
+    assert {"path": "dang/gone", "reason": "resource not readable"} in res.skipped

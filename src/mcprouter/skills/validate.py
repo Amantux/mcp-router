@@ -99,7 +99,10 @@ def _truncate_utf8(body: str, cap: int) -> tuple[str, bool]:
 
 def parse_skill_md(text: str, *, dir_name: str, body_max_bytes: int) -> ParsedSkill:
     fm, body = split_frontmatter(text)
-    data = _load_yaml(fm)
+    try:
+        data = _load_yaml(fm)
+    except (TypeError, RecursionError) as exc:  # unhashable keys, deep nesting
+        raise SkillValidationError("frontmatter is not valid YAML") from exc
     # Owner decision (wave 4): unknown top-level keys are ACCEPTED, not rejected --
     # real-world skills carry vendor keys. Their names are recorded (sorted,
     # comma-joined) in metadata["_unknown_keys"] and flagged
