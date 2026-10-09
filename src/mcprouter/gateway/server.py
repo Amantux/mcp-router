@@ -108,6 +108,10 @@ PRINCIPAL_SCOPE_KEY = "mcprouter.principal"
 MAX_QUERY_LEN = 2000
 MAX_TRACKED_SESSIONS_PER_AGENT = 32
 NOTIFY_TIMEOUT_S = 2.0
+# The SDK's own /mcp body cap, pinned to the app-wide cap (api.body_limit.
+# MAX_BODY_BYTES; equality is asserted by a test, not imported, to keep the
+# gateway from importing further up into mcprouter.api).
+MAX_MCP_BODY_BYTES = 1024 * 1024
 ROUTE_REQUEST_ID_KWARG = "route_request_id"
 
 
@@ -525,6 +529,7 @@ class GatewayServer:
             transport_security=transport_security,
             host=host,
             max_sessions=settings.mcp_max_sessions,
+            max_request_body_size=MAX_MCP_BODY_BYTES,
         )
 
     # ------------------------------------------------------------ wiring

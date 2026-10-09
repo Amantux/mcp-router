@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import json
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import anyio
@@ -30,6 +32,7 @@ from tests.support.gateway import (
 )
 from tests.support.gateway import live as live  # noqa: F401 — fixture
 from tests.support.gateway import world as world  # noqa: F401 — fixture
+from tests.support.serve import run_app
 from tests.support.wait import wait_for
 
 from .conftest import requires_db
@@ -256,3 +259,98 @@ async def test_resource_templates_list_is_empty(live: dict[str, Any], era: str) 
         res = await session.list_resource_templates()
     assert res.resource_templates == []
     assert (era, "resources/templates/list", None) in live["wire"].calls
+
+
+# ------------------------------------------------ P-309 transport security + body cap
+MIB = 1024 * 1024
+
+
+@pytest.fixture()
+def lan(world: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """The world's gateway re-mounted with MCPR_ALLOWED_HOSTS=router.lan."""
+    from fastapi import FastAPI
+
+    from mcprouter.gateway.server import build_gateway, gateway_transport_security
+
+    app = FastAPI()
+    app.state.settings = world["app"].state.settings
+    app.state.session_factory = world["db"]
+    app.state.security = world["app"].state.security
+    gw = build_gateway(
+        app,
+        manager=world["gw"]._manager,
+        route_fn=world["route"],
+        transport_security=gateway_transport_security(("router.lan",)),
+    )
+    port, stop = run_app(app)
+    try:
+        yield {**world, "gw": gw, "url": f"http://127.0.0.1:{port}/mcp", "port": port}
+    finally:
+        stop()
+
+
+@pytest.mark.parametrize(
+    ("host", "origin", "status"),
+    [
+        ("evil.example", None, 421),
+        (None, "https://evil.example", 403),
+        ("router.lan", None, 200),
+        ("router.lan:8400", "http://router.lan:8400", 200),
+        ("127.0.0.1:{port}", "http://localhost:{port}", 200),
+    ],
+)
+async def test_mcp_host_and_origin_allowlist(
+    lan: dict[str, Any], host: str | None, origin: str | None, status: int
+) -> None:
+    headers = dict(ACCEPT)
+    if host:
+        headers["host"] = host.format(port=lan["port"])
+    if origin:
+        headers["origin"] = origin.format(port=lan["port"])
+    async with _client("alice") as http:
+        r = await http.post(lan["url"], json=INIT, headers=headers)
+    assert r.status_code == status
+    owners = lan["gw"].server.session_manager._session_owners
+    assert len(owners) == (1 if status == 200 else 0)
+
+
+def test_sdk_body_cap_equals_the_app_cap() -> None:
+    from mcprouter.api.body_limit import MAX_BODY_BYTES
+    from mcprouter.gateway.server import MAX_MCP_BODY_BYTES
+
+    assert MAX_MCP_BODY_BYTES == MAX_BODY_BYTES
+
+
+def _padded_init(size: int) -> bytes:
+    """An initialize request of exactly ``size`` bytes (padding in clientInfo)."""
+    base = json.dumps(
+        {**INIT, "params": {**INIT["params"], "clientInfo": {"name": "", "version": "0"}}}
+    )
+    pad = size - len(base.encode())
+    return base.replace('"name": ""', '"name": "' + "x" * pad + '"').encode()
+
+
+@pytest.mark.parametrize("chunked", [False, True], ids=["declared", "chunked"])
+async def test_oversized_mcp_body_is_413_and_mints_no_session(
+    live: dict[str, Any], chunked: bool
+) -> None:
+    body = _padded_init(2 * MIB)
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for i in range(0, len(body), 128 * 1024):
+            yield body[i : i + 128 * 1024]
+
+    headers = {**ACCEPT, "content-type": "application/json"}
+    async with _client("alice") as http:
+        r = await http.post(live["url"], content=chunks() if chunked else body, headers=headers)
+    assert r.status_code == 413
+    assert not live["gw"].server.session_manager._session_owners
+
+
+async def test_body_just_under_the_cap_is_accepted(live: dict[str, Any]) -> None:
+    body = _padded_init(MIB - 1)
+    assert len(body) == MIB - 1
+    headers = {**ACCEPT, "content-type": "application/json"}
+    async with _client("alice") as http:
+        r = await http.post(live["url"], content=body, headers=headers)
+    assert r.status_code == 200
