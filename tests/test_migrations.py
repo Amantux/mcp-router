@@ -240,8 +240,12 @@ def test_unknown_revision_is_a_curated_fatal(
     # The CLI reports it as FATAL with exit 1 (no traceback, no DSN).
     monkeypatch.setenv("MCPR_DATABASE_URL", scratch_url)
     assert migrate.main(["upgrade"]) == 1
+    # Last line: an in-process root handler (E1's configure_logging, installed by
+    # any earlier create_app) may have echoed alembic's INFO lines first.
     err = capsys.readouterr().err
-    assert err.startswith("FATAL: database schema is newer than this build")
+    assert (
+        err.strip().splitlines()[-1].startswith("FATAL: database schema is newer than this build")
+    )
     assert password not in err
 
 
@@ -323,7 +327,8 @@ def test_cli_upgrade_current_heads(
     assert migrate.main(["downgrade", "-1"]) == 0
     assert capsys.readouterr().out.strip() == "0001"
     assert migrate.main(["downgrade", "base"]) == 1
-    assert capsys.readouterr().err.startswith("FATAL: refusing to downgrade below the baseline")
+    last = capsys.readouterr().err.strip().splitlines()[-1]
+    assert last.startswith("FATAL: refusing to downgrade below the baseline")
 
 
 def test_every_metadata_table_is_in_the_baseline() -> None:
