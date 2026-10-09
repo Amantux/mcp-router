@@ -254,15 +254,11 @@ class SkillExposure:
         if not routed:
             raise SkillAccessError("not_found", "No skills are routed to this agent.")
         if not self._limiter.try_acquire(f"skill:{agent_id}"):  # 2. rate limit
-            for sk, _ in routed:
-                self._manager.record_skill_activation(
-                    agent_id,
-                    sk.id,
-                    "rate_limited",
-                    "bundle: rate limited",
-                    route_request_id,
-                    initiated_by,
-                )
+            # ONE row per refused bundle (not per routed skill): a hammering
+            # caller must not amplify writes by the size of its routing.
+            self._manager.record_skill_activation(
+                agent_id, routed[0][0].id, "rate_limited", "bundle", route_request_id, initiated_by
+            )
             raise SkillAccessError("rate_limited", "Too many skill activations; retry later.")
         allowed = []
         for sk, src in routed:  # 3. policy re-check
@@ -283,6 +279,14 @@ class SkillExposure:
         try:
             data, skipped = _build_bundle(allowed)
         except BundleError as exc:
+            self._manager.record_skill_activation(
+                agent_id,
+                allowed[0][0].id,
+                "error",
+                f"bundle: {exc.code}",
+                route_request_id,
+                initiated_by,
+            )
             raise SkillAccessError(exc.code, exc.message) from None
         except Exception as exc:  # noqa: BLE001 -- curated: class name only
             raise self._internal(

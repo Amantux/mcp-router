@@ -235,3 +235,53 @@ def test_bundle_rate_limited(db: sessionmaker[Session], tmp_path: Path) -> None:
     with pytest.raises(SkillAccessError) as ei:
         exp.bundle("agent-a", [a])
     assert ei.value.code == "rate_limited"
+
+
+def _clone(
+    factory: sessionmaker[Session], skill_id: str, name: str, new_source: bool = False
+) -> str:
+    """Copy a skill under `name`; new_source=True puts it in a second source
+    (names are unique per source, so cross-source duplicates are the real case)."""
+    with factory() as s:
+        sk = s.get(SkillRecord, skill_id)
+        assert sk is not None
+        source_id = sk.source_id
+        if new_source:
+            src = SkillSourceRecord(name="other", kind="directory", location="/nonexistent")
+            s.add(src)
+            s.flush()
+            source_id = src.id
+        c = SkillRecord(
+            source_id=source_id,
+            name=name,
+            description="d",
+            body="b",
+            relative_path=name,
+            resource_manifest=[],
+            content_hash="0" * 64,
+            manifest_hash="0" * 64,
+        )
+        s.add(c)
+        s.commit()
+        return c.id
+
+
+def test_bundle_duplicate_names_get_distinct_code_and_audit(
+    db: sessionmaker[Session], tmp_path: Path
+) -> None:
+    a, _ = _seed(db, tmp_path)
+    dup = _clone(db, a, "pdf-tools", new_source=True)
+    with pytest.raises(SkillAccessError) as ei:
+        _exp(db, FakePolicy()).bundle("agent-a", [a, dup])
+    assert ei.value.code == "duplicate_name"
+    rows = _rows(db)  # exactly ONE error row naming the bundle failure code
+    assert [(r.outcome, r.detail) for r in rows] == [("error", "bundle: duplicate_name")]
+
+
+def test_bundle_rate_limited_writes_one_row(db: sessionmaker[Session], tmp_path: Path) -> None:
+    a, b = _seed(db, tmp_path)
+    c = _clone(db, a, "third-skill")
+    with pytest.raises(SkillAccessError) as ei:
+        _exp(db, FakePolicy(), limit=0).bundle("agent-a", [a, b, c])
+    assert ei.value.code == "rate_limited"
+    assert [(r.outcome, r.detail) for r in _rows(db)] == [("rate_limited", "bundle")]

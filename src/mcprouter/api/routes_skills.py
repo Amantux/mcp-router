@@ -50,6 +50,12 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "denied": (403, "Skill activation denied by policy."),
     "rate_limited": (429, "Too many skill activations; retry later."),
     "too_large": (413, "Skill resource exceeds the size limit."),
+    "too_many": (413, "Too many skills routed to bundle; narrow the routing."),
+    "stale": (409, "Skill resource is out of date; re-index the skill."),
+    "duplicate_name": (
+        409,
+        "Two routed skills share a name and cannot be bundled together; activate them singly.",
+    ),
 }
 _INTERNAL = (500, "Internal error while serving the skill.")
 _NOT_FOUND_CODES = frozenset(

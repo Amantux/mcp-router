@@ -28,7 +28,7 @@ from mcprouter.settings import Settings
 from .conftest import TEST_DB_URL, requires_db
 from .test_execution_support import KEYS, FakeInvoker, seed
 from .test_execution_support import sec_db_fixture as sec_db_fixture  # registers fixture
-from .test_skills_exposure_activation import FakePolicy, _seed
+from .test_skills_exposure_activation import FakePolicy, _clone, _seed
 
 pytestmark = requires_db
 
@@ -233,3 +233,34 @@ def test_non_skill_route_entries_grant_nothing(env: Env) -> None:
         s.commit()
     r = env.client.post(f"/api/v1/skills/{env.b}/activate", headers=H_ALICE)
     assert r.status_code == 404 and env.rows() == []
+
+
+def test_stale_resource_is_409(env: Env, tmp_path: Path) -> None:
+    (tmp_path / "src" / "pdf-tools" / "guide.md").write_text("# Gxide")  # same size, new hash
+    env.route("alice", env.a)
+    r = env.client.get(f"/api/v1/skills/{env.a}/resources/guide.md", headers=H_ALICE)
+    assert (r.status_code, r.json()["detail"]) == (
+        409,
+        "Skill resource is out of date; re-index the skill.",
+    )
+
+
+def test_bundle_too_many_is_413(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    import functools
+
+    from mcprouter.gateway import skills as gw
+    from mcprouter.skills.bundle import _build_bundle
+
+    monkeypatch.setattr(gw, "_build_bundle", functools.partial(_build_bundle, max_skills=1))
+    env.route("alice", env.a, env.b)
+    r = env.client.get("/api/v1/skills/bundle", headers=H_ALICE)
+    assert r.status_code == 413, r.text
+    assert [(x.outcome, x.detail) for x in env.rows()] == [("error", "bundle: too_many")]
+
+
+def test_bundle_duplicate_names_is_409(env: Env) -> None:
+    dup = _clone(env.db, env.a, "pdf-tools", new_source=True)
+    env.route("alice", env.a, dup)
+    r = env.client.get("/api/v1/skills/bundle", headers=H_ALICE)
+    assert r.status_code == 409, r.text
+    assert "share a name" in r.json()["detail"]

@@ -84,8 +84,10 @@ def _build_bundle(
                 top = normalize_relpath(skill.name)
             except SkillServeError:
                 raise BundleError("invalid_name", "Skill name is not a safe path.") from None
-            if "/" in top or top in names:
-                raise BundleError("invalid_name", "Skill names must be unique single segments.")
+            if "/" in top:
+                raise BundleError("invalid_name", "Skill names must be single path segments.")
+            if top in names:
+                raise BundleError("duplicate_name", "Two routed skills share a name.")
             names.append(top)
             add(zf, f"{top}/SKILL.md", render_skill_md(skill).encode("utf-8"))
             for path in manifest_entries(skill):  # malformed entries skipped
