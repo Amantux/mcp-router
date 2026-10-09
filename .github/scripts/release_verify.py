@@ -3,14 +3,16 @@
     python .github/scripts/release_verify.py <tag>
 
 Checks: the tag is `v` + the pyproject version, verbatim; the top `## ` heading
-of CHANGELOG.md is that version. Prints `is_release=true|false` (a plain
-`vX.Y.Z` tag, the only kind that may move `:latest`) for $GITHUB_OUTPUT.
+of CHANGELOG.md is that version. Prints `is_release=true|false` for
+$GITHUB_OUTPUT: true only for a plain `vX.Y.Z` tag that is also the highest
+plain tag in the repo (`git tag -l`), so `:latest` never moves backwards.
 The CI-green and ancestor-of-master checks need git/gh and live in the workflow.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -33,6 +35,26 @@ def top_changelog_heading(root: Path = ROOT) -> str | None:
     return None
 
 
+def _semver(tag: str) -> tuple[int, int, int]:
+    major, minor, patch = tag[1:].split(".")
+    return int(major), int(minor), int(patch)
+
+
+def is_latest(tag: str, all_tags: list[str]) -> bool:
+    """A plain vX.Y.Z that is >= every other plain tag."""
+    if not FINAL_RE.match(tag):
+        return False
+    plain = [t for t in all_tags if FINAL_RE.match(t)]
+    return all(_semver(tag) >= _semver(t) for t in plain)
+
+
+def repo_tags(root: Path = ROOT) -> list[str]:
+    out = subprocess.run(
+        ["git", "tag", "-l", "v*"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout
+    return out.split()
+
+
 def check(tag: str, root: Path = ROOT) -> tuple[list[str], bool]:
     """Return (problems, is_release). Empty problems = the tag may ship."""
     problems: list[str] = []
@@ -44,19 +66,20 @@ def check(tag: str, root: Path = ROOT) -> tuple[list[str], bool]:
     heading = top_changelog_heading(root)
     if heading != version:
         problems.append(f"top CHANGELOG.md heading {heading!r} != pyproject version {version!r}")
-    return problems, bool(FINAL_RE.match(tag))
+    return problems, bool(FINAL_RE.match(tag))  # plain tag; newest-ness via is_latest
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: release_verify.py <tag>", file=sys.stderr)
         return 2
-    problems, is_release = check(argv[1])
+    problems, plain = check(argv[1])
     for p in problems:
         print(f"::error::{p}")
     if problems:
         return 1
-    print(f"is_release={'true' if is_release else 'false'}")
+    latest = plain and is_latest(argv[1], repo_tags())
+    print(f"is_release={'true' if latest else 'false'}")
     return 0
 
 

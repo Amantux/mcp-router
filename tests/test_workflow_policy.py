@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib.util
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -57,12 +58,41 @@ def test_release_images_need_verify() -> None:
 def test_release_verify_job_checks_everything() -> None:
     job = load("release.yml")["jobs"]["verify"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
-    runs = "\n".join(s.get("run", "") for s in job["steps"])
-    assert "release_verify.py" in runs
-    assert "merge-base --is-ancestor" in runs and "origin/master" in runs
-    assert "workflows/ci.yml/runs" in runs and "status=success" in runs
+    assert "if" not in job and not job.get("continue-on-error")
     checkout = job["steps"][0]
     assert checkout["with"]["fetch-depth"] == 0
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    runs = [s.get("run", "") for s in job["steps"]]
+    for step in job["steps"]:
+        assert not step.get("continue-on-error"), step
+        assert "if" not in step, step
+    for body in runs:
+        assert "|| true" not in body and "true ||" not in body, body
+    # Ancestor check: must exit non-zero when the SHA is not on master.
+    anc = next(b for b in runs if "--is-ancestor" in b)
+    assert re.search(r'--is-ancestor "\$GITHUB_SHA" origin/master \\\n\s*\|\| \{.*exit 1; \}', anc)
+    # CI check: query pinned to this SHA, push event, master; success required.
+    ci = next(b for b in runs if "workflows/ci.yml/runs" in b)
+    query = re.search(r"workflows/ci\.yml/runs\?([^\"]+)\"", ci)
+    assert query, ci
+    params = dict(urllib.parse.parse_qsl(query.group(1)))
+    assert params == {"head_sha": "${GITHUB_SHA}", "event": "push", "branch": "master"}
+    assert '.c == "success"' in ci and 'if [ "$green" -ge 1 ]; then exit 0; fi' in ci
+    assert ci.rstrip().endswith("exit 1")
+    local = next(b for b in runs if "release_verify.py" in b)
+    assert '|| { echo "$out"; exit 1; }' in local
+
+
+def test_release_is_one_lane_and_builds_the_verified_sha() -> None:
+    wf = load("release.yml")
+    assert wf["concurrency"] == {"group": "release", "cancel-in-progress": False}
+    for name in ("image", "image-inference"):
+        checkout = wf["jobs"][name]["steps"][0]
+        assert checkout["with"]["ref"] == "${{ github.sha }}"
+    inf = next(
+        s for s in wf["jobs"]["image-inference"]["steps"] if "build-push" in s.get("uses", "")
+    )
+    assert "@${{ needs.image.outputs.digest }}" in inf["with"]["build-args"]
 
 
 def test_release_images_have_provenance_and_sbom_and_gate_latest() -> None:
@@ -111,3 +141,14 @@ def test_release_verify_prerelease_never_latest(tmp_path: Path) -> None:
     problems, rel = rv.check("v1.2.3rc1", tmp_path)
     assert problems == [] and rel is False
     assert re.match(rv.TAG_RE, "v1.2.3rc1")
+
+
+def test_latest_never_moves_backwards() -> None:
+    rv = _release_verify()
+    tags = ["v0.4.0", "v0.5.0", "v0.6.0-rc.1", "v0.6.0rc2"]
+    assert rv.is_latest("v0.5.0", tags)
+    assert rv.is_latest("v0.6.0", [*tags, "v0.6.0"])
+    assert not rv.is_latest("v0.5.0", [*tags, "v0.6.0"])
+    assert not rv.is_latest("v0.4.0", tags)
+    assert not rv.is_latest("v0.6.0rc2", tags)
+    assert rv.is_latest("v0.10.0", ["v0.9.0", "v0.10.0"])  # numeric, not lexical
