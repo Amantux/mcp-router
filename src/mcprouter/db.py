@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from mcprouter.models import ALL_METADATA
 from mcprouter.settings import Settings
 
 
@@ -20,64 +19,21 @@ def make_engine(settings: Settings) -> Engine:
     return create_engine(settings.database_url, pool_pre_ping=True)
 
 
-# Columns adopted into models.py at integration (v0.1). `create_all` never
-# alters an existing table, so a database created before the adoption gets
-# them here — additive and idempotent. This is a bridge, NOT a migration
-# system: the Alembic baseline is deferred (docs/history/INTEGRATION_NOTES-integration.md).
-# Literal statements (no identifier composition at all).
-_ADDITIVE_COLUMNS: tuple[str, ...] = (
-    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS title TEXT",
-    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS annotations JSON",
-    "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS classification_source VARCHAR(80)",
-    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolved_by VARCHAR(120)",
-    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolved_at"
-    " TIMESTAMP WITH TIME ZONE",
-    "ALTER TABLE duplicate_suggestions ADD COLUMN IF NOT EXISTS resolution_note TEXT",
-    # wave 2 (budgets): per-principal distinct-server cap, NULL = unlimited.
-    "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_servers INTEGER",
-    # Wave-2 analytics: execution -> routing-decision attribution.
-    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS route_request_id VARCHAR(36)",
-    # Wave 4 (skills): kind-awareness on shared tables.
-    "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_skills INTEGER DEFAULT 3",
-    "ALTER TABLE policy_rules ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
-    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
-    # Backfill + harden resource_kind (idempotent: re-running is a no-op).
-    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET DEFAULT 'tool'",
-    "UPDATE policy_rules SET resource_kind = 'tool' WHERE resource_kind IS NULL",
-    "ALTER TABLE policy_rules ALTER COLUMN resource_kind SET NOT NULL",
-    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET DEFAULT 'tool'",
-    "UPDATE execution_records SET resource_kind = 'tool' WHERE resource_kind IS NULL",
-    "ALTER TABLE execution_records ALTER COLUMN resource_kind SET NOT NULL",
-    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS skill_id VARCHAR(36)",
-    "CREATE INDEX IF NOT EXISTS ix_execution_records_skill_id ON execution_records (skill_id)",
-    "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
-    " ON execution_records (route_request_id)",
-    # Wave-2 integration: structured provenance of admin-impersonated attempts.
-    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS initiated_by VARCHAR(16)",
-    # Wave-4 (owner decision): these columns may hold "skill:<uuid>" (42 chars).
-    # Widening VARCHAR is metadata-only on Postgres and idempotent (re-running
-    # TYPE VARCHAR(48) on a VARCHAR(48) column is a no-op).
-    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_a_id TYPE VARCHAR(48)",
-    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_b_id TYPE VARCHAR(48)",
-    "ALTER TABLE duplicate_suggestions ALTER COLUMN preferred_tool_id TYPE VARCHAR(48)",
-    "ALTER TABLE tool_stats_daily ALTER COLUMN tool_id TYPE VARCHAR(48)",
-)
+# The pre-0.6 additive bridge moved VERBATIM to migrations/legacy_bridge.py
+# (P-601); the old name stays importable.
+from mcprouter.migrations.legacy_bridge import _ADDITIVE_COLUMNS  # noqa: E402, F401
 
 
 def init_db(engine: Engine) -> None:
-    """The ONE schema-init path (create_all-style; Alembic deferred).
+    """The ONE schema-init path: Alembic `upgrade head` under an advisory lock,
+    with the one-time legacy bridge for pre-0.6 databases (mcprouter.migrate).
 
-    Creates every table registered on `Base` plus the side metadatas owned by
-    the gateway (`approval_requests`), eval (`eval_results`) and setup wizard
-    (`app_settings`) tracks."""
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
-    for metadata in ALL_METADATA:
-        metadata.create_all(engine, checkfirst=True)
-    with engine.begin() as conn:
-        for stmt in _ADDITIVE_COLUMNS:
-            conn.execute(text(stmt))
+    Zero DDL when the database is already at head. Raises
+    `migrate.SchemaVersionError` (curated) when the database is NEWER than this
+    build."""
+    from mcprouter.migrate import upgrade_to_head
+
+    upgrade_to_head(engine)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

@@ -80,21 +80,17 @@ def test_dev_mode_open_or_fail_closed() -> None:
 
 
 def test_init_db_creates_app_settings_idempotently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """app_settings comes from the migrations (0001), not a per-boot create_all."""
     from mcprouter.db import init_db
 
-    calls: list[object] = []
-    real = AppSetting.metadata.create_all
+    def boom(*_a: object, **_kw: object) -> None:
+        raise AssertionError("init_db must not create_all; migrations own the schema")
 
-    def spy(bind: object, *a: object, **kw: object) -> None:
-        calls.append(bind)
-        real(bind, *a, **kw)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(AppSetting.metadata, "create_all", spy)
+    monkeypatch.setattr(AppSetting.metadata, "create_all", boom)
     eng = create_engine(S.database_url)
     try:
         init_db(eng)
         init_db(eng)  # re-running is a no-op, not an error
-        assert len(calls) == 2
         assert "app_settings" in inspect(eng).get_table_names()
     finally:
         eng.dispose()
