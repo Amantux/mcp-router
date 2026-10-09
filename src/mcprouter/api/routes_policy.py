@@ -11,6 +11,7 @@ Nothing else ever returns a key or its hash.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -31,8 +32,11 @@ from mcprouter.api.deps_auth import (
     security_of,
 )
 from mcprouter.execution.manager import ApprovalError, ApprovalView
+from mcprouter.execution.redaction import scrub_log
 from mcprouter.generation import bump_policy
 from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule, SkillSourceRecord
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["policy"])
 
@@ -271,8 +275,19 @@ def _end_stale_streams(request: Request, agent_id: str) -> None:
     opened with a credential that is no longer current (E3 P-310 hook). Sync
     routes run on an anyio worker thread, so the threadsafe entry applies."""
     gateway = getattr(request.app.state, "gateway", None)
-    if gateway is not None:  # apps built without the MCP gateway (tests)
+    if gateway is None:  # apps built without the MCP gateway (tests)
+        return
+    # Best effort: the credential change is already committed and per-request
+    # auth refuses the revoked key regardless. A failure here must not turn a
+    # successful rotate into a 500 that discards the one-time new key.
+    try:
         gateway.end_stale_streams_threadsafe(agent_id)
+    except Exception as exc:  # noqa: BLE001 — boundary; class name only
+        log.warning(
+            "policy.revoke_streams_failed agent=%s err=%s",
+            scrub_log(agent_id),
+            type(exc).__name__,
+        )
 
 
 @router.patch("/principals/{principal_id}", response_model=PrincipalOut, dependencies=[Admin])

@@ -340,3 +340,17 @@ def test_every_metadata_table_is_in_the_baseline() -> None:
     tables = {t for md in ALL_METADATA for t in md.tables}
     assert {"app_settings", "approval_requests", "eval_results", "route_feedback"} <= tables
     assert len(ALL_METADATA) == 4
+
+
+def test_cli_driver_error_prints_fatal_without_dsn(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An unreachable server is a driver error, not one of the curated
+    migration errors: the CLI must still end on a FATAL line (the entrypoint
+    relies on it) and never echo the DSN or its password."""
+    monkeypatch.setenv("MCPR_DATABASE_URL", "postgresql+psycopg://mcprouter:s3cretpw@127.0.0.1:1/x")
+    assert migrate.main(["upgrade"]) == 1
+    err = capsys.readouterr().err
+    last = err.strip().splitlines()[-1]
+    assert last.startswith("FATAL: database error during migration (")
+    assert "s3cretpw" not in err and "127.0.0.1:1" not in err

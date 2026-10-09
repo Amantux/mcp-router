@@ -37,6 +37,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import DBAPIError
 
 SCRIPT_LOCATION = str(Path(__file__).resolve().parent / "migrations")
 BASELINE_REVISION = "0001"
@@ -291,6 +292,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         CommandError,
     ) as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
+        return 1
+    except DBAPIError as exc:
+        # Driver/server failures (lock_timeout, a migration script error, a
+        # dropped connection): the entrypoint promises a FATAL line and the
+        # exception text can carry the DSN, so only the class name is shown.
+        print(
+            f"FATAL: database error during migration ({type(exc).__name__}); see docs/upgrade.md",
+            file=sys.stderr,
+        )
         return 1
     finally:
         engine.dispose()
