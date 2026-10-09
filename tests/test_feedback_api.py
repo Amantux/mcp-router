@@ -100,3 +100,22 @@ def test_rate_limited(env: tuple[TestClient, sessionmaker[Session]]) -> None:
         for _ in range(fb.LIMITER.limit + 1)
     ]
     assert codes[-1] == 429 and codes[0] == 200
+
+
+def test_404_probing_is_rate_limited(env: tuple[TestClient, sessionmaker[Session]]) -> None:
+    c, _ = env
+    body = {"items": [{"id": "t.a", "helpful": True}]}
+    codes = [
+        c.post(_url(f"nope-{i}"), json=body, headers=BOB).status_code
+        for i in range(fb.LIMITER.limit + 1)
+    ]
+    assert codes[0] == 404 and codes[-1] == 429
+
+
+def test_note_secret_redacted(env: tuple[TestClient, sessionmaker[Session]]) -> None:
+    c, f = env
+    d = add_decision(f, "alice", NOW, ["t.a"])
+    note = "token Bearer abcdefghijklmnopqrstuvwxyz0123456789"
+    c.post(_url(d), json={"items": [{"id": "t.a", "helpful": True, "note": note}]}, headers=ALICE)
+    row = _rows(f, d)[0]
+    assert row.note is not None and "abcdefghijklmnopqrstuvwxyz0123456789" not in row.note

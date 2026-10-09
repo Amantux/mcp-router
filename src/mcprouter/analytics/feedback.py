@@ -1,7 +1,7 @@
 """Route feedback: was a surfaced tool/skill helpful? (docs/analytics.md)
 
-THE one implementation; REST (api/routes_feedback.py) and the MCP meta-tool
-`router.feedback` (gateway/server.py) both call `record_feedback`.
+THE one implementation: REST (api/routes_feedback.py) calls `record_feedback`.
+The MCP meta-tool `router.feedback` is NOT wired yet; it must call this too.
 
 Trust rules:
 * source=agent: the decision must be the caller's OWN live (non-simulated)
@@ -116,8 +116,11 @@ def record_feedback(
     source=agent (the ownership check) and ignored for human."""
     if not items or len(items) > MAX_ITEMS:
         raise FeedbackInvalid(f"items must contain 1..{MAX_ITEMS} entries")
+    limiter.check(principal)  # before any lookup: 404 probing is rate-limited too
+    if len(request_id) > 36:
+        raise FeedbackNotFound("decision not found")
     q = select(RoutingDecisionRecord).where(
-        RoutingDecisionRecord.id == request_id[:36],
+        RoutingDecisionRecord.id == request_id,
         ~RoutingDecisionRecord.model_version.startswith("simulated/"),
     )
     if source == "agent":
@@ -127,7 +130,6 @@ def record_feedback(
     d = session.scalar(q)
     if d is None:
         raise FeedbackNotFound("decision not found")
-    limiter.check(principal)
     surfaced = [t for t in (d.selected_tool_ids or []) if isinstance(t, str)]
     from mcprouter.analytics.service import _meta  # local: service imports analytics
 
