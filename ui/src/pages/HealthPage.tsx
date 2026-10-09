@@ -131,7 +131,7 @@ export function HealthPage() {
   return (
     <>
       <PageHeader
-        title="Models & system health"
+        title="Models & health"
         meta={<Caption1 className={c.muted}>Refreshes every 12 s while this tab is visible</Caption1>}
         actions={
           <Link href={METRICS_URL} target="_blank" rel="noreferrer">

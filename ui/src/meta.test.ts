@@ -46,6 +46,17 @@ describe("MT-4 pages and routes", () => {
     for (const c of children) if (!NON_NAV.has(c.path)) expect(navPaths.has(c.path!), `route /${c.path} is not in NAV`).toBe(true);
   });
 
+  it("every NAV label is its page's title (HS-U-003/004/005: one name per page)", () => {
+    const routes = SOURCES["./routes.tsx"];
+    for (const n of NAV) {
+      // routes.tsx maps the path to <XPage />; that page's PageHeader title must equal the label.
+      const page = new RegExp(`"${n.to}":\\s*(?:page\\()?<(\\w+)`).exec(routes)?.[1];
+      expect(page, `no page for ${n.to} in routes.tsx`).toBeTruthy();
+      const src = PAGE_FILES.map((f) => SOURCES[f]).find((t) => new RegExp(`export function ${page}\\b`).test(t)) ?? "";
+      expect(src, `${page} title`).toContain(`title="${n.label}"`);
+    }
+  });
+
   it("every page component is routed and has its own test file", () => {
     expect(PAGE_FILES.length).toBeGreaterThan(10);
     const routes = SOURCES["./routes.tsx"];

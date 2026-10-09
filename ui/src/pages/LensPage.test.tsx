@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { camelizeKeys, normaliseSimulation } from "../api/client";
-import { LensPage, LensResult } from "./LensPage";
+import { ClampView, LensPage, LensResult } from "./LensPage";
 
 const SIM = {
   request_id: "sim-1",
@@ -119,6 +119,13 @@ describe("normaliseSimulation (backend shape)", () => {
     expect(screen.getByTestId("clamp-maxServers-by").textContent).toBe("Limited by the agent's own cap.");
     expect(screen.getByText("3 candidates considered")).toBeTruthy();
     expect(within(screen.getByRole("table", { name: "Filtered tools" })).getByText("search_messages")).toBeTruthy();
+  });
+});
+
+describe("ClampView", () => {
+  it("names the exact global setting that clamped a budget, not a wildcard (HS-U-046)", () => {
+    renderWithProviders(<ClampView clamp={{ budget: "maxSkills", requested: 5, principal: 4, globalCap: 3, applied: 3, clampedBy: "global" }} />);
+    expect(screen.getByTestId("clamp-maxSkills-by").textContent).toBe("Limited by the global cap (MCPR_MAX_EXPOSED_SKILLS).");
   });
 });
 

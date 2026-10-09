@@ -249,7 +249,7 @@ export function AnalyticsPage() {
         )}
         <StatCard testId="card-selection" label="Selection rate" value={fmtPct(o.funnel.selectionRate)} sub={`${fmtInt(o.funnel.selected)} of ${fmtInt(o.funnel.surfaced)} surfaced`} />
         <StatCard testId="card-nomatch" label="No-match rate" value={fmtPct(o.routing.noMatchRate)} sub={`${fmtInt(o.routing.noMatch)} of ${fmtInt(o.routing.decisions)} decisions`} />
-        <StatCard testId="card-fallback" label="Fallback rate" value={fmtPct(o.routing.fallbackRate)} sub={`${fmtInt(o.routing.fallback)} heuristic rankings`} />
+        <StatCard testId="card-fallback" label="Fallback rate" value={fmtPct(o.routing.fallbackRate)} sub={`${fmtInt(o.routing.fallback)} deterministic fallback rankings`} />
         <StatCard testId="card-denial" label="Denial rate" value={fmtPct(o.executions.denialRate)} sub={`${fmtInt(o.executions.denied)} of ${fmtInt(o.executions.attempts)} calls`} />
         <StatCard testId="card-latency" label="Routing latency" value={`${fmtMs(o.routing.latencyP50Ms)}`} sub={`p50 · p95 ${fmtMs(o.routing.latencyP95Ms)}`} />
         <EstimateCard testId="card-time-saved" label="Est. time saved" est={timeSavedEstimate(e)} env={TIME_RATE_ENV} />

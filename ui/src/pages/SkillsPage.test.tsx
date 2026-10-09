@@ -28,6 +28,16 @@ describe("SkillsPage", () => {
     expect(screen.getByText("body truncated")).toBeTruthy();
     expect(screen.getByText("oversize")).toBeTruthy();
     expect(screen.getByText("1,234")).toBeTruthy();
+    expect(screen.getByText("secret-like").getAttribute("title")).toMatch(/looks like a credential/);
+  });
+
+  it("the drawer explains each ingest flag in text, with what to do (HS-U-036)", async () => {
+    routes();
+    renderWithProviders(<SkillsPage />, { route: "/skills" });
+    fireEvent.click(await screen.findByText("pdf-fill"));
+    const list = await screen.findByRole("list", { name: "Ingest flags" });
+    expect(list.textContent).toContain("Remove it from SKILL.md at the source, then sync");
+    expect(list.textContent).toContain("it was cut short");
   });
 
   it("shows the untrusted body as inert text, never as HTML", async () => {

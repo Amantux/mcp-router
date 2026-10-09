@@ -25,19 +25,20 @@ import { AuthBanner, ConnectionIndicator, ConnectPanel } from "./ConnectPanel";
 import { useAuth } from "../api/auth";
 import { appVersion } from "../version";
 
+// Ordered set-up-then-use (HS-U-002): connect sources, grant access, use, review, observe.
 export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
   { to: "/tools", label: "Tools", icon: <WrenchRegular /> },
   { to: "/skill-sources", label: "Skill sources", icon: <LibraryRegular /> },
   { to: "/skills", label: "Skills", icon: <BookRegular /> },
-  { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
-  { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
-  { to: "/analytics", label: "Analytics", icon: <DataBarVerticalRegular /> },
-  { to: "/playground", label: "Tool playground", icon: <PlayCircleRegular /> },
-  { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
-  { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },
-  { to: "/executions", label: "Execution history", icon: <HistoryRegular /> },
   { to: "/policy", label: "Policy", icon: <ShieldKeyholeRegular /> },
+  { to: "/approvals", label: "Approvals", icon: <PersonClockRegular /> },
+  { to: "/lens", label: "Agent lens", icon: <DirectionsRegular /> },
+  { to: "/playground", label: "Playground", icon: <PlayCircleRegular /> },
+  { to: "/duplicates", label: "Duplicates", icon: <BranchForkRegular /> },
+  { to: "/analytics", label: "Analytics", icon: <DataBarVerticalRegular /> },
+  { to: "/executions", label: "Execution history", icon: <HistoryRegular /> },
+  { to: "/health", label: "Models & health", icon: <HeartPulseRegular /> },
 ];
 
 const useStyles = makeStyles({

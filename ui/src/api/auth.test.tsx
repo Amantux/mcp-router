@@ -144,7 +144,7 @@ describe("ConnectPanel", () => {
     renderWithProviders(<ConnectPanel open onClose={() => {}} />);
     const input = screen.getByLabelText(/Admin token/) as HTMLInputElement;
     expect(input.type).toBe("password");
-    expect((screen.getByLabelText(/Agent key/) as HTMLInputElement).type).toBe("password");
+    expect((screen.getByLabelText(/Agent API key/) as HTMLInputElement).type).toBe("password");
     await user.type(input, ADMIN);
     await user.click(screen.getByRole("button", { name: "Save and verify" }));
     await waitFor(() => expect(screen.getByTestId("connect-verdict").textContent).toContain("Admin access confirmed"));

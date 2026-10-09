@@ -137,16 +137,16 @@ export function ToolsPage() {
             )}
             {t.enabled && t.available !== false && (
               <Badge size="small" appearance="tint" color="success">
-                active
+                enabled
               </Badge>
             )}
           </span>
         ),
       }),
-      createTableColumn<MCPTool>({ columnId: "version", renderHeaderCell: () => "Ver.", renderCell: (t) => t.version }),
+      createTableColumn<MCPTool>({ columnId: "version", renderHeaderCell: () => "Version", renderCell: (t) => t.version }),
       createTableColumn<MCPTool>({ columnId: "calls", renderHeaderCell: () => "Calls", renderCell: (t) => fmtInt(t.callCount) }),
       createTableColumn<MCPTool>({ columnId: "errors", renderHeaderCell: () => "Errors", renderCell: (t) => fmtInt(t.errorCount) }),
-      createTableColumn<MCPTool>({ columnId: "latency", renderHeaderCell: () => "Avg latency", renderCell: (t) => fmtMs(t.avgLatencyMs) }),
+      createTableColumn<MCPTool>({ columnId: "latency", renderHeaderCell: () => "Average latency", renderCell: (t) => fmtMs(t.avgLatencyMs) }),
       createTableColumn<MCPTool>({
         columnId: "funnel",
         renderHeaderCell: () => "Funnel (7d)",
@@ -235,7 +235,7 @@ export function ToolsPage() {
           <EmptyState
             icon={<WrenchRegular />}
             title="The tool catalog is empty"
-            body="Tools appear here once a registered server has been discovered. Register a server, or refresh an existing one to run tools/list again."
+            body="Tools appear here once a registered server has been discovered. Register a server, or refresh an existing one to rediscover its tools."
             action={<Button onClick={() => navigate("/servers")}>Go to servers</Button>}
           />
         )

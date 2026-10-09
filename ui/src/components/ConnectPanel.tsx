@@ -166,7 +166,7 @@ export function ConnectPanel({ open, onClose, warnRemount = false }: { open: boo
               placeholder={a.hasAdminToken ? "•••••••• (saved — leave blank to keep)" : "Paste admin token"}
             />
           </Field>
-          <Field label="Agent key (optional)" hint="Lets the playground run tools as that agent instead of as admin.">
+          <Field label="Agent API key (optional)" hint="The key shown once when the agent was created (or its key rotated) on the Policy page. Lets the playground run tools as that agent instead of as admin.">
             <Input
               type="password"
               autoComplete="off"

@@ -31,16 +31,37 @@ import { useLoader } from "../hooks/useLoader";
 
 const PAGE_SIZE = 50;
 const FLAG_LABEL: Record<string, string> = { secret_like: "secret-like", body_truncated: "body truncated", oversize: "oversize", resource_oversize: "resource oversize" };
+/** What each ingest flag (skills/ingest.py, validate.py) means and what to do about it (HS-U-036). */
+const FLAG_HELP: Record<string, string> = {
+  secret_like: "The body or description contains text that looks like a credential (a key or token). Remove it from SKILL.md at the source, then sync.",
+  body_truncated: "The body is over the size cap, so it was cut short and agents get the shortened text. Shorten SKILL.md or move detail into resource files.",
+  resource_oversize: "A resource file is over the size cap. It is listed but can't be served to agents. Shrink or split it.",
+  oversize: "Over the size cap.",
+};
 
-export function FlagChips({ flags }: { flags?: string[] }) {
+/** Flag chips; the title gives the meaning on hover, and `explain` also lists it as text (the drawer). */
+export function FlagChips({ flags, explain = false }: { flags?: string[]; explain?: boolean }) {
   if (!flags?.length) return null;
   return (
     <>
-      {flags.map((f) => (
-        <Badge key={f} size="small" appearance="tint" color={f === "secret_like" ? "danger" : "warning"} style={{ marginRight: 4 }}>
-          {FLAG_LABEL[f] ?? f}
-        </Badge>
-      ))}
+      <span>
+        {flags.map((f) => (
+          <Badge key={f} size="small" appearance="tint" color={f === "secret_like" ? "danger" : "warning"} style={{ marginRight: 4 }} title={FLAG_HELP[f]}>
+            {FLAG_LABEL[f] ?? f}
+          </Badge>
+        ))}
+      </span>
+      {explain && (
+        <ul aria-label="Ingest flags" style={{ margin: 0, paddingLeft: 16 }}>
+          {flags.map((f) => (
+            <li key={f}>
+              <Caption1>
+                <strong>{FLAG_LABEL[f] ?? f}</strong>: {FLAG_HELP[f] ?? "Flagged at ingest."}
+              </Caption1>
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }
@@ -77,7 +98,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
     <>
       <DrawerHeader>
         <DrawerHeaderTitle action={<Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} onClick={onClose} />}>{d?.name ?? "Skill"}</DrawerHeaderTitle>
-        {d && <Link to={`/playground?skill=${encodeURIComponent(d.id)}`}>Try activation</Link>}
+        {d && <Link to={`/playground?skill=${encodeURIComponent(d.id)}`}>Try in playground</Link>}
       </DrawerHeader>
       <DrawerBody>
         <TabList selectedValue={tab} onTabSelect={(_, t) => setTab(String(t.value))}>
@@ -97,7 +118,7 @@ function SkillDrawerContent({ skillId, onClose }: { skillId: string; onClose: ()
         ) : tab === "overview" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 12 }}>
             <span>{d.description}</span>
-            <FlagChips flags={d.ingestFlags} />
+            <FlagChips flags={d.ingestFlags} explain />
             <Caption1>License: {d.license ?? "—"} · Compatibility: {d.compatibility ?? "—"}</Caption1>
             <div>
               <Caption1>Allowed tools: </Caption1>
@@ -233,8 +254,8 @@ export function SkillsPage() {
           <option value="">Domain: any</option>
           {DOMAINS.map((x) => <option key={x} value={x}>{x}</option>)}
         </Select>
-        <Select aria-label="Risk class" value={f.operation} onChange={(_, d) => set({ operation: d.value as Operation | "" })}>
-          <option value="">Risk class: any</option>
+        <Select aria-label="Operation" value={f.operation} onChange={(_, d) => set({ operation: d.value as Operation | "" })}>
+          <option value="">Operation: any</option>
           {OPERATIONS.map((x) => <option key={x} value={x}>{x}</option>)}
         </Select>
         <Select aria-label="Source" value={f.sourceId} onChange={(_, d) => set({ sourceId: d.value })}>
@@ -274,7 +295,7 @@ export function SkillsPage() {
                 <TableHeaderCell>Name</TableHeaderCell>
                 <TableHeaderCell>Source</TableHeaderCell>
                 <TableHeaderCell>Domain</TableHeaderCell>
-                <TableHeaderCell>Risk</TableHeaderCell>
+                <TableHeaderCell>Operation</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Body tokens</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Activations</TableHeaderCell>
                 <TableHeaderCell>Flags</TableHeaderCell>

@@ -280,7 +280,7 @@ export function DuplicatesPage() {
   return (
     <>
       <PageHeader
-        title="Duplicate review"
+        title="Duplicates"
         meta={sugs.data && <Caption1 className={c.muted}>{fmtInt(sugs.data.total)} open</Caption1>}
         actions={
           <Button appearance="primary" disabled={scanning} onClick={() => void scan()}>
@@ -303,7 +303,7 @@ export function DuplicatesPage() {
           <EmptyState
             icon={<BranchForkRegular />}
             title="No open duplicate suggestions"
-            body="The scanner compares descriptions, input schemas and capability classes across servers. Run a scan after adding servers."
+            body="The scanner compares names, descriptions and input schemas of tools in the same domain with a compatible operation. Run a scan after adding servers."
           />
         </div>
       ) : (

@@ -55,11 +55,16 @@ const useStyles = makeStyles({
   sliderRow: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalS },
 });
 
+/** Filter stage ids (routes_route PolicyFilteredOut carries none: policy is the only filter it reports). */
+const STAGE_LABEL: Record<string, string> = { policy: "Policy" };
+
 export const TOOL_LIMIT = 64; // PrincipalIn.max_tools le=64
 const SERVER_LIMIT = 16;
 const SKILL_LIMIT = 10;
 const BUDGET_LABEL: Record<string, string> = { maxTools: "Max tools", maxServers: "Max servers", maxSkills: "Max skills" };
-const BY_LABEL: Record<string, string> = { principal: "the agent's own cap", global: "the global cap (MCPR_MAX_EXPOSED_*)" };
+const GLOBAL_ENV: Record<string, string> = { maxTools: "MCPR_MAX_EXPOSED_TOOLS", maxServers: "MCPR_MAX_EXPOSED_SERVERS", maxSkills: "MCPR_MAX_EXPOSED_SKILLS" };
+const byLabel = (by: string, budget: string): string =>
+  by === "principal" ? "the agent's own cap" : by === "global" ? `the global cap${GLOBAL_ENV[budget] ? ` (${GLOBAL_ENV[budget]})` : ""}` : by;
 
 /** Requested vs applied for one budget: a track scaled to the largest term, filled to `applied`, red marker at `requested`. */
 export function ClampView({ clamp }: { clamp: BudgetClamp }) {
@@ -94,7 +99,7 @@ export function ClampView({ clamp }: { clamp: BudgetClamp }) {
       <Caption1>
         agent cap {fmt(clamp.principal)} · global cap {fmt(clamp.globalCap)}
       </Caption1>
-      {clamped && <Caption1 data-testid={`clamp-${clamp.budget}-by`}>Limited by {BY_LABEL[String(clamp.clampedBy)] ?? clamp.clampedBy}.</Caption1>}
+      {clamped && <Caption1 data-testid={`clamp-${clamp.budget}-by`}>Limited by {byLabel(String(clamp.clampedBy), clamp.budget)}.</Caption1>}
     </div>
   );
 }
@@ -125,7 +130,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
         <MessageBar intent="warning" data-testid="fallback-banner">
           <MessageBarBody>
             <MessageBarTitle>Deterministic fallback used</MessageBarTitle>
-            The decision model was unavailable or too slow, so this ranking comes from the heuristic scorer, not calibrated probabilities.
+            The decision model was unavailable or too slow, so this ranking comes from the deterministic fallback scorer, not calibrated probabilities.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -262,7 +267,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
             Admin-only view. The agent never sees these tools or the reasons.
           </Caption1>
           {result.filtered.length === 0 ? (
-            <Caption1 className={c.muted}>Nothing was filtered out, or the backend didn't report filter diagnostics.</Caption1>
+            <Caption1 className={c.muted}>Policy filtered nothing out for this agent and task.</Caption1>
           ) : (
             <Table size="small" aria-label="Filtered tools">
               <TableHeader>
@@ -282,7 +287,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
                       <Badge appearance="tint" color={f.kind === "skill" ? "brand" : "informative"}>{f.kind ?? "tool"}</Badge>
                     </TableCell>
                     <TableCell>{f.serverName}</TableCell>
-                    <TableCell>{f.stage ?? "policy"}</TableCell>
+                    <TableCell>{STAGE_LABEL[f.stage ?? "policy"] ?? f.stage}</TableCell>
                     <TableCell>{f.reason}</TableCell>
                   </TableRow>
                 ))}
@@ -375,7 +380,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
             submit();
           }}
         >
-          <Field label="Agent" required validationMessage={errors.agentId} hint="Routing runs under this agent's policy and budgets. Nothing is exposed to it.">
+          <Field label="Agent" required validationMessage={errors.agentId} hint="A dry run under this agent's policy and budgets. Nothing is sent to the agent.">
             <Select value={agentId} onChange={(_, d) => setAgentId(d.value)}>
               <option value="">{principals.loading ? "Loading agents…" : "— choose an agent —"}</option>
               {list.map((p) => (
@@ -389,7 +394,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
           <Field label="Task query" required validationMessage={errors.query}>
             <Textarea value={query} onChange={(_, d) => setQuery(d.value)} rows={4} resize="vertical" placeholder="List open pull requests on the api repo" />
           </Field>
-          <Field label={`Requested max tools: ${maxTools}`} hint="Ask for more than the caps allow to see the clamp.">
+          <Field label={`Requested max tools: ${maxTools}`} hint="Ask for more than the caps allow to see where a cap applies.">
             <Slider min={1} max={TOOL_LIMIT} value={maxTools} onChange={(_, d) => setMaxTools(d.value)} aria-label="Requested max tools" />
           </Field>
           <Field label={`Requested max servers: ${maxServers === 0 ? "no limit requested" : maxServers}`}>

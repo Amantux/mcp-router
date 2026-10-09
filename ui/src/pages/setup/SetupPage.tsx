@@ -394,7 +394,7 @@ export function SetupPage() {
         ))}
       </TabList>
       <pre data-testid="snippet">
-        {snippetFor(client, url, apiKey ?? "<your-agent-key>")}
+        {snippetFor(client, url, apiKey ?? "<agent-api-key>")}
       </pre>
     </div>,
     <div key="g">
