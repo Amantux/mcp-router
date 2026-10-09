@@ -126,7 +126,14 @@ def test_missing_database_url_is_fatal(stub_bin: Path, tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("var", "value"),
-    [("MCPR_ALLOW_OPEN_DEV", "maybe"), ("MCPR_DB_WAIT_TRIES", "0"), ("MCPR_DB_WAIT_TRIES", "x")],
+    [
+        ("MCPR_ALLOW_OPEN_DEV", "maybe"),
+        ("MCPR_DB_WAIT_TRIES", "0"),
+        ("MCPR_DB_WAIT_TRIES", "x"),
+        ("MCPR_EMBED_BATCH_SIZE", "nan"),
+        ("MCPR_EMBEDDING_BACKEND", "local"),
+        ("MCPR_PORT", "70000"),
+    ],
 )
 def test_invalid_setting_exits_2_naming_the_var(
     stub_bin: Path, tmp_path: Path, var: str, value: str

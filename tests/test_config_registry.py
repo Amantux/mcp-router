@@ -4,12 +4,15 @@ code agree. No database, no network."""
 from __future__ import annotations
 
 import re
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
 
+from mcprouter import settings as settings_mod
 from mcprouter.inference.engine import DECISION_BACKENDS, EMBEDDING_BACKENDS, MODE_CONCURRENCY
 from mcprouter.inference.laya import NOUL_MODES
+from mcprouter.settings import ENV_ONLY_SPEC, SETTINGS_SPEC, Settings
 from tests.test_compose_contract import COMPOSE_FILES, NON_ROUTER_COMPOSE, registry_vars
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,3 +84,114 @@ def test_required_block_first_and_empty() -> None:
     assert [k for k, _ in active] == ["MCPR_ADMIN_TOKEN", "MCPR_AGENT_KEYS", "POSTGRES_PASSWORD"]
     assert all(v == "" for _, v in active)
     assert "openssl rand -hex 32" in EXAMPLE.read_text()
+
+
+# --- P-105: registry-driven parse + validation ---------------------------------
+
+_NUMERIC_BAD = ["nan", "inf", "-inf", "-1", "abc", "1e999"]
+
+# Every validated variable -> (a good value, bad values). The key set must
+# equal the registry's typed set, so a new variable cannot skip validation.
+VALIDATION_TABLE: dict[str, tuple[str, list[str]]] = {
+    "MCPR_IDLE_UNLOAD_S": ("60", [*_NUMERIC_BAD, "0"]),
+    "MCPR_EMBED_BATCH_SIZE": ("8", [*_NUMERIC_BAD, "0", "1.5"]),
+    "MCPR_DECISION_TIMEOUT_S": ("0.5", [*_NUMERIC_BAD, "0"]),
+    "MCPR_MAX_EXPOSED_TOOLS": ("4", [*_NUMERIC_BAD, "0"]),
+    "MCPR_MAX_EXPOSED_SERVERS": ("2", [*_NUMERIC_BAD, "0"]),
+    "MCPR_RETRIEVAL_CANDIDATES": ("10", [*_NUMERIC_BAD, "0"]),
+    "MCPR_ROUTE_CONFIDENCE_FLOOR": ("0.5", [*_NUMERIC_BAD, "1.5"]),
+    "MCPR_ROUTE_CACHE_TTL_S": ("0", _NUMERIC_BAD),
+    "MCPR_ROUTE_CACHE_SIZE": ("0", _NUMERIC_BAD),
+    "MCPR_PREFILL_MS_PER_1K_TOKENS": ("0", _NUMERIC_BAD),
+    "MCPR_PRICE_PER_1K_INPUT_TOKENS": ("0.01", _NUMERIC_BAD),
+    "MCPR_DEFAULT_TOOL_TIMEOUT_S": ("5", [*_NUMERIC_BAD, "0"]),
+    "MCPR_RATE_LIMIT_PER_AGENT_PER_MIN": ("60", [*_NUMERIC_BAD, "0"]),
+    "MCPR_MCP_MAX_SESSIONS": ("10", [*_NUMERIC_BAD, "0"]),
+    "MCPR_MCP_MAX_SESSIONS_PER_AGENT": ("2", [*_NUMERIC_BAD, "0"]),
+    "MCPR_MAX_EXPOSED_SKILLS": ("0", _NUMERIC_BAD),
+    "MCPR_SKILL_BODY_MAX_BYTES": ("1024", [*_NUMERIC_BAD, "0"]),
+    "MCPR_SKILL_RESOURCE_MAX_BYTES": ("1024", [*_NUMERIC_BAD, "0"]),
+    "MCPR_DECISION_MAX_RETRIES": ("0", [*_NUMERIC_BAD, "11"]),
+    "MCPR_DECISION_RATE_LIMIT_PER_MIN": ("30", [*_NUMERIC_BAD, "0"]),
+    "MCPR_AOAI_MAX_RETRIES": ("3", [*_NUMERIC_BAD, "11"]),
+    "MCPR_DEDUP_MAX_PAIRS": ("100", [*_NUMERIC_BAD, "0"]),
+    "MCPR_EMBEDDING_BACKEND": ("BGE", ["local", "hash2"]),
+    "MCPR_DECISION_BACKEND": ("remote", ["openai", "Laya2"]),
+    "MCPR_OPERATING_MODE": ("battery", ["eco"]),
+    "MCPR_LAYA_NOUL_MODE": ("native", ["both"]),
+    "MCPR_LOG_LEVEL": ("debug", ["TRACE", "verbose"]),
+    "MCPR_LOG_FORMAT": ("json", ["text"]),
+    "MCPR_DEVICE": ("cuda:1", ["gpu", "cuda:x", "mps"]),
+    "MCPR_SYNC_ENABLED": ("on", ["maybe"]),
+    "MCPR_USAGE_PRIOR_ENABLED": ("1", ["2"]),
+    "MCPR_ANALYTICS_ROLLUP_ENABLED": ("no", ["nope"]),
+    "MCPR_ALLOW_OPEN_DEV": ("true", ["yes please"]),
+    "MCPR_ALLOWED_HOSTS": ("router.lan,a.b:8443", ["evil host", "a/b", "*"]),
+}
+_TYPED = {"int", "opt_int", "float", "enum", "bool", "device", "hosts"}
+
+
+def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    for k in list(os.environ):
+        if k.startswith("MCPR_"):
+            monkeypatch.delenv(k)
+
+
+def test_validation_table_covers_every_typed_setting() -> None:
+    typed = {s.env for s in SETTINGS_SPEC if s.type in _TYPED}
+    assert set(VALIDATION_TABLE) == typed
+
+
+@pytest.mark.parametrize(
+    ("var", "bad"), [(v, b) for v, (_, bads) in VALIDATION_TABLE.items() for b in bads]
+)
+def test_bad_value_rejected_naming_the_var(
+    monkeypatch: pytest.MonkeyPatch, var: str, bad: str
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(var, bad)
+    with pytest.raises(ValueError) as ei:
+        Settings.from_env()
+    assert str(ei.value).startswith(f"{var}:"), str(ei.value)
+
+
+@pytest.mark.parametrize("var", sorted(VALIDATION_TABLE))
+def test_good_value_accepted(monkeypatch: pytest.MonkeyPatch, var: str) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv(var, VALIDATION_TABLE[var][0])
+    Settings.from_env()
+
+
+def test_registry_covers_every_field_once() -> None:
+    names = [s.name for s in SETTINGS_SPEC]
+    assert sorted(names) == sorted(f.name for f in fields(Settings))
+    envs = [s.env for s in (*SETTINGS_SPEC, *ENV_ONLY_SPEC)]
+    assert len(envs) == len(set(envs))
+    for s in (*SETTINGS_SPEC, *ENV_ONLY_SPEC):
+        assert s.doc.strip() and s.env.startswith("MCPR_")
+        assert s.scope in ("app", "entrypoint", "compose")
+        if s.type in ("enum", "device", "bool"):
+            assert s.choices, s.env
+
+
+def test_unset_env_equals_dataclass_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env(monkeypatch)
+    assert Settings.from_env() == Settings()
+    assert Settings.from_env({}) == Settings()
+
+
+def test_registry_choices_match_engine_constants() -> None:
+    assert settings_mod.EMBEDDING_BACKEND_CHOICES == EMBEDDING_BACKENDS
+    assert settings_mod.DECISION_BACKEND_CHOICES == DECISION_BACKENDS
+    assert set(settings_mod.OPERATING_MODE_CHOICES) == set(MODE_CONCURRENCY)
+    assert settings_mod.LAYA_NOUL_MODE_CHOICES == NOUL_MODES
+
+
+def test_enum_values_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MCPR_EMBEDDING_BACKEND", " BGE ")
+    monkeypatch.setenv("MCPR_LOG_LEVEL", "debug")
+    s = Settings.from_env()
+    assert (s.embedding_backend, s.log_level) == ("bge", "DEBUG")

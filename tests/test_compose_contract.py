@@ -33,15 +33,9 @@ def test_api_port_binds_loopback_by_default() -> None:
 
 # --- P-103 (D3): env reach + container hardening ----------------------------
 
-# Compose/image/test knobs that are NOT router settings (each is consumed by
-# compose interpolation, the build, or the db container only).
+# Compose knobs that are not MCPR_* (db container / torch runtime); the MCPR_*
+# compose-only knobs are declared in settings.ENV_ONLY_SPEC.
 NON_ROUTER_COMPOSE = {
-    "MCPR_BIND",
-    "MCPR_HOST_PORT",
-    "MCPR_IMAGE",
-    "MCPR_BASE_IMAGE",
-    "MCPR_INFERENCE_IMAGE",
-    "MCPR_TORCH_INDEX_URL",
     "POSTGRES_USER",
     "POSTGRES_PASSWORD",
     "POSTGRES_DB",
@@ -52,14 +46,12 @@ EXTERNAL_ENV = {"HF_HOME"}
 
 
 def registry_vars() -> set[str]:
-    """Every MCPR_* name settings.py declares (incl. `<NAME>_FILE` variants
-    of `_secret(...)` reads and the entrypoint-only knobs)."""
-    import re
+    """Every declared variable: SETTINGS_SPEC (+ `_FILE` variants) and the
+    entrypoint/compose-only ENV_ONLY_SPEC."""
+    from mcprouter.settings import ENV_ONLY_SPEC, SETTINGS_SPEC
 
-    src = (ROOT / "src" / "mcprouter" / "settings.py").read_text()
-    names = set(re.findall(r'"(MCPR_[A-Z0-9_]*[A-Z0-9])"', src))
-    names |= {f"{n}_FILE" for n in re.findall(r'_secret\("(MCPR_[A-Z0-9_]+)"', src)}
-    return names | {"MCPR_PORT", "MCPR_DATA_DIR"}
+    names = {s.env for s in (*SETTINGS_SPEC, *ENV_ONLY_SPEC)}
+    return names | {s.file_var for s in SETTINGS_SPEC if s.file_var}
 
 
 COMPOSE_FILES = (
