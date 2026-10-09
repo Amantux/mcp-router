@@ -12,6 +12,8 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
+  FeedbackItem,
+  FeedbackResult,
   CreateSkillSourceRequest, Skill, SkillActivation, SkillDetail, SkillQuery, SkillSource, SyncReport,
   Approval,
   ApprovalDecision,
@@ -711,4 +713,11 @@ export async function activateSkill(id: string, opts: { agentId?: string } = {},
   if (opts.agentId) body.agentId = opts.agentId;
   const raw = await request<Partial<SkillActivation>>("POST", `${API_BASE}/skills/${encodeURIComponent(id)}/activate`, { body, signal, as: "agent" });
   return { body: typeof raw?.body === "string" ? raw.body : "", resources: raw?.resources ?? [], recordId: raw?.recordId ?? null };
+}
+
+// CONTRACT: POST /api/v1/route/{requestId}/feedback (admin bearer → source=human).
+export async function postRouteFeedback(requestId: string, items: FeedbackItem[]): Promise<FeedbackResult> {
+  return request<FeedbackResult>("POST", `${API_BASE}/route/${encodeURIComponent(requestId)}/feedback`, {
+    body: { items } as unknown as JsonObject,
+  });
 }
