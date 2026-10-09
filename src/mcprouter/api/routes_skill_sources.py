@@ -9,8 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import require_admin
 from mcprouter.lifecycle import skill_content_snapshot
 from mcprouter.models import SkillSourceRecord
@@ -56,9 +57,7 @@ class SourcePatch(_Camel):
         return v
 
 
-def _factory(request: Request) -> sessionmaker[Session]:
-    f: sessionmaker[Session] = request.app.state.session_factory
-    return f
+_factory = session_factory  # P-206: one spelling, in api/deps.py
 
 
 def _out(s: SkillSourceRecord) -> dict[str, Any]:

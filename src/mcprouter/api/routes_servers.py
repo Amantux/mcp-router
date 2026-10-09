@@ -24,8 +24,9 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import require_admin
 from mcprouter.discovery import (
     DiscoveryService,
@@ -120,9 +121,7 @@ class RefreshOut(_Wire):
 
 
 # ----------------------------------------------------------------- helpers
-def _factory(request: Request) -> sessionmaker[Session]:
-    factory: sessionmaker[Session] = request.app.state.session_factory
-    return factory
+_factory = session_factory  # P-206: one spelling, in api/deps.py
 
 
 def _service(request: Request) -> DiscoveryService:

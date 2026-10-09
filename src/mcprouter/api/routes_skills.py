@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import require_admin
 from mcprouter.generation import bump_catalog
 from mcprouter.models import SkillRecord, SkillVersionRecord
@@ -23,9 +24,7 @@ from mcprouter.registry.wire import ClassificationPatchIn
 router = APIRouter(prefix="/api/v1/skills", tags=["skills"], dependencies=[Depends(require_admin)])
 
 
-def _factory(request: Request) -> sessionmaker[Session]:
-    f: sessionmaker[Session] = request.app.state.session_factory
-    return f
+_factory = session_factory  # P-206: one spelling, in api/deps.py
 
 
 def _summary(r: SkillRecord) -> dict[str, Any]:
@@ -214,23 +213,15 @@ from fastapi import Path, Query, Response  # noqa: E402
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402
 from pydantic.alias_generators import to_camel  # noqa: E402
 
-from mcprouter.api.deps_auth import get_principal, is_admin_bearer, security_of  # noqa: E402
-from mcprouter.api.routes_execute import (  # noqa: E402
-    AGENT_DISABLED,
-    AGENT_ID_PATTERN,
-    _principal_row,
-)
-from mcprouter.execution.manager import INITIATED_BY_ADMIN  # noqa: E402
+from mcprouter.api.acting import ADMIN_NEEDS_AGENT, AGENT_ID_PATTERN, act_as_agent  # noqa: E402
+from mcprouter.api.deps_auth import security_of  # noqa: E402
 from mcprouter.gateway.skills import SkillAccessError, SkillExposure  # noqa: E402
 from mcprouter.models import RoutingDecisionRecord  # noqa: E402
 from mcprouter.skills.serve import resource_mime  # noqa: E402
 
 SKILL_ID_PREFIX = "skill:"
 UNKNOWN_SKILL = "Unknown skill or resource."
-ADMIN_NEEDS_AGENT_SKILL = (
-    "Admin requests must name the agent to act as: pass agentId. "
-    "The request runs under that agent's routing and policy."
-)
+ADMIN_NEEDS_AGENT_SKILL = ADMIN_NEEDS_AGENT  # alias (P-206: one message, in api/acting.py)
 # code -> (status, curated message). Unknown and unrouted share ONE message so
 # a caller cannot probe which skills exist; path problems look the same.
 _ERRORS: dict[str, tuple[int, str]] = {
@@ -304,21 +295,9 @@ def _exposure(request: Request) -> SkillExposure:
 
 
 async def _acting_agent(request: Request, named: str | None) -> tuple[str, str | None]:
-    """(agent_id, initiated_by) for this request, per the identity rules above."""
-    config, _ = security_of(request)
-    if is_admin_bearer(config, request.headers.get("authorization")):
-        if not named:
-            raise HTTPException(status_code=400, detail=ADMIN_NEEDS_AGENT_SKILL)
-        row = await anyio.to_thread.run_sync(_principal_row, request, named)
-        if row is None:
-            raise HTTPException(status_code=404, detail="Unknown agent.")
-        if not row.enabled:
-            raise HTTPException(status_code=403, detail=AGENT_DISABLED)
-        return row.agent_id, INITIATED_BY_ADMIN
-    principal = await anyio.to_thread.run_sync(get_principal, request)  # 401 on bad key
-    if named and named != principal.agent_id:
-        raise HTTPException(status_code=403, detail="An agent key can only act as its own agent.")
-    return principal.agent_id, None
+    """(agent_id, initiated_by) for this request (rules: api/acting.py)."""
+    acting = await act_as_agent(request, named)
+    return acting.agent_id, acting.initiated_by
 
 
 async def _call(request: Request, fn: Any, *args: Any, **kw: Any) -> Any:

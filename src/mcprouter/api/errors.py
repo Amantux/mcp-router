@@ -9,10 +9,15 @@ the caller sent, into any proxy or client log of response bodies. Every
 
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
+
+from mcprouter.registry.errors import RegistryError
 
 API_PREFIX = "/api/"
 MAX_ERRORS = 20
@@ -39,3 +44,13 @@ async def curated_validation_error(request: Request, exc: Exception) -> Response
 def install_error_handlers(app: FastAPI) -> None:
     """Register app-wide exception handlers (idempotent)."""
     app.add_exception_handler(RequestValidationError, curated_validation_error)
+
+
+@contextmanager
+def curated_errors() -> Iterator[None]:
+    """Map typed registry errors to their curated message. Anything else
+    propagates to FastAPI's generic 500 (no exception text leaks)."""
+    try:
+        yield
+    except RegistryError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None

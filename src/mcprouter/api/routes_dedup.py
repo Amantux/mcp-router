@@ -12,6 +12,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from mcprouter.api.acting import admin_actor
+from mcprouter.api.deps import get_session
+from mcprouter.api.errors import curated_errors
 from mcprouter.dedup.detect import DEFAULT_THRESHOLD, run_dedup
 from mcprouter.dedup.review import (
     accept_suggestion,
@@ -19,7 +22,6 @@ from mcprouter.dedup.review import (
     list_suggestions,
     to_out,
 )
-from mcprouter.registry.api_deps import curated_errors, get_session, require_admin
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.wire import (
@@ -34,7 +36,7 @@ from mcprouter.registry.wire import (
 router = APIRouter(prefix="/api/v1/dedup", tags=["dedup"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
-AdminDep = Annotated[str, Depends(require_admin)]
+AdminDep = Annotated[str, Depends(admin_actor)]
 
 
 @router.get("/suggestions", response_model=SuggestionPageOut)

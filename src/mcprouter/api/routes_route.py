@@ -49,6 +49,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
     _dev_mode_active,
@@ -188,7 +189,7 @@ def _skill_tokens(request: Request, skills: list[RoutedTool]) -> dict[str, int]:
     route cache don't carry it)."""
     if not skills:
         return {}
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         rows = s.execute(
             select(SkillRecord.id, SkillRecord.body_tokens_est).where(
                 SkillRecord.id.in_([t.tool_id for t in skills])
@@ -238,7 +239,7 @@ def resolve_allowed(
     is not an existence oracle for servers the caller may not see."""
     if names is None:
         return None
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         ids, unknown = resolve_server_names(s, names)
     known = [n for n in dict.fromkeys(names) if n not in unknown]
     visible = scope.server_ids()
@@ -412,7 +413,7 @@ def _ref(c: ToolCandidate) -> ToolRefOut:
 def _simulation_principal(request: Request, agent_id: str) -> AgentPrincipal:
     security = request.app.state.security
     principal: AgentPrincipal | None
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         principal = s.scalars(
             select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
         ).one_or_none()

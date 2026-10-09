@@ -14,7 +14,6 @@ funnel collector (idempotent across app re-creation).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -42,6 +41,7 @@ from mcprouter.analytics.wire import (
     ToolDetailOut,
     ToolFunnelPageOut,
 )
+from mcprouter.api.deps import get_session as deps_get_session
 from mcprouter.api.deps_auth import require_admin
 from mcprouter.models import utcnow
 
@@ -55,9 +55,7 @@ def get_now() -> datetime:
     return utcnow()
 
 
-def get_session(request: Request) -> Iterator[Session]:
-    with request.app.state.session_factory() as s:
-        yield s
+get_session = deps_get_session  # P-206: one spelling, in api/deps.py
 
 
 def get_basis(request: Request) -> SavingsBasis:

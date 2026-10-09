@@ -21,6 +21,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from mcprouter.api.deps import get_manager, session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
     generate_key,
@@ -29,7 +30,7 @@ from mcprouter.api.deps_auth import (
     require_admin,
     security_of,
 )
-from mcprouter.execution.manager import ApprovalError, ApprovalView, ExecutionManager
+from mcprouter.execution.manager import ApprovalError, ApprovalView
 from mcprouter.generation import bump_policy
 from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule, SkillSourceRecord
 
@@ -133,15 +134,10 @@ class ApprovalDecision(_Wire):
 
 # ----------------------------------------------------------------- helpers
 def _session(request: Request) -> Session:
-    s: Session = request.app.state.session_factory()
-    return s
+    return session_factory(request)()
 
 
-def _manager(request: Request) -> ExecutionManager:
-    mgr = getattr(request.app.state, "execution_manager", None)
-    if not isinstance(mgr, ExecutionManager):
-        raise HTTPException(status_code=503, detail="execution manager not configured")
-    return mgr
+_manager = get_manager  # P-206: one spelling, in api/deps.py
 
 
 def _p_out(p: AgentPrincipal) -> PrincipalOut:

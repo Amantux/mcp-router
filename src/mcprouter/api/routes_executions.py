@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import require_admin
 from mcprouter.execution.history import MAX_LIMIT, list_executions
 
@@ -56,7 +57,7 @@ def executions(
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ExecutionPageOut:
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         page = list_executions(s, agent_id=agent_id, outcome=outcome, limit=limit, offset=offset)
     return ExecutionPageOut(
         items=[ExecutionOut.model_validate(r, from_attributes=True) for r in page.items],
