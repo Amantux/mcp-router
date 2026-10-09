@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { hydrateAuth } from "../api/auth";
+import { takeUnmockedCalls } from "./render";
 
 // One async budget for every findBy*/waitFor, so a starved runner gets the same slack
 // everywhere and nobody sprinkles per-call { timeout } overrides.
@@ -61,6 +62,8 @@ afterEach(() => {
   noteHiddenDialogs(dialogWatch.takeRecords());
   dialogWatch.disconnect();
   const problems: string[] = [];
+  const missing = [...new Set(takeUnmockedCalls())];
+  if (missing.length) problems.push(`request(s) to unmocked route(s): ${missing.join(", ")} (mock them, or mock an explicit 404)`);
   if (hiddenDialogs.length) problems.push(`a dialog was made aria-hidden while mounted: ${hiddenDialogs[0]}`);
   for (const d of document.querySelectorAll(DIALOG)) {
     const focus = document.activeElement;

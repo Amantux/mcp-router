@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { mockFetch, renderWithProviders } from "../test/render";
+import { expectQuery, mockFetch, renderWithProviders } from "../test/render";
 import { SkillsPage } from "./SkillsPage";
 
 const SKILL = { id: "k1", sourceId: "s1", sourceName: "team", name: "pdf-fill", description: "Fill PDFs", operation: "write", domain: "files", bodyTokensEst: 1234, enabled: true, ingestFlags: ["secret_like", "body_truncated", "oversize"], activationCount: 5 };
@@ -53,5 +53,17 @@ describe("SkillsPage", () => {
     await waitFor(() => expect(click).toHaveBeenCalled());
     expect(calls.some((c) => c.url.includes("/skills/bundle?agentId=claude-desk"))).toBe(true);
     expect(create).toHaveBeenCalled();
+  });
+
+  it("sends the Source and Scripts filters under the backend's query names", async () => {
+    const { calls } = routes({ "GET /api/v1/skill-sources": () => ({ json: [{ id: "s1", name: "team", kind: "directory", location: "/x", enabled: true }] }) });
+    renderWithProviders(<SkillsPage />, { route: "/skills" });
+    await screen.findByText("pdf-fill");
+    expectQuery(calls, "GET", "/api/v1/skills", { limit: "50", offset: "0" });
+    await screen.findByRole("option", { name: "team" });
+    fireEvent.change(screen.getByLabelText("Source"), { target: { value: "s1" } });
+    fireEvent.change(screen.getByLabelText("Scripts"), { target: { value: "true" } });
+    // D13: the backend honours `sourceId` and `hasScripts` (GET /skills, P-202).
+    await waitFor(() => expectQuery(calls, "GET", "/api/v1/skills", { sourceId: "s1", hasScripts: "true", limit: "50", offset: "0" }));
   });
 });

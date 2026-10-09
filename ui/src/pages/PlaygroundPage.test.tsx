@@ -202,6 +202,10 @@ const SKILL = { id: "k1", source_id: "src1", source_name: "team-skills", name: "
 function mockSkill(activate: (body: unknown) => { status?: number; json?: unknown }) {
   return mockFetch({
     "GET /api/v1/skills": () => ({ json: { items: [SKILL], total: 1 } }),
+    // The page also loads the tools tab's lists (A3-020) and resolves the agent key.
+    "GET /api/v1/servers": () => ({ json: [] }),
+    "GET /api/v1/tools": () => ({ json: { items: [], total: 0 } }),
+    "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
     "GET /api/v1/skills/k1": () => ({ json: SKILL }),
     "POST /api/v1/skills/k1/activate": activate,
     "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
