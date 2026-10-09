@@ -57,7 +57,13 @@ def test_synthetic_v1_baseline(db: sessionmaker[Session], settings: object, back
     assert m["case_count"] >= 60
     assert m["unauthorized_exposures"] == 0
     assert m["unavailable_exposures"] == 0
-    assert m["fallback_rate"] == (1.0 if backend == "fallback" else 0.0)
+    # Only tools are seeded here: a skill-only case (kinds=("skill",)) has no
+    # candidates, so it is a no_match that never reaches the model and the
+    # fallback never runs. Every case that exercises tools must fall back.
+    cases = load_named("synthetic_v1")
+    tool_share = sum("tool" in c.kinds for c in cases) / len(cases)
+    assert m["fallback_rate"] == pytest.approx(tool_share if backend == "fallback" else 0.0)
+    assert all(o.no_match and not o.returned for o in outcomes if o.case.kinds == ("skill",))
 
 
 def test_synthetic_skills_fixture_seeds_ground_truth(db: sessionmaker[Session]) -> None:
