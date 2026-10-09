@@ -154,7 +154,7 @@ _FEEDBACK_TOOL_DEF = types.Tool(
                         "name": {"type": "string", "maxLength": 300},
                         "kind": {"type": "string", "enum": ["tool", "skill"]},
                         "helpful": {"type": "boolean"},
-                        "note": {"type": "string", "maxLength": 2000},
+                        "note": {"type": "string", "maxLength": _fb.NOTE_MAX},
                     },
                     "required": ["name", "helpful"],
                     "additionalProperties": False,

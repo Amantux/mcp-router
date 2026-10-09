@@ -25,6 +25,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -39,7 +41,7 @@ jobs:
           sbom: true
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+            ${{ !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
 
   image-inference:
     name: image-inference
@@ -52,6 +54,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -67,4 +71,4 @@ jobs:
             BASE_IMAGE=${{ env.IMAGE }}:${{ github.ref_name }}
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}-inference
-            ${{ env.IMAGE }}:latest-inference
+            ${{ !contains(github.ref_name, '-') && format('{0}:latest-inference', env.IMAGE) || '' }}

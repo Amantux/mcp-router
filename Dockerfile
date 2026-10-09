@@ -21,6 +21,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MCPR_SKILLS_CACHE_DIR=/srv/skills-cache \
     MCPR_MODELS_CACHE_DIR=/srv/models-cache \
     HF_HOME=/srv/models-cache/hf
+# git: required by git skill sources (gitsource.py shells out to `git clone`).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN addgroup --system --gid 1000 app && adduser --system --uid 1000 --ingroup app --home /home/app app
 WORKDIR /srv
 COPY pyproject.toml README.md ./

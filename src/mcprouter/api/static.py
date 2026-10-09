@@ -17,7 +17,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Paths owned by the backend: never answered with index.html (a typo'd API
 # call must 404 as JSON, not 200 with the SPA shell).
-RESERVED_PREFIXES = ("api", "mcp", "metrics", "healthz", "docs", "openapi.json", "redoc")
+# ".well-known": MCP clients probe /.well-known/oauth-* after a 401 and need a
+# real 404, not index.html.
+RESERVED_PREFIXES = (
+    "api",
+    "mcp",
+    "metrics",
+    "healthz",
+    "docs",
+    "openapi.json",
+    "redoc",
+    ".well-known",
+)
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",

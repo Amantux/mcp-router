@@ -69,7 +69,14 @@ def test_traversal_never_escapes_dist(dist: Path, path: str) -> None:
 def test_reserved_prefixes_404_not_spa(dist: Path) -> None:
     c = _client(dist)
     assert c.get("/api/v1/ping").json() == {"ok": "yes"}
-    for path in ("/api/v1/does-not-exist", "/mcp/x", "/metrics/x", "/healthz/x", "/docs/x"):
+    for path in (
+        "/api/v1/does-not-exist",
+        "/mcp/x",
+        "/metrics/x",
+        "/healthz/x",
+        "/docs/x",
+        "/.well-known/oauth-protected-resource",  # MCP auth discovery must 404, not HTML
+    ):
         r = c.get(path)
         assert r.status_code == 404 and "SPA" not in r.text, path
     for path in ("/API/x", "/Mcp/x", "/HEALTHZ/x"):  # case must not reach the SPA
