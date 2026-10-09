@@ -1,6 +1,6 @@
 #!/bin/sh
 # MCP Router container entrypoint: validate settings -> check writable dirs ->
-# wait for Postgres (bounded) -> exec uvicorn with ONE worker.
+# wait for Postgres (bounded) -> migrate to head -> exec uvicorn with ONE worker.
 # Single worker is deliberate: the lifespan owns the sync/rollup loops and the
 # in-process model load; N workers would run N loops and load N models.
 #
@@ -56,7 +56,15 @@ for i in range(1, tries + 1):
 sys.exit(1)
 PY
 
+# A pass-through command (e.g. `python -m mcprouter.migrate downgrade -1`) runs
+# against the schema as it is; only the server path upgrades first.
 if [ "$#" -gt 0 ]; then exec "$@"; fi
+
+# Schema to head before serving (E6 P-601): the CLI takes the same advisory
+# lock as the app's boot path, logs the revision (stderr), prints FATAL itself
+# (no DSN) and exits 1.
+python -m mcprouter.migrate upgrade >&2 || die "schema migration failed (see the FATAL line above)."
+
 exec uvicorn --factory mcprouter.api.app:create_app \
   --host "$bind_host" --port "$port" --workers 1 \
   --timeout-graceful-shutdown 20

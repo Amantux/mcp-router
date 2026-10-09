@@ -30,6 +30,9 @@ def stub_bin(tmp_path: Path) -> Path:
         'if [ "${1:-}" = "-" ] && [ -n "${STUB_DB_RC:-}" ]; then\n'
         '  cat >/dev/null; exit "$STUB_DB_RC"\n'
         "fi\n"
+        'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "mcprouter.migrate" ]; then\n'
+        '  echo "MIGRATE_ARGV: $*" >&2; exit "${STUB_MIGRATE_RC:-0}"\n'
+        "fi\n"
         'exec "$REAL_PYTHON" "$@"\n'
     )
     uv = bindir / "uvicorn"
@@ -185,3 +188,27 @@ def test_pass_through_command_runs_after_guards(stub_bin: Path, tmp_path: Path) 
     bad = run(stub_bin, tmp_path, {"MCPR_DB_WAIT_TRIES": "0"}, "echo", "passthrough-ok")
     assert bad.returncode == 2
     assert "passthrough-ok" not in bad.stdout
+
+
+# --- E6 flag 4: schema upgrade before serving ----------------------------------
+
+
+def test_server_path_migrates_before_uvicorn(stub_bin: Path, tmp_path: Path) -> None:
+    """Upgrade runs once on the server path (ordering: see the failure test)."""
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN})
+    assert r.returncode == 0, r.stderr
+    mig = [ln for ln in r.stderr.splitlines() if ln.startswith("MIGRATE_ARGV: ")]
+    assert mig == ["MIGRATE_ARGV: -m mcprouter.migrate upgrade"]
+    assert _argv(r.stdout)[0] == "--factory"
+
+
+def test_failed_migration_never_serves(stub_bin: Path, tmp_path: Path) -> None:
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN, "STUB_MIGRATE_RC": "1"})
+    assert r.returncode == 1
+    assert "FATAL: schema migration failed" in r.stderr
+    assert "UVICORN_ARGV" not in r.stdout
+
+
+def test_pass_through_command_does_not_migrate(stub_bin: Path, tmp_path: Path) -> None:
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN}, "echo", "ok")
+    assert r.returncode == 0 and "MIGRATE_ARGV" not in r.stdout + r.stderr
