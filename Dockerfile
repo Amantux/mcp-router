@@ -1,5 +1,15 @@
+# Base images are pinned by digest; the tag is in the comment above each FROM.
+# Dependabot's docker ecosystem bumps them. Keep NODE_VERSION equal to .nvmrc
+# (tests/test_docs_consistency.py checks it).
+ARG NODE_VERSION=22.23.3
+
 # Stage 1: build the dashboard (served by FastAPI from /srv/ui/dist).
-FROM node:22-slim AS ui
+# node:22.23.3-slim
+FROM node:${NODE_VERSION}-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS ui
+# APP_VERSION (e.g. the release tag) is shown in the dashboard; empty means the
+# UI falls back to ui/package.json.
+ARG APP_VERSION=""
+ENV VITE_APP_VERSION=${APP_VERSION}
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci
@@ -10,7 +20,8 @@ RUN npm run build
 
 # Stage 2: the API image (zero-ML: hash embeddings + deterministic decisions).
 # Dockerfile.inference layers the [inference] extra on top of this image.
-FROM python:3.12-slim AS base
+# python:3.12-slim
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS base
 LABEL org.opencontainers.image.source="https://github.com/Amantux/mcp-router" \
       org.opencontainers.image.title="mcp-router" \
       org.opencontainers.image.description="MCP Router API + dashboard"
@@ -25,11 +36,24 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# Node 22 runtime (node + npm + npx) from the same pinned node image, so
+# imported `npx ...` stdio MCP servers can start inside the container (D16).
+# `uvx` servers are NOT supported in this image: see docs/deploy.md.
+COPY --from=ui /usr/local/bin/node /usr/local/bin/node
+COPY --from=ui /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && node --version && npm --version && npx --version
 RUN addgroup --system --gid 1000 app && adduser --system --uid 1000 --ingroup app --home /home/app app
 WORKDIR /srv
-COPY pyproject.toml README.md ./
+# Dependency layer keyed on pyproject.toml only: editing src/ reuses it.
+COPY pyproject.toml ./
+RUN python -c "import tomllib; print('\\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
+ && pip install --no-cache-dir -r /tmp/requirements.txt hatchling \
+ && rm /tmp/requirements.txt
+COPY README.md ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --no-deps --no-build-isolation .
 COPY --from=ui /ui/dist ./ui/dist
 COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # Writable dirs owned by the app user BEFORE dropping root, so named volumes
@@ -38,7 +62,10 @@ RUN mkdir -p /data /srv/skills-cache /srv/models-cache \
  && chown -R app:app /data /srv/skills-cache /srv/models-cache \
  && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 USER app
-ENV HOME=/home/app
+# npx caches downloaded packages under $HOME/.npm, which the app user owns.
+ENV HOME=/home/app \
+    npm_config_cache=/home/app/.npm \
+    npm_config_update_notifier=false
 VOLUME ["/data", "/srv/skills-cache", "/srv/models-cache"]
 EXPOSE 8400
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
