@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   camelizeKeys,
+  curatedConflict,
+  deleteServer,
   describeError,
   executeTool,
   getModelsHealth,
@@ -130,6 +132,35 @@ describe("client requests", () => {
     const shown = JSON.stringify(describeError(err)) + (err as Error).message;
     expect(shown).not.toContain("hunter2");
     expect(describeError(err).status).toBe("HTTP 500");
+  });
+
+  // The real message from discovery/registry.py delete_server (HS-U-014).
+  const REFERENCED = "server is referenced by policy rules; remove those rules before deleting it";
+
+  it("shows a 409's curated detail (the backend's next step) instead of the generic conflict advice", async () => {
+    mockFetch({ "DELETE /api/v1/servers/s1": () => ({ status: 409, json: { detail: REFERENCED } }) });
+    const err = await deleteServer("s1").catch((e: unknown) => e);
+    expect((err as ApiError).status).toBe(409);
+    expect(describeError(err)).toEqual({
+      status: "HTTP 409",
+      advice: "Server is referenced by policy rules; remove those rules before deleting it.",
+    });
+  });
+
+  it("falls back to the generic 409 advice when the detail is missing, structured, multi-line or long", async () => {
+    const generic = "It conflicts with existing data (for example a duplicate name). Change the input and retry.";
+    for (const text of ["", "not json", JSON.stringify({ detail: [{ msg: "x" }] }), JSON.stringify({ detail: "a\nb" }), JSON.stringify({ detail: "x".repeat(301) })]) {
+      mockFetch({ "DELETE /api/v1/servers/s1": () => ({ status: 409, text }) });
+      const err = await deleteServer("s1").catch((e: unknown) => e);
+      expect(describeError(err).advice, text).toBe(generic);
+    }
+    expect(curatedConflict(JSON.stringify({ detail: "  agentId already exists " }))).toBe("agentId already exists");
+  });
+
+  it("reads a detail only from a 409: other statuses keep the body out", async () => {
+    mockFetch({ "DELETE /api/v1/servers/s1": () => ({ status: 400, json: { detail: "psycopg: password=hunter2" } }) });
+    const err = await deleteServer("s1").catch((e: unknown) => e);
+    expect(JSON.stringify(describeError(err)) + JSON.stringify(err)).not.toContain("hunter2");
   });
 
   it("reports a network failure as status 0", async () => {

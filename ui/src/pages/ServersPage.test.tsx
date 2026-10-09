@@ -84,4 +84,19 @@ describe("ServersPage", () => {
     await waitFor(() => expect(callsTo(calls, "POST", "/api/v1/servers").map((c) => c.body)).toEqual([{ name: "files", transport: "stdio", command: ["uvx", "mcp-files", "--root /srv/data"] }]));
     await waitFor(() => expect(callsTo(calls, "GET", "/api/v1/servers").length).toBeGreaterThan(1));
   });
+
+  it("a refused delete closes the dialog and shows the backend's reason, not the generic conflict advice", async () => {
+    const user = userEvent.setup();
+    routes({
+      "DELETE /api/v1/servers/s1": () => ({ status: 409, json: { detail: "server is referenced by policy rules; remove those rules before deleting it" } }),
+    });
+    renderWithProviders(<ServersPage />, { route: "/servers" });
+    await user.click(await screen.findByRole("button", { name: "Delete github" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Delete server" }));
+    expect(await screen.findByText("Server is referenced by policy rules; remove those rules before deleting it.")).toBeTruthy();
+    expect(screen.getByText("Delete server “github” failed (HTTP 409)")).toBeTruthy();
+    expect(screen.queryByText(/duplicate name/)).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
 });

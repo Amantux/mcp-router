@@ -8,8 +8,13 @@
  *    data and must round-trip verbatim;
  *  - list endpoints tolerate a bare array or a {items,total,...} envelope.
  *
- * Errors: non-2xx and network failures throw ApiError carrying only the
- * status. The response body is deliberately never surfaced to the UI.
+ * Errors: non-2xx and network failures throw ApiError carrying the status.
+ * The response body is never surfaced to the UI, with one exception: a 409's
+ * `detail` string. Every backend 409 is a curated, typed-exception message that
+ * names the next step ("server is referenced by policy rules; remove those rules
+ * before deleting it"), so it replaces the generic conflict advice (HS-U-014).
+ * It is taken only from a JSON `{detail: "<string>"}` body, and only when it is
+ * one short line (see curatedConflict).
  */
 import type {
   FeedbackItem,
@@ -96,13 +101,57 @@ export class ApiError extends Error {
   readonly path: string;
   /** The credential the failed request was made as. */
   readonly identity: Identity;
-  constructor(status: number, path: string, identity: Identity = "admin") {
+  /** A 409's curated backend reason (curatedConflict), else undefined. Never set for other statuses. */
+  readonly conflict?: string;
+  constructor(status: number, path: string, identity: Identity = "admin", conflict?: string) {
     super(status === 0 ? `Network error calling ${path}` : `HTTP ${status} from ${path}`);
     this.name = "ApiError";
     this.status = status;
     this.path = path;
     this.identity = identity;
+    if (status === 409 && conflict) this.conflict = conflict;
   }
+}
+
+/** Longest 409 detail shown verbatim; anything longer is not a curated one-liner. */
+const MAX_CONFLICT = 300;
+
+/**
+ * The backend's curated 409 reason, from a JSON `{detail: "<string>"}` body: one line,
+ * no control characters, at most MAX_CONFLICT chars. Anything else (non-JSON, a
+ * structured detail, a long or multi-line string) yields undefined and the generic
+ * advice is shown instead.
+ */
+export function curatedConflict(text: string): string | undefined {
+  let detail: unknown;
+  try {
+    detail = (JSON.parse(text) as { detail?: unknown } | null)?.detail;
+  } catch {
+    return undefined;
+  }
+  if (typeof detail !== "string") return undefined;
+  const d = detail.trim();
+  // eslint-disable-next-line no-control-regex -- rejecting control characters is the point
+  if (!d || d.length > MAX_CONFLICT || /[\u0000-\u001f\u007f]/.test(d)) return undefined;
+  return d;
+}
+
+/** "server is referenced…; remove those rules" -> "Server is referenced…; remove those rules." */
+function asSentence(s: string): string {
+  const t = s.charAt(0).toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/** The ApiError for a non-2xx response; reads the body only for a 409's curated reason. */
+async function failure(res: Response, path: string, presented: Identity): Promise<ApiError> {
+  if (res.status !== 409) return new ApiError(res.status, path, presented);
+  let text = "";
+  try {
+    text = await res.text();
+  } catch {
+    /* unreadable body: generic advice */
+  }
+  return new ApiError(409, path, presented, curatedConflict(text));
 }
 
 /**
@@ -134,7 +183,13 @@ export function describeError(err: unknown): { status: string; advice: string } 
     return { status, advice: "The backend refused these credentials. Open Connect (gear icon) and paste the admin token, then retry." };
   if (s === 404)
     return { status, advice: "The item no longer exists, or this backend doesn't provide the endpoint yet. Refresh and retry." };
-  if (s === 409) return { status, advice: "It conflicts with existing data (for example a duplicate name). Change the input and retry." };
+  if (s === 409)
+    return {
+      status,
+      advice: err.conflict
+        ? asSentence(err.conflict)
+        : "It conflicts with existing data (for example a duplicate name). Change the input and retry.",
+    };
   if (s === 400 || s === 422) return { status, advice: "The backend rejected the input. Check the fields and retry." };
   if (s === 429) return { status, advice: "Rate limit reached. Wait a moment, then retry." };
   if (s >= 500) return { status, advice: "The backend hit an internal error. Check the server logs, then retry." };
@@ -193,7 +248,7 @@ async function request<T>(method: string, path: string, opts: RequestOptions = {
     throw new ApiError(0, path, presented);
   }
   if (!opts.public) noteResponse(presented, res.status);
-  if (!res.ok) throw new ApiError(res.status, path, presented);
+  if (!res.ok) throw await failure(res, path, presented);
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   if (!text) return undefined as T;
@@ -748,7 +803,7 @@ async function requestRaw(path: string, query?: Record<string, QueryValue>, sign
     throw new ApiError(0, path, presented);
   }
   noteResponse(presented, res.status);
-  if (!res.ok) throw new ApiError(res.status, path, presented);
+  if (!res.ok) throw await failure(res, path, presented);
   return res;
 }
 // GET /skills/{id}/body -> JSON {id, body, bodyTokensEst}. Rendered as plain text only.

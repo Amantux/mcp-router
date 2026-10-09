@@ -41,12 +41,13 @@ export function ServersPage() {
     try {
       await deleteServer(srv.id);
       notify.success(`Deleted server “${srv.name}”`);
-      setConfirmDelete(null);
       servers.refresh();
     } catch (e) {
+      // The backend's refusal names the next step (HS-U-014); close the dialog so it is readable.
       notify.error(`Delete server “${srv.name}”`, e);
     } finally {
       setDeleting(false);
+      setConfirmDelete(null);
     }
   };
 

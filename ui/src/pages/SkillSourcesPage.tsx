@@ -189,12 +189,13 @@ export function SkillSourcesPage() {
     try {
       await deleteSkillSource(s.id);
       notify.success(`Deleted skill source “${s.name}”`);
-      setConfirmDelete(null);
       sources.refresh();
     } catch (e) {
+      // The backend's refusal is the message; close the dialog so it is readable (HS-U-014).
       notify.error(`Delete skill source “${s.name}”`, e);
     } finally {
       setDeleting(false);
+      setConfirmDelete(null);
     }
   };
 
