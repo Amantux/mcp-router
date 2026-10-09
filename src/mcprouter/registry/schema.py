@@ -1,6 +1,6 @@
 """Registry-owned DDL that models.py does not express (models.py is the shared
 contract and stays untouched). Idempotent; call once at startup after
-`init_db(engine)` — see docs/INTEGRATION_NOTES-registry.md.
+`init_db(engine)` — see docs/history/INTEGRATION_NOTES-registry.md.
 
 * `ix_tools_fts` — GIN expression index for keyword search over
   name (weight A) + description (B) + tags (C). The query in catalog.py is

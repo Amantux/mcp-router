@@ -6,7 +6,7 @@ acting on an accepted suggestion (e.g. disabling the non-preferred tool) is a
 separate, explicit admin action via POST /api/v1/tools/{id}/disable.
 
 The resolution (actor + justification) is appended to `rationale` because the
-model has no resolution columns yet (see INTEGRATION_NOTES-registry.md).
+model has no resolution columns yet (see docs/history/INTEGRATION_NOTES-registry.md).
 """
 
 from __future__ import annotations

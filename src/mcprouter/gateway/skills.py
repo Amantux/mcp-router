@@ -128,7 +128,7 @@ class SkillExposure:
         # A prompt name is exactly "<source>/<skill>". Skill names cannot hold
         # "/" (spec regex) but a source name could, which would make the split
         # ambiguous -- refuse rather than guess. Ingest should reject "/" in
-        # source names (integrator note in INTEGRATION_NOTES-wave4-exposure.md).
+        # source names (integrator note in docs/history/INTEGRATION_NOTES-wave4-exposure.md).
         if name_or_id.count("/") > 1:
             raise SkillAccessError("invalid_name", "Invalid skill name.")
         for sk, src in self.load_routed(routed_ids):

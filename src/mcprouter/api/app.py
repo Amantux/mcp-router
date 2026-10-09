@@ -16,7 +16,7 @@ through the one ExecutionManager; analytics routes + metrics collector are
 installed by install_analytics.
 
 Run ONE uvicorn worker: the rate limiter, exposure sets and MCP notification
-routing are in-process state (docs/INTEGRATION_NOTES-gateway.md).
+routing are in-process state (docs/history/INTEGRATION_NOTES-gateway.md).
 """
 
 from __future__ import annotations

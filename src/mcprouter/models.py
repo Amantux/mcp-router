@@ -262,7 +262,7 @@ class ServerCredentialRecord(Base):
     A separate table on purpose: secrets stay out of the `mcp_servers` row that
     every serializer touches. Values are never logged or returned by the API
     (only variable NAMES). Stored plaintext at rest — encryption-at-rest is an
-    open gap (docs/INTEGRATION_NOTES-integration.md).
+    open gap (docs/history/INTEGRATION_NOTES-integration.md).
     """
 
     __tablename__ = "mcp_server_credentials"

@@ -23,7 +23,7 @@ def make_engine(settings: Settings) -> Engine:
 # Columns adopted into models.py at integration (v0.1). `create_all` never
 # alters an existing table, so a database created before the adoption gets
 # them here — additive and idempotent. This is a bridge, NOT a migration
-# system: the Alembic baseline is deferred (docs/INTEGRATION_NOTES-integration.md).
+# system: the Alembic baseline is deferred (docs/history/INTEGRATION_NOTES-integration.md).
 # Literal statements (no identifier composition at all).
 _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE mcp_tools ADD COLUMN IF NOT EXISTS title TEXT",

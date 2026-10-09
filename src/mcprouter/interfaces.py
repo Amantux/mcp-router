@@ -132,7 +132,7 @@ class RouteResult:
 
 
 # ------------------------------------------- appended: inference workstream
-# Append-only addition (recorded in docs/INTEGRATION_NOTES-inference.md).
+# Append-only addition (recorded in docs/history/INTEGRATION_NOTES-inference.md).
 # Ranking N retrieval candidates is N Score questions over the same state.
 # Laya answers all of them in ONE forward pass (measured on CPU: 8 batched
 # ~352ms vs ~760ms sequential), so the batched form is part of the contract.
@@ -146,7 +146,7 @@ class BatchScoringDecisionModel(DecisionModel, Protocol):
 
 # ------------------------------------------------- routing scope (appended)
 # Added by the routing track (feat/routing); recorded in
-# docs/INTEGRATION_NOTES-routing.md. Append-only: no existing signature moved.
+# docs/history/INTEGRATION_NOTES-routing.md. Append-only: no existing signature moved.
 @runtime_checkable
 class ScopeFilter(Protocol):
     """A caller's PRE-AUTHORIZED scope, resolved by the gateway before routing.

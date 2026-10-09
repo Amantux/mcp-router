@@ -3,7 +3,7 @@
 Wire shape is SPEC §9 verbatim (snake_case; scoping.md §10 makes §9
 canonical, overriding the general camelCase convention), plus `no_match`.
 
-Seams (recorded in docs/INTEGRATION_NOTES-routing.md):
+Seams (recorded in docs/history/INTEGRATION_NOTES-routing.md):
 
 * `install_routing(app, pipeline, scope_resolver=None)` — app.py is frozen for
   this track, so integration adds ONE line calling this.
@@ -339,7 +339,7 @@ def route(
 # ------------------------------------------------------------- simulation
 # Admin-only. camelCase on the wire (management/UI convention), unlike the
 # SPEC §9 /route response. Shape is a contract with the UI simulator:
-# docs/INTEGRATION_NOTES-wave2-budgets.md §4 — add fields, never rename.
+# docs/history/INTEGRATION_NOTES-wave2-budgets.md §4 — add fields, never rename.
 class SimulateBody(RouteBody):
     # Required here: the admin names the agent whose scope + budgets to use.
     agent_id: str = Field(min_length=1, max_length=120)

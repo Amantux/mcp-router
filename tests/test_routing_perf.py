@@ -9,7 +9,7 @@ overhead (SQL retrieval legs, fusion, pruning, persistence). Budget: p95 <
 The catalog is ANALYZEd after bulk seeding: a steady-state catalog has
 planner statistics (autovacuum). Without them the planner estimates ~4 rows
 and picks a plan ~7x slower on the vector leg — measured, see
-docs/INTEGRATION_NOTES-routing.md (registry should ANALYZE after bulk sync).
+docs/history/INTEGRATION_NOTES-routing.md (registry should ANALYZE after bulk sync).
 """
 
 from __future__ import annotations

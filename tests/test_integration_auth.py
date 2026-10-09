@@ -5,7 +5,7 @@ Every management endpoint sits behind the gateway's ONE admin dependency
 agent key is never an admin credential), the admin token -> through, and no
 admin token configured outside dev mode -> 403 (fail closed).
 
-Mutation evidence (docs/INTEGRATION_NOTES-integration.md): removing
+Mutation evidence (docs/history/INTEGRATION_NOTES-integration.md): removing
 `dependencies=[Depends(require_admin)]` from `routes_servers.router` makes
 `test_management_endpoints_reject_missing_and_agent_credentials[POST /api/v1/servers]`
 (and the other servers cases) fail.

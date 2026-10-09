@@ -1,6 +1,6 @@
 """GET /api/v1/executions — execution audit history (admin; camelCase wire).
 
-Shape reconciles the UI's guess (docs/INTEGRATION_NOTES-ui.md #17):
+Shape reconciles the UI's guess (docs/history/INTEGRATION_NOTES-ui.md #17):
 query `agentId, outcome, limit, offset` -> `{items, total, limit, offset}`.
 """
 

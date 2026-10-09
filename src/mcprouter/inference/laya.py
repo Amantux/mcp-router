@@ -1,7 +1,7 @@
 """Adapter: convaiinnovations/laya -> the DecisionModel protocol.
 
 Empirically established 2026-10-08 (model card + installed `laya==0.4.0`
-source + a CPU run; see docs/INTEGRATION_NOTES-inference.md):
+source + a CPU run; see docs/history/INTEGRATION_NOTES-inference.md):
 
 * Laya ships its OWN pip package (`pip install laya`, Apache-2.0). The runtime
   lives in the package; the Hub repo supplies only weights/config/tokenizer
