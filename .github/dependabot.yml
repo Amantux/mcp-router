@@ -1,0 +1,42 @@
+# D8 + repo-hygiene playbook: weekly; minor+patch grouped, majors alone.
+version: 2
+updates:
+  # `uv`, not `pip`: CI runs `uv lock --check`, so updates must rewrite
+  # uv.lock together with pyproject.toml (a pip-ecosystem PR would be red).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python:
+        update-types: ["minor", "patch"]
+    ignore:
+      # mcp majors have renamed SDK APIs before; adopt them deliberately.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      ui-npm:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      docker:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
