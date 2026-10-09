@@ -32,7 +32,7 @@ function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): 
   return embedded ? Promise.resolve(embedded) : getTool(id, sig);
 }
 import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
-import { EmptyState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -54,10 +54,10 @@ const useStyles = makeStyles({
   actions: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalS, flexWrap: "wrap" },
 });
 
-function ToolSide({ tool, label, preferred, kind }: { tool: MCPTool | SkillDetail | undefined; label: string; preferred: boolean; kind?: "tool" | "skill" }) {
+function ToolSide({ tool, failed, label, preferred, kind }: { tool: MCPTool | SkillDetail | undefined; failed?: boolean; label: string; preferred: boolean; kind?: "tool" | "skill" }) {
   const s = useStyles();
   const c = useCommonStyles();
-  if (!tool) return <div className={s.side}>Loading {label}…</div>;
+  if (!tool) return <div className={s.side}>{failed ? `${label} couldn't be loaded. It may have been removed; reload the page to retry.` : `Loading ${label}…`}</div>;
   if (kind === "skill" && "sourceId" in tool)
     return (
       <div className={preferred ? `${s.side} ${s.preferred}` : s.side} aria-label={`${label}: ${tool.name}`}>
@@ -232,8 +232,8 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
         <Body1>{sug.rationale || <span className={c.muted}>No rationale recorded.</span>}</Body1>
       </div>
       <div className={s.pair}>
-        <ToolSide tool={a.data} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} kind={kinds?.[0]} />
-        <ToolSide tool={b.data} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} kind={kinds?.[1]} />
+        <ToolSide tool={a.data} failed={a.failed} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} kind={kinds?.[0]} />
+        <ToolSide tool={b.data} failed={b.failed} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} kind={kinds?.[1]} />
       </div>
       <div className={s.actions}>
         <RadioGroup layout="horizontal" value={preferred} onChange={(_, d) => setPreferred(d.value)} aria-label="Preferred tool">
@@ -290,6 +290,8 @@ export function DuplicatesPage() {
       </MessageBar>
       {sugs.loading && !sugs.data ? (
         <LoadingRow label="Loading suggestions…" />
+      ) : sugs.failed && !sugs.data ? (
+        <ErrorState what="Duplicate suggestions" onRetry={sugs.reload} />
       ) : list.length === 0 && !sugs.failed ? (
         <div className={s.list}>
           <EmptyState

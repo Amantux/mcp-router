@@ -24,7 +24,7 @@ import {
 import { AddRegular, ArrowSyncRegular, BookRegular } from "@fluentui/react-icons";
 import { createSkillSource, listSkillSources, setSkillSourceEnabled, syncSkillSource } from "../api/client";
 import type { SkillSource, SkillSourceKind, SyncReport } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -205,6 +205,8 @@ export function SkillSourcesPage() {
       />
       {sources.loading && !sources.data ? (
         <LoadingRow label="Loading skill sources…" />
+      ) : sources.failed && !sources.data ? (
+        <ErrorState what="Skill sources" onRetry={sources.reload} />
       ) : list.length === 0 && !sources.failed ? (
         <EmptyState
           icon={<BookRegular />}

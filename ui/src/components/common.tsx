@@ -76,6 +76,26 @@ export function EmptyState({ icon, title, body, action }: { icon?: ReactNode; ti
   );
 }
 
+/**
+ * A list or panel whose first load failed: says so and offers Retry, instead of an
+ * empty table or "No … yet" copy that would claim there is nothing. The cause is in
+ * the error notification (or the connection banner for refused credentials).
+ */
+export function ErrorState({ what, onRetry }: { what: string; onRetry: () => void }) {
+  const s = useEmptyStyles();
+  return (
+    <div className={s.box} role="alert" aria-label={`${what} couldn't be loaded`}>
+      <Body1 as="p" style={{ margin: 0, fontWeight: 600 }}>
+        {what} couldn't be loaded.
+      </Body1>
+      <Caption1 as="p" style={{ margin: 0, maxWidth: 520 }}>
+        The notification or the connection banner says why. Fix that, then retry.
+      </Caption1>
+      <Button onClick={onRetry}>Retry</Button>
+    </div>
+  );
+}
+
 export function LoadingRow({ label }: { label: string }) {
   return <Spinner size="tiny" label={label} labelPosition="after" style={{ justifyContent: "flex-start", padding: 8 }} />;
 }

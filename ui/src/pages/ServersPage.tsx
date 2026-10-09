@@ -14,7 +14,7 @@ import {
 import { AddRegular, ArrowSyncRegular, ServerRegular } from "@fluentui/react-icons";
 import { listServers, refreshServer, setServerEnabled } from "../api/client";
 import type { MCPServer } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtInt, fmtTime, LoadingRow, PageHeader, StatusBadge, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, StatusBadge, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 import { RegisterServerDialog } from "./RegisterServerDialog";
@@ -79,6 +79,8 @@ export function ServersPage() {
       />
       {servers.loading && !servers.data ? (
         <LoadingRow label="Loading servers…" />
+      ) : servers.failed && !servers.data ? (
+        <ErrorState what="Servers" onRetry={servers.reload} />
       ) : list.length === 0 && !servers.failed ? (
         <EmptyState
           icon={<ServerRegular />}

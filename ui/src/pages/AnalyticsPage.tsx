@@ -32,7 +32,7 @@ import {
   WindowPicker,
 } from "../components/analytics";
 import type { Estimate } from "../components/analytics";
-import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { ToolDetailDrawer } from "./ToolDetailDrawer";
 import { SkillDrawer } from "./SkillsPage";
@@ -208,7 +208,7 @@ export function AnalyticsPage() {
     return (
       <>
         {header}
-        <Caption1>Analytics couldn't be loaded.</Caption1>
+        <ErrorState what="Analytics" onRetry={overview.reload} />
       </>
     );
   if (o.routing.decisions === 0)
@@ -336,6 +336,8 @@ export function AnalyticsPage() {
         </div>
         {tools.loading && !tools.data ? (
           <LoadingRow label="Loading tool funnels…" />
+        ) : tools.failed && !tools.data ? (
+          <ErrorState what="Tool funnels" onRetry={tools.reload} />
         ) : (tools.data?.items.length ?? 0) === 0 ? (
           <Caption1 className={c.muted}>No tool was surfaced in this window.</Caption1>
         ) : (

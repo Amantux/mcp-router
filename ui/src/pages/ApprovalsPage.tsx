@@ -15,7 +15,7 @@ import {
 import { CheckmarkCircleRegular } from "@fluentui/react-icons";
 import { approveApproval, denyApproval, listApprovals } from "../api/client";
 import type { Approval, ApprovalStatus } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtTime, JsonBlock, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtTime, JsonBlock, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
@@ -75,6 +75,8 @@ export function ApprovalsPage() {
       </div>
       {list.loading && !list.data ? (
         <LoadingRow label="Loading approvals…" />
+      ) : list.failed && !list.data ? (
+        <ErrorState what="Approvals" onRetry={list.reload} />
       ) : items.length === 0 && !list.failed ? (
         <EmptyState
           icon={<CheckmarkCircleRegular />}

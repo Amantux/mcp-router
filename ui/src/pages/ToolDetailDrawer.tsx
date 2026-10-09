@@ -158,16 +158,25 @@ export function ToolFunnelPanel({ toolId, kind = "tool" }: { toolId: string; kin
 }
 
 export function ToolDetailDrawer({ toolId, onClose, onChanged }: { toolId: string | null; onClose: () => void; onChanged: (t: MCPTool) => void }) {
+  return (
+    <OverlayDrawer open={toolId !== null} position="end" size="large" onOpenChange={(_, d) => !d.open && onClose()}>
+      {/* Keyed on the id: a different tool never shows the previous one's data or tab. */}
+      {toolId !== null && <ToolDetailContent key={toolId} toolId={toolId} onClose={onClose} onChanged={onChanged} />}
+    </OverlayDrawer>
+  );
+}
+
+function ToolDetailContent({ toolId, onClose, onChanged }: { toolId: string; onClose: () => void; onChanged: (t: MCPTool) => void }) {
   const s = useStyles();
   const c = useCommonStyles();
-  const detail = useLoader("Load tool details", (sig) => (toolId ? getTool(toolId, sig) : Promise.resolve(undefined)), [toolId]);
-  const t = toolId ? detail.data : undefined;
+  const detail = useLoader("Load tool details", (sig) => getTool(toolId, sig), [toolId]);
+  const t = detail.data;
   const calls = t?.callCount ?? 0;
   const [tab, setTab] = useState<"details" | "funnel">("details");
   const errRate = calls > 0 ? `${(((t?.errorCount ?? 0) / calls) * 100).toFixed(1)}%` : "—";
 
   return (
-    <OverlayDrawer open={toolId !== null} position="end" size="large" onOpenChange={(_, d) => !d.open && onClose()}>
+    <>
       <DrawerHeader>
         <DrawerHeaderTitle action={<Button appearance="subtle" aria-label="Close" icon={<DismissRegular />} onClick={onClose} />}>
           {t ? t.name : "Tool"}
@@ -247,6 +256,6 @@ export function ToolDetailDrawer({ toolId, onClose, onChanged }: { toolId: strin
           </>
         )}
       </DrawerBody>
-    </OverlayDrawer>
+    </>
   );
 }

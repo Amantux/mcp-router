@@ -24,7 +24,7 @@ import { Link, useSearchParams } from "react-router";
 import { activateSkill, ApiError, executeTool, getSkill, listSkills, getApproval, getMe, getTool, isAbort, listPrincipals, listServers, listTools } from "../api/client";
 import { useAuth } from "../api/auth";
 import type { Approval, ExecuteResult, SkillActivation, SkillDetail, JsonObject, MCPTool } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
@@ -309,6 +309,66 @@ export function ExecutionOutcomeView({
 
 type Mode = "form" | "json";
 
+/**
+ * Who a playground run goes as. An admin-only session must name the agent it acts
+ * for (the backend refuses admin runs with no agent), so it gets a picker.
+ */
+function useRunAs() {
+  const auth = useAuth();
+  const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
+  const [runAs, setRunAs] = useState("");
+  const [agents, setAgents] = useState<string[] | null>(null);
+  const [agentsFailed, setAgentsFailed] = useState(false);
+  useEffect(() => {
+    if (!adminOnly) return;
+    const ctl = new AbortController();
+    listPrincipals(ctl.signal)
+      .then((ps) => {
+        setAgents(ps.filter((p) => p.enabled).map((p) => p.agentId));
+        setAgentsFailed(false);
+      })
+      .catch((e) => {
+        if (isAbort(e)) return;
+        setAgents([]);
+        setAgentsFailed(true);
+      });
+    return () => ctl.abort();
+  }, [adminOnly]);
+  const who = auth.hasAgentKey
+    ? auth.agentId
+      ? `agent “${auth.agentId}”`
+      : "the agent key"
+    : auth.hasAdminToken
+      ? runAs
+        ? `agent “${runAs}” (admin-initiated)`
+        : "the admin token"
+      : "dev mode";
+  return { adminOnly, runAs, setRunAs, agents, agentsFailed, who };
+}
+
+function RunAsPicker({ ra, label, hint, testId }: { ra: ReturnType<typeof useRunAs>; label: string; hint: string; testId: string }) {
+  // An empty picker with Run disabled and no reason is a dead end: say why.
+  const problem = ra.agentsFailed ? (
+    "The agent list couldn't be loaded, so there is nobody to run as. Check the connection, then reload the page."
+  ) : ra.agents && ra.agents.length === 0 ? (
+    <>
+      No enabled agents to run as. Create one (or enable one) on the <Link to="/policy">Policy</Link> page.
+    </>
+  ) : undefined;
+  return (
+    <Field label={label} hint={hint} validationState={problem ? (ra.agentsFailed ? "error" : "warning") : "none"} validationMessage={problem && <span data-testid="run-as-hint">{problem}</span>}>
+      <Select data-testid={testId} value={ra.runAs} onChange={(_, d) => ra.setRunAs(d.value)}>
+        <option value="">Choose an agent…</option>
+        {(ra.agents ?? []).map((a) => (
+          <option key={a} value={a}>
+            {a}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  );
+}
+
 function ToolRunner({ tool }: { tool: MCPTool }) {
   const s = useStyles();
   const c = useCommonStyles();
@@ -323,19 +383,8 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
   const [jsonError, setJsonError] = useState<string>();
   // Admin-only session: the backend requires an agentId to impersonate, so the
   // run button stays disabled until one is picked (see routes_execute.py).
-  const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
-  const [runAs, setRunAs] = useState("");
-  const [agents, setAgents] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (!adminOnly) return;
-    const ctl = new AbortController();
-    listPrincipals(ctl.signal)
-      .then((ps) => setAgents(ps.filter((p) => p.enabled).map((p) => p.agentId)))
-      .catch((e) => {
-        if (!isAbort(e)) setAgents([]);
-      });
-    return () => ctl.abort();
-  }, [adminOnly]);
+  const ra = useRunAs();
+  const { adminOnly, runAs, who } = ra;
   const [clientErrors, setClientErrors] = useState<FieldErrors>({});
   const [serverErrors, setServerErrors] = useState<FieldErrors>({});
   const [generalErrors, setGeneralErrors] = useState<string[]>([]);
@@ -424,15 +473,6 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
   };
 
   const errors = { ...clientErrors, ...serverErrors };
-  const who = auth.hasAgentKey
-    ? auth.agentId
-      ? `agent “${auth.agentId}”`
-      : "the agent key"
-    : auth.hasAdminToken
-      ? runAs
-        ? `agent “${runAs}” (admin-initiated)`
-        : "the admin token"
-      : "dev mode";
 
   return (
     <section className={s.runner} aria-label={`Run ${tool.name}`}>
@@ -449,16 +489,7 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
       {tool.description && <Body1>{tool.description}</Body1>}
       <RunAsLine impersonating={adminOnly && runAs ? runAs : undefined} />
       {adminOnly && (
-        <Field label="Run as agent" hint="Admin-initiated runs execute under the chosen agent's own policy and are audited as impersonation.">
-          <Select data-testid="run-as-picker" value={runAs} onChange={(_, d) => setRunAs(d.value)}>
-            <option value="">Choose an agent…</option>
-            {(agents ?? []).map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        <RunAsPicker ra={ra} testId="run-as-picker" label="Run as agent" hint="Admin-initiated runs execute under the chosen agent's own policy and are audited as impersonation." />
       )}
       {!compiled.ok && (
         <MessageBar intent="info" data-testid="schema-raw-only">
@@ -554,34 +585,12 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
   const notify = useNotify();
   const auth = useAuth();
   // Same Run-as rules as tools: an admin-only session must name the agent it activates as.
-  const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
-  const [runAs, setRunAs] = useState("");
-  const [agents, setAgents] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (!adminOnly) return;
-    const ctl = new AbortController();
-    listPrincipals(ctl.signal)
-      .then((ps) =>
-        setAgents(ps.filter((p) => p.enabled).map((p) => p.agentId)),
-      )
-      .catch((e) => {
-        if (!isAbort(e)) setAgents([]);
-      });
-    return () => ctl.abort();
-  }, [adminOnly]);
+  const ra = useRunAs();
+  const { adminOnly, runAs, who } = ra;
   const [confirming, setConfirming] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<SkillActivation | null>(null);
   const [failure, setFailure] = useState<ExecuteResult | null>(null);
-  const who = auth.hasAgentKey
-    ? auth.agentId
-      ? `agent “${auth.agentId}”`
-      : "the agent key"
-    : auth.hasAdminToken
-      ? runAs
-        ? `agent “${runAs}” (admin-initiated)`
-        : "the admin token"
-      : "dev mode";
 
   const activate = async () => {
     setConfirming(false);
@@ -614,23 +623,12 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
       {skill.description && <Body1>{skill.description}</Body1>}
       <RunAsLine impersonating={adminOnly && runAs ? runAs : undefined} />
       {adminOnly && (
-        <Field
+        <RunAsPicker
+          ra={ra}
+          testId="skill-run-as-picker"
           label="Activate as agent"
           hint="Admin-initiated activations run under the chosen agent's own policy and are audited as impersonation."
-        >
-          <Select
-            data-testid="skill-run-as-picker"
-            value={runAs}
-            onChange={(_, d) => setRunAs(d.value)}
-          >
-            <option value="">Choose an agent…</option>
-            {(agents ?? []).map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        />
       )}
       <div>
         <Button
@@ -744,6 +742,8 @@ function SkillsPlayground() {
         </Field>
         {skills.loading && !skills.data ? (
           <LoadingRow label="Loading skills…" />
+        ) : skills.failed && !skills.data ? (
+          <ErrorState what="Skills" onRetry={skills.reload} />
         ) : items.length === 0 ? (
           <Caption1>
             {q
@@ -851,6 +851,8 @@ export function PlaygroundPage() {
           </Field>
           {tools.loading && !tools.data ? (
             <LoadingRow label="Loading tools…" />
+          ) : tools.failed && !tools.data ? (
+            <ErrorState what="Tools" onRetry={tools.reload} />
           ) : items.length === 0 ? (
             <Caption1>{q || serverId ? "No enabled tools match." : "No enabled tools yet. Register a server first."}</Caption1>
           ) : (

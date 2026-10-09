@@ -29,7 +29,7 @@ import {
 import { AddRegular, CopyRegular, ShieldKeyholeRegular } from "@fluentui/react-icons";
 import { createPrincipal, createRule, listPrincipals, listRules, listServers } from "../api/client";
 import { CEILINGS, type CreatedPrincipal, type OperationCeiling } from "../api/types";
-import { EmptyState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 
@@ -214,6 +214,8 @@ export function PolicyPage() {
       </div>
       {principals.loading && !principals.data ? (
         <LoadingRow label="Loading principals…" />
+      ) : principals.failed && !principals.data ? (
+        <ErrorState what="Principals" onRetry={principals.reload} />
       ) : plist.length === 0 && !principals.failed ? (
         <EmptyState
           icon={<ShieldKeyholeRegular />}
@@ -306,6 +308,8 @@ export function PolicyPage() {
       </form>
       {rules.loading && !rules.data ? (
         <LoadingRow label="Loading rules…" />
+      ) : rules.failed && !rules.data ? (
+        <ErrorState what="Policy rules" onRetry={rules.reload} />
       ) : rlist.length === 0 && !rules.failed ? (
         <Caption1>No allow rules — every agent is currently denied all tools.</Caption1>
       ) : (
