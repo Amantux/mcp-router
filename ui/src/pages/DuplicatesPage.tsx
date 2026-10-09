@@ -22,8 +22,16 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { BranchForkRegular } from "@fluentui/react-icons";
-import { acceptDedup, dismissDedup, getTool, listDedupSuggestions, runDedupScan } from "../api/client";
-import type { DuplicateSuggestion, MCPTool } from "../api/types";
+import { acceptDedup, dismissDedup, getSkill, getTool, listDedupSuggestions, runDedupScan } from "../api/client";
+
+// CONTRACT: wave-4 dedup suggestions may reference a skill as "skill:<id>" in toolAId/toolBId (no S2 notes yet).
+const SKILL_PREFIX = "skill:";
+const isSkillRef = (id: string) => id.startsWith(SKILL_PREFIX);
+function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): Promise<MCPTool | SkillDetail> {
+  if (isSkillRef(id)) return getSkill(id.slice(SKILL_PREFIX.length), sig);
+  return embedded ? Promise.resolve(embedded) : getTool(id, sig);
+}
+import type { DuplicateSuggestion, MCPTool, SkillDetail } from "../api/types";
 import { EmptyState, fmtInt, fmtMs, JsonBlock, LoadingRow, OperationBadge, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
@@ -46,14 +54,42 @@ const useStyles = makeStyles({
   actions: { display: "flex", alignItems: "center", gap: tokens.spacingHorizontalS, flexWrap: "wrap" },
 });
 
-function ToolSide({ tool, label, preferred }: { tool: MCPTool | undefined; label: string; preferred: boolean }) {
+function ToolSide({ tool, label, preferred, kind }: { tool: MCPTool | SkillDetail | undefined; label: string; preferred: boolean; kind?: "tool" | "skill" }) {
   const s = useStyles();
   const c = useCommonStyles();
   if (!tool) return <div className={s.side}>Loading {label}…</div>;
+  if (kind === "skill" && "sourceId" in tool)
+    return (
+      <div className={preferred ? `${s.side} ${s.preferred}` : s.side} aria-label={`${label}: ${tool.name}`}>
+        <div className={s.head}>
+          <Subtitle2>{tool.name}</Subtitle2>
+          <Badge appearance="outline" size="small">
+            skill
+          </Badge>
+          <OperationBadge op={tool.operation} />
+          {preferred && (
+            <Badge appearance="filled" color="brand" size="small">
+              suggested preferred
+            </Badge>
+          )}
+        </div>
+        <Caption1 className={c.muted}>{tool.sourceName ?? tool.sourceId}</Caption1>
+        <Body1>{tool.description || <span className={c.muted}>No description.</span>}</Body1>
+        <div className={s.stats}>
+          <Caption1>Body ~{fmtInt(tool.bodyTokensEst ?? null)} tokens</Caption1>
+        </div>
+      </div>
+    );
+  if ("sourceId" in tool) return null;
   return (
     <div className={preferred ? `${s.side} ${s.preferred}` : s.side} aria-label={`${label}: ${tool.name}`}>
       <div className={s.head}>
         <Subtitle2>{tool.name}</Subtitle2>
+        {kind && (
+          <Badge appearance="outline" size="small">
+            tool
+          </Badge>
+        )}
         <OperationBadge op={tool.operation} />
         {preferred && (
           <Badge appearance="filled" color="brand" size="small">
@@ -149,9 +185,12 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
   const s = useStyles();
   const c = useCommonStyles();
   const notify = useNotify();
-  const a = useLoader("Load duplicate tool", (sig) => (sug.toolA ? Promise.resolve(sug.toolA) : getTool(sug.toolAId, sig)), [sug.id]);
-  const b = useLoader("Load duplicate tool", (sig) => (sug.toolB ? Promise.resolve(sug.toolB) : getTool(sug.toolBId, sig)), [sug.id]);
+  const a = useLoader("Load duplicate tool", (sig) => loadSide(sug.toolAId, sug.toolA, sig), [sug.id]);
+  const b = useLoader("Load duplicate tool", (sig) => loadSide(sug.toolBId, sug.toolB, sig), [sug.id]);
   const [preferred, setPreferred] = useState(sug.preferredToolId ?? sug.toolAId);
+  // Kind badges appear only when a skill is involved, so tool↔tool pairs read as before.
+  const kinds: ["tool" | "skill", "tool" | "skill"] | undefined =
+    isSkillRef(sug.toolAId) || isSkillRef(sug.toolBId) ? [isSkillRef(sug.toolAId) ? "skill" : "tool", isSkillRef(sug.toolBId) ? "skill" : "tool"] : undefined;
   const [accepting, setAccepting] = useState(false);
   const [dismissOpen, setDismissOpen] = useState(false);
   const nameA = a.data?.name ?? "tool A";
@@ -192,8 +231,8 @@ export function PairCard({ sug, onResolved }: { sug: DuplicateSuggestion; onReso
         <Body1>{sug.rationale || <span className={c.muted}>No rationale recorded.</span>}</Body1>
       </div>
       <div className={s.pair}>
-        <ToolSide tool={a.data} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} />
-        <ToolSide tool={b.data} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} />
+        <ToolSide tool={a.data} label="Tool A" preferred={sug.preferredToolId === sug.toolAId} kind={kinds?.[0]} />
+        <ToolSide tool={b.data} label="Tool B" preferred={sug.preferredToolId === sug.toolBId} kind={kinds?.[1]} />
       </div>
       <div className={s.actions}>
         <RadioGroup layout="horizontal" value={preferred} onChange={(_, d) => setPreferred(d.value)} aria-label="Preferred tool">

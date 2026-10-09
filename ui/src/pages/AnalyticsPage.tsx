@@ -1,6 +1,8 @@
 import { useState } from "react";
 import {
+  Badge,
   Body1,
+  ToggleButton,
   Caption1,
   Field,
   makeStyles,
@@ -17,7 +19,7 @@ import {
 } from "@fluentui/react-components";
 import { DataBarVerticalRegular } from "@fluentui/react-icons";
 import { getAnalyticsOverview, getAnalyticsSuggestions, listAgentProfiles, listToolFunnels } from "../api/client";
-import type { AnalyticsWindow, ToolFunnelSort, WastedTool } from "../api/types";
+import type { AnalyticsKind, AnalyticsWindow, ToolFunnelSort, WastedTool } from "../api/types";
 import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
 import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
@@ -118,6 +120,11 @@ export function WastedExposure({
                 <TableRow key={w.toolId}>
                   <TableCell>
                     <ToolName id={w.toolId} name={w.toolName} onOpen={onOpen} />
+                    {w.kind && (
+                      <Badge appearance="tint" size="small" style={{ marginLeft: 4 }} color={w.kind === "skill" ? "brand" : "informative"}>
+                        {w.kind}
+                      </Badge>
+                    )}
                   </TableCell>
                   <TableCell>{w.serverName ?? "—"}</TableCell>
                   <TableCell className={c.num}>{fmtInt(w.surfaced)}</TableCell>
@@ -142,6 +149,7 @@ export function AnalyticsPage() {
   const [win, setWin] = useState<AnalyticsWindow>("7d");
   const [sort, setSort] = useState<ToolFunnelSort>("surfaced");
   const [offset, setOffset] = useState(0);
+  const [kind, setKind] = useState<AnalyticsKind>("all");
   const [openId, setOpenId] = useState<string | null>(null);
 
   const overview = useLoader("Load analytics overview", (sig) => getAnalyticsOverview(win, sig), [win]);
@@ -149,8 +157,8 @@ export function AnalyticsPage() {
   const agents = useLoader("Load agent analytics", (sig) => listAgentProfiles(win, sig), [win]);
   const tools = useLoader(
     "Load tool funnels",
-    (sig) => listToolFunnels({ window: win, sort, order: sort === "toolName" ? "asc" : "desc", limit: PAGE, offset }, sig),
-    [win, sort, offset],
+    (sig) => listToolFunnels({ window: win, sort, order: sort === "toolName" ? "asc" : "desc", limit: PAGE, offset, kind }, sig),
+    [win, sort, offset, kind],
   );
 
   const o = overview.data;
@@ -199,9 +207,17 @@ export function AnalyticsPage() {
             testId="card-savings"
             label="Context savings"
             value={fmtPct(e.savings)}
-            sub={`${fmtInt(e.tokensNotSent)} tokens not sent: ${fmtInt(e.exposedTokens)} exposed of ${fmtInt(e.catalogTokens)} in authorized catalogs, over ${fmtInt(e.servedDecisions)} served decisions (${fmtInt(e.unscoredDecisions)} unscored, ${fmtInt(e.noMatchDecisions)} no-match excluded). Estimate: ${e.estimator}.`}
+            sub={`${fmtInt(e.tokensNotSent)} tokens not sent: ${fmtInt(e.exposedTokens)} exposed of ${fmtInt(e.catalogTokens)} in authorized catalogs, over ${fmtInt(e.servedDecisions)} served decisions (${fmtInt(e.unscoredDecisions)} unscored, ${fmtInt(e.noMatchDecisions)} no-match excluded). Estimate: ${e.estimator}.${o.skills && o.skills.bodyTokensNotSent > 0 ? ` Plus ${fmtInt(o.skills.bodyTokensNotSent)} skill-body tokens not sent (bodies load only on activation).` : ""}`}
           />
         </div>
+        {o.skills && (
+          <StatCard
+            testId="card-skills"
+            label="Skill activation"
+            value={fmtPct(o.skills.activationRate)}
+            sub={`${fmtInt(o.skills.activated)} of ${fmtInt(o.skills.surfaced)} surfaced skills activated; ${fmtInt(o.skills.bodyTokensNotSent)} body tokens not sent`}
+          />
+        )}
         <StatCard testId="card-selection" label="Selection rate" value={fmtPct(o.funnel.selectionRate)} sub={`${fmtInt(o.funnel.selected)} of ${fmtInt(o.funnel.surfaced)} surfaced`} />
         <StatCard testId="card-nomatch" label="No-match rate" value={fmtPct(o.routing.noMatchRate)} sub={`${fmtInt(o.routing.noMatch)} of ${fmtInt(o.routing.decisions)} decisions`} />
         <StatCard testId="card-fallback" label="Fallback rate" value={fmtPct(o.routing.fallbackRate)} sub={`${fmtInt(o.routing.fallback)} heuristic rankings`} />
@@ -229,6 +245,21 @@ export function AnalyticsPage() {
       <section className={s.section} aria-label="Tools">
         <div style={{ display: "flex", alignItems: "flex-end", gap: 12 }}>
           <Subtitle2 as="h2">Tools</Subtitle2>
+          <div role="group" aria-label="Kind" style={{ display: "flex", gap: 4 }}>
+            {(["all", "tool", "skill"] as const).map((k) => (
+              <ToggleButton
+                key={k}
+                size="small"
+                checked={kind === k}
+                onClick={() => {
+                  setKind(k);
+                  setOffset(0);
+                }}
+              >
+                {k === "all" ? "All" : k === "tool" ? "Tools" : "Skills"}
+              </ToggleButton>
+            ))}
+          </div>
           <div style={{ flex: 1 }} />
           <Field label="Sort">
             <Select

@@ -139,6 +139,21 @@ export interface RouteRequest {
   agentId: string;
   maxTools: number;
   allowedServers?: string[];
+  /** S2d item 2: may only LOWER the principal/global skills cap (1..1000). */
+  maxSkills?: number;
+  /** S2d item 2: narrows the routed kinds; omitted = both. */
+  kinds?: RouteKind[];
+}
+
+export type RouteKind = "tool" | "skill";
+
+/** S2d item 2 (aligned): /route skills[{source, skill, score, bodyTokensEst}]; simulate adds skillId. */
+export interface RoutedSkill {
+  skillId?: string;
+  source: string;
+  skill: string;
+  score: number;
+  bodyTokensEst: number;
 }
 
 /** SPEC §9 tools:[{server, tool, score}]; interfaces.RoutedTool adds tool_id. */
@@ -161,6 +176,9 @@ export interface RouteResponse {
   // of /route; camelised by the client. null maxServersApplied = unlimited.
   maxToolsApplied?: number;
   maxServersApplied?: number | null;
+  /** S2d item 2: skills routed separately from tools (never mixed into tools[]). */
+  skills?: RoutedSkill[];
+  maxSkillsApplied?: number | null;
   cached?: boolean;
 }
 
@@ -333,7 +351,7 @@ export interface ApprovalDecision {
  * applied = min(requested ?? principal, principal, globalCap); null = no cap.
  */
 export interface BudgetClamp {
-  budget: "maxTools" | "maxServers" | string;
+  budget: "maxTools" | "maxServers" | "maxSkills" | string;
   requested: number | null;
   principal: number | null;
   globalCap: number | null;
@@ -349,6 +367,8 @@ export interface FilteredTool {
   serverName: string;
   toolName: string;
   reason: string;
+  /** S2d item 2: "tool" | "skill" on every diagnostics entry (absent on older backends). */
+  kind?: RouteKind;
   /** Pipeline stage that removed it ("policy", "budget", "maxServers", ...), if given. */
   stage?: string;
 }
@@ -359,6 +379,8 @@ export interface PipelineStage {
   stage: string;
   before: number;
   after: number;
+  /** Pruned entries counted per kind, when the stage lists them (S2d item 2). */
+  prunedByKind?: Partial<Record<RouteKind, number>>;
 }
 
 export interface SimulateRequest {
@@ -366,6 +388,8 @@ export interface SimulateRequest {
   query: string;
   maxTools?: number;
   maxServers?: number;
+  maxSkills?: number;
+  kinds?: RouteKind[];
 }
 
 // CONTRACT: POST /api/v1/route/simulate (admin) → RouteResponse fields plus
@@ -381,6 +405,8 @@ export interface SimulateResponse {
   latencyMs: number;
   maxToolsApplied: number | null;
   maxServersApplied: number | null;
+  skills: RoutedSkill[];
+  maxSkillsApplied: number | null;
   clamps: BudgetClamp[];
   candidates: number | null;
   stages: PipelineStage[];
@@ -457,10 +483,26 @@ export interface AnalyticsOverview {
   executions: ExecutionStats;
   positionCurve: RankPoint[];
   catalogDrift: Record<string, number>;
+  // CONTRACT (guessed — S2f analytics wire not landed; names from the wave-4 brief):
+  // overview.skills {surfaced, activated, activationRate, bodyTokensNotSent}. Absent on older backends.
+  skills?: SkillsOverview;
 }
+
+export interface SkillsOverview {
+  surfaced: number;
+  activated: number;
+  /** activated / surfaced, 0..1, null with no denominator. */
+  activationRate: number | null;
+  bodyTokensNotSent: number;
+}
+
+/** Analytics kind filter; "all" sends no ?kind=. */
+export type AnalyticsKind = "all" | "tool" | "skill";
 
 export interface ToolFunnel {
   toolId: string;
+  // CONTRACT (guessed, S2f): rows gain kind "tool" | "skill".
+  kind?: "tool" | "skill";
   /** null: the tool is no longer in the catalog. */
   toolName: string | null;
   serverName: string | null;
@@ -538,6 +580,8 @@ export interface WastedTool {
   selected: number;
   selectionRate: number | null;
   exposedTokens: number;
+  // CONTRACT (guessed, S2f): rows gain kind.
+  kind?: "tool" | "skill";
 }
 
 export interface StaleTool {
@@ -564,4 +608,96 @@ export interface AnalyticsSuggestions {
   wastedExposure: WastedTool[];
   staleTools: StaleTool[];
   neverRoutedServers: NeverRoutedServer[];
+}
+
+// ------------------------------------------------------------ wave 4: skills
+// CONTRACT: shapes guessed from docs/skills-plan.md; backend notes for wave 4 were not yet
+// published when this was written. Every field the UI does not strictly need is optional.
+export type SkillSourceKind = "directory" | "git";
+export interface SkillSource {
+  id: string;
+  name: string;
+  kind: SkillSourceKind;
+  location: string;
+  gitRef?: string | null;
+  enabled: boolean;
+  status?: string | null;
+  lastSyncedAt?: string | null;
+  lastCommit?: string | null;
+  skillCount?: number | null;
+}
+export interface CreateSkillSourceRequest {
+  name: string;
+  kind: SkillSourceKind;
+  location: string;
+  gitRef?: string;
+}
+export interface SyncSkipped {
+  path: string;
+  reason: string;
+}
+export interface SyncReport {
+  added: number;
+  changed: number;
+  removed: number;
+  skipped: SyncSkipped[];
+}
+/** Ingest flags the backend attaches; unknown strings are rendered verbatim. */
+export type SkillIngestFlag = "secret_like" | "body_truncated" | "oversize" | (string & {});
+export interface Skill {
+  id: string;
+  sourceId: string;
+  sourceName?: string | null;
+  name: string;
+  description: string;
+  operation: Operation;
+  domain?: string | null;
+  tags?: string[];
+  hasScripts?: boolean;
+  bodyTokensEst?: number | null;
+  version?: string | null;
+  enabled: boolean;
+  available?: boolean;
+  classificationReviewed?: boolean;
+  ingestFlags?: SkillIngestFlag[];
+  activationCount?: number | null;
+}
+export interface SkillResource {
+  path: string;
+  size: number;
+  sha256?: string;
+  kind: string;
+  oversize?: boolean;
+}
+export interface SkillVersion {
+  version?: string | null;
+  contentHash?: string | null;
+  createdAt?: string | null;
+}
+export interface SkillDetail extends Skill {
+  license?: string | null;
+  compatibility?: string | null;
+  metadata?: Record<string, unknown> | null;
+  allowedTools?: string[] | null;
+  resourceManifest?: SkillResource[];
+  versions?: SkillVersion[];
+}
+export interface SkillQuery {
+  q?: string;
+  domain?: string;
+  operation?: Operation | "";
+  sourceId?: string;
+  enabled?: boolean;
+  available?: boolean;
+  reviewed?: boolean;
+  hasScripts?: boolean;
+  limit: number;
+  offset: number;
+}
+
+/** POST /skills/{id}/activate result (S3 exposure notes, planned shape). `body` is inert text. */
+export interface SkillActivation {
+  body: string;
+  resources: { path: string; size: number; kind: string }[];
+  recordId: string | null;
 }

@@ -11,6 +11,7 @@ import {
   listServers,
   listTools,
   refreshServer,
+  normaliseSimulation,
   simulateRoute,
   snakeToCamel,
 } from "./client";
@@ -237,5 +238,54 @@ describe("refreshServer", () => {
     });
     const s = await refreshServer("s1");
     expect([s.id, s.toolCount]).toEqual(["s1", 12]);
+  });
+});
+
+describe("skills on /route and /route/simulate (S2d item 2)", () => {
+  it("camelises /route skills[] and max_skills_applied", async () => {
+    mockFetch({
+      "POST /api/v1/route": () => ({
+        json: {
+          request_id: "r1",
+          tools: [{ server: "docs", tool: "fill_pdf_form", score: 0.91 }],
+          skills: [{ source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }],
+          fallback_used: false, latency_ms: 12, no_match: false,
+          max_tools_applied: 5, max_servers_applied: null, max_skills_applied: 1,
+        },
+      }),
+    });
+    const r = await simulateRoute({ query: "pdf", agentId: "a", maxTools: 5, maxSkills: 1 });
+    expect(r.tools.map((t) => t.toolName)).toEqual(["fill_pdf_form"]);
+    expect(r.skills).toEqual([{ skillId: undefined, source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }]);
+    expect(r.maxSkillsApplied).toBe(1);
+  });
+
+  it("normalises simulate skills, kinds, per-kind pruning and the maxSkills clamp", () => {
+    const s = normaliseSimulation(
+      {
+        tools: [],
+        skills: [{ skillId: "s1", source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }],
+        maxSkillsApplied: 1,
+        diagnostics: {
+          candidatesConsidered: [{ kind: "tool" }, { kind: "skill" }],
+          stages: [{ stage: "maxSkills", before: 2, after: 1, pruned: [{ toolId: "s2", server: "src", tool: "pdf-helper", kind: "skill" }] }],
+          policyFiltered: [{ server: "slack", tool: "search", kind: "tool", reason: "no matching policy rule" }],
+          budgetClamps: [{ budget: "maxSkills", requested: 1, principal: 3, globalCap: 3, applied: 1, clampedBy: null }],
+        },
+      },
+      "sk",
+    );
+    expect(s.skills[0].skillId).toBe("s1");
+    expect(s.maxSkillsApplied).toBe(1);
+    expect(s.noMatch).toBe(false);
+    expect(s.stages[0].prunedByKind).toEqual({ skill: 1 });
+    expect(s.filtered[0].kind).toBe("tool");
+    expect(s.clamps.find((c) => c.budget === "maxSkills")?.applied).toBe(1);
+  });
+
+  it("defaults skills to [] on an older backend", () => {
+    const s = normaliseSimulation({ tools: [{ server: "a", tool: "b", score: 1 }] }, "x");
+    expect(s.skills).toEqual([]);
+    expect(s.maxSkillsApplied).toBeNull();
   });
 });

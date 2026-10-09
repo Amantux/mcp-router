@@ -12,6 +12,7 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
+  CreateSkillSourceRequest, Skill, SkillActivation, SkillDetail, SkillQuery, SkillSource, SyncReport,
   Approval,
   ApprovalDecision,
   ApprovalStatus,
@@ -22,6 +23,7 @@ import type {
   AnalyticsSuggestions,
   AnalyticsWindow,
   ToolAnalytics,
+  ToolFunnel,
   ToolFunnelPage,
   ToolFunnelSort,
   BudgetClamp,
@@ -47,6 +49,9 @@ import type {
   RouteRequest,
   RouteResponse,
   RoutedTool,
+  RoutedSkill,
+  AnalyticsKind,
+  RouteKind,
   ToolDetail,
   ToolQuery,
   JsonObject,
@@ -335,11 +340,24 @@ function normaliseRoutedTool(raw: Record<string, unknown>): RoutedTool {
   };
 }
 
+/** S2d item 2 (aligned): {source, skill, score, bodyTokensEst} (+ skillId on simulate). */
+export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
+  return {
+    skillId: (raw.skillId as string | undefined) ?? undefined,
+    source: String(raw.source ?? raw.sourceName ?? ""),
+    skill: String(raw.skill ?? raw.name ?? ""),
+    score: Number(raw.score ?? 0),
+    bodyTokensEst: Number(raw.bodyTokensEst ?? 0),
+  };
+}
+
 // CONTRACT: no auth header is sent; the simulator assumes the dev/admin API is
 // reachable without an agent key (or that the backend authorises the UI separately).
 export async function simulateRoute(body: RouteRequest): Promise<RouteResponse> {
   const raw = await request<RouteResponse & { tools: Record<string, unknown>[] }>("POST", `${API_BASE}/route`, { body });
-  return { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
+  const out: RouteResponse = { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
+  if (Array.isArray(raw.skills)) out.skills = (raw.skills as unknown as Record<string, unknown>[]).map(normaliseRoutedSkill);
+  return out;
 }
 
 // ------------------------------------------------------------ models/health
@@ -529,7 +547,14 @@ function normaliseFiltered(raw: Loose): FilteredTool {
     toolName: String(raw.toolName ?? raw.tool ?? raw.name ?? ""),
     reason: String(raw.reason ?? raw.detail ?? "filtered"),
     stage: (raw.stage as string | undefined) ?? undefined,
+    kind: raw.kind === "skill" || raw.kind === "tool" ? raw.kind : undefined,
   };
+}
+
+function countKinds(entries: Loose[]): Partial<Record<RouteKind, number>> | undefined {
+  const out: Partial<Record<RouteKind, number>> = {};
+  for (const e of entries) if (e.kind === "tool" || e.kind === "skill") out[e.kind] = (out[e.kind] ?? 0) + 1;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Tolerant mapping of the simulate payload (diagnostics may be top-level or nested). */
@@ -542,6 +567,7 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     stage: String(st.stage ?? st.name ?? "stage"),
     before: Number(st.before ?? 0),
     after: Number(st.after ?? 0),
+    prunedByKind: countKinds(arr(st.pruned)),
   }));
   // Backend (routes_route.DiagnosticsOut): diagnostics.budgetClamps[] and
   // diagnostics.candidatesConsidered[] (a list; the lens shows its length).
@@ -552,10 +578,12 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     agentId: String(raw.agentId ?? agentId),
     tools,
     fallbackUsed: raw.fallbackUsed === true,
-    noMatch: raw.noMatch === true || tools.length === 0,
+    noMatch: raw.noMatch === true || (tools.length === 0 && arr(raw.skills).length === 0),
     latencyMs: Number(raw.latencyMs ?? 0),
     maxToolsApplied: numOrNull(raw.maxToolsApplied),
     maxServersApplied: numOrNull(raw.maxServersApplied),
+    skills: arr(raw.skills).map(normaliseRoutedSkill),
+    maxSkillsApplied: numOrNull(raw.maxSkillsApplied),
     clamps: clamps.map((c) => ({
       budget: String(c.budget),
       requested: numOrNull(c.requested),
@@ -589,14 +617,18 @@ export function getAnalyticsOverview(window: AnalyticsWindow, signal?: AbortSign
 }
 
 export async function listToolFunnels(
-  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number },
+  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number; kind?: AnalyticsKind },
   signal?: AbortSignal,
 ): Promise<ToolFunnelPage> {
   const raw = await request<ToolFunnelPage>("GET", `${ANALYTICS}/tools`, {
     signal,
-    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset },
+    // CONTRACT (guessed, S2f): GET /analytics/tools?kind=tool|skill; omitted = all kinds.
+    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset, kind: q.kind && q.kind !== "all" ? q.kind : undefined },
   });
-  return { ...raw, ...toPage(raw, q.limit, q.offset) };
+  const page: ToolFunnelPage = { ...raw, ...toPage<ToolFunnel>(raw, q.limit, q.offset) };
+  // Client-side fallback for a backend that ignores ?kind=: rows without a kind count as tools.
+  if (q.kind && q.kind !== "all") page.items = page.items.filter((r) => (r.kind ?? "tool") === q.kind);
+  return page;
 }
 
 export function getToolAnalytics(toolId: string, window: AnalyticsWindow, signal?: AbortSignal): Promise<ToolAnalytics> {
@@ -610,4 +642,67 @@ export async function listAgentProfiles(window: AnalyticsWindow, signal?: AbortS
 /** Wasted exposure + staleness; thresholds left at the backend defaults. */
 export function getAnalyticsSuggestions(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsSuggestions> {
   return request("GET", `${ANALYTICS}/suggestions`, { signal, query: { window } });
+}
+
+// ------------------------------------------------------------ wave 4: skills
+// CONTRACT: REST surface per docs/skills-plan.md (no backend integration notes yet).
+
+export async function listSkillSources(signal?: AbortSignal): Promise<SkillSource[]> {
+  return toList<SkillSource>(await request("GET", `${API_BASE}/skill-sources`, { signal }));
+}
+export function createSkillSource(body: CreateSkillSourceRequest): Promise<SkillSource> {
+  return request("POST", `${API_BASE}/skill-sources`, { body });
+}
+// CONTRACT: POST /skill-sources/{id}/sync -> {added, changed, removed, skipped[{path, reason}]}.
+export async function syncSkillSource(id: string): Promise<SyncReport> {
+  const r = (await request<Partial<SyncReport>>("POST", `${API_BASE}/skill-sources/${encodeURIComponent(id)}/sync`)) ?? {};
+  return { added: r.added ?? 0, changed: r.changed ?? 0, removed: r.removed ?? 0, skipped: r.skipped ?? [] };
+}
+// CONTRACT: PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
+export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
+  return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
+}
+// CONTRACT: query params q, domain, operation, sourceId, enabled, available, reviewed, hasScripts, limit, offset.
+export async function listSkills(q: SkillQuery, signal?: AbortSignal): Promise<Page<Skill>> {
+  const raw = await request<unknown>("GET", `${API_BASE}/skills`, {
+    signal,
+    query: { q: q.q, domain: q.domain, operation: q.operation, sourceId: q.sourceId, enabled: q.enabled, available: q.available, reviewed: q.reviewed, hasScripts: q.hasScripts, limit: q.limit, offset: q.offset },
+  });
+  return toPage<Skill>(raw, q.limit, q.offset);
+}
+export function getSkill(id: string, signal?: AbortSignal): Promise<SkillDetail> {
+  return request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}`, { signal });
+}
+
+/** Non-JSON GET (text body, zip bundle): same credential/headers/error rules as request(). */
+async function requestRaw(path: string, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<Response> {
+  const presented: Identity = "admin";
+  let res: Response;
+  try {
+    res = await fetch(buildUrl(path, query), { method: "GET", headers: buildHeaders(false, "admin"), credentials: "omit", signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError(0, path, presented);
+  }
+  noteResponse(presented, res.status);
+  if (!res.ok) throw new ApiError(res.status, path, presented);
+  return res;
+}
+// CONTRACT: GET /skills/{id}/body -> text/plain (or text/markdown). Rendered as plain text only.
+export async function getSkillBody(id: string, signal?: AbortSignal): Promise<string> {
+  return (await requestRaw(`${API_BASE}/skills/${encodeURIComponent(id)}/body`, undefined, signal)).text();
+}
+// CONTRACT: GET /skills/bundle?agentId= -> application/zip.
+export async function downloadSkillBundle(agentId: string): Promise<Blob> {
+  return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
+}
+
+// CONTRACT: aligned with S3 INTEGRATION_NOTES-wave4-exposure.md (planned, not yet verified):
+// POST /skills/{id}/activate {agentId?, routeRequestId?} -> {body, resources[{path,size,kind}], recordId};
+// 403 denied, 404 not routed, 429 rate_limited. agentId is required for admin-initiated activation.
+export async function activateSkill(id: string, opts: { agentId?: string } = {}, signal?: AbortSignal): Promise<SkillActivation> {
+  const body: JsonObject = {};
+  if (opts.agentId) body.agentId = opts.agentId;
+  const raw = await request<Partial<SkillActivation>>("POST", `${API_BASE}/skills/${encodeURIComponent(id)}/activate`, { body, signal, as: "agent" });
+  return { body: typeof raw?.body === "string" ? raw.body : "", resources: raw?.resources ?? [], recordId: raw?.recordId ?? null };
 }
