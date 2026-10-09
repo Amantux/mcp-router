@@ -18,8 +18,11 @@ the linked page if a flag gets rejected.
 ```bash
 export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
 export MCPR_AGENT_KEYS="copilot:$(openssl rand -hex 24),claude:$(openssl rand -hex 24)"
-docker compose up -d            # db (pgvector, host :5434) + api (:8400)
+docker compose up -d            # db (pgvector, internal only) + api (:8400)
 ```
+
+Full container guide (env table, inference/GPU flavors, upgrades, verified
+smoke transcript): [docs/deploy.md](deploy.md).
 
 **Bare metal** (same commands as the [README Quickstart](../README.md#quickstart)):
 
