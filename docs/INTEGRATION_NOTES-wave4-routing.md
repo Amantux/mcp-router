@@ -76,3 +76,34 @@ add a `kind` column and keep ids bare (bigger, touches every reader).
 Not done: dedup skill pairs/cross-kind + review kindA/kindB; analytics funnel/
 economy/profiles/`kind` filter/overview `skills`; 20 skill + 10 mixed synthetic
 cases + skills fixture in eval/synthetic_catalog.py.
+
+## S2g — skills eval cases (`wave4/skills-eval`)
+
+- **Fixture** (`eval/synthetic_catalog.py`, appended): `SKILLS` (15 skills,
+  sources `team-skills` + `community-skills`, all five tool domains),
+  `NEAR_DUPLICATE_SKILLS` (pdf-fill ~ pdf-form-filler, pr-review ~
+  pr-reviewer), two execute-class skills (`deploy-service`,
+  `schema-migration`: has_scripts + `Bash`). `seed_synthetic_skills(s, embedder)`
+  inserts them with uuid5 ids and ground-truth classification marked
+  `classification_reviewed=True` / `classification_source="synthetic-ground-truth"`
+  (so `apply_skill_classification` never moves it).
+  `skill_classification_mismatches()` is asserted empty: `classify_skill`
+  agrees with every ground-truth operation today.
+- **Dataset** (`synthetic_v1.jsonl`, appended; tool cases untouched): 22
+  skill-only cases (`skill_direct` 12, `skill_ambiguous` 4 — each names a
+  near-dup pair, `skill_unauthorized` 6 — `readonly-agent` with write/execute
+  skills in `forbidden_skills`; 2 of those have `kinds: ["skill"]` and no
+  expected skill) + 12 `mixed` cases (ids `mx01..mx12`, expected tool AND
+  skill; `mx12` uses `allowed_servers: ["github"]`). Mixed cases also count in
+  the TOOL metrics' positive set, so tool baseline denominators grew 12.
+- **Scope note:** skill "allowed scope" is expressed through the agent's
+  scope (read ceiling), not `allowed_servers` — server scoping is MCP-server
+  only (see Policy above), and an unknown `allowed_servers` name errors the case.
+- **Metrics proof** (`tests/test_skills_eval_cases.py`): a fake route returning
+  mixed kinds over the new cases pins `skills.top1_accuracy`, `top5_recall`,
+  `unauthorized_skill_exposures`, `mixed.both_top1_rate` to exact values.
+- **INTEGRATOR TODO:** the LIVE skills baseline over the real pipeline is not
+  run here — S2d's skill-aware pipeline lives on another branch. After merge,
+  seed `seed_synthetic_catalog` + `seed_synthetic_skills` in
+  `test_synthetic_v1_baseline` and report the skills/mixed numbers; assert
+  `unauthorized_skill_exposures == 0` as a security invariant.
