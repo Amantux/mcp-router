@@ -125,6 +125,10 @@ import an existing Claude-Desktop-style `mcpServers` config via
 `POST /api/v1/servers/import`, then point your agent at `http://host:8400/mcp`
 with its API key.
 
+**Install into your coding agent:** see [docs/INSTALL.md](docs/INSTALL.md) for
+verified configs for Claude Code, GitHub Copilot CLI, Codex CLI, Cursor,
+VS Code and Gemini CLI, plus identity and policy setup and troubleshooting.
+
 Analytics rollups: set `MCPR_ANALYTICS_ROLLUP_ENABLED=true` to recompute
 the daily funnel rollups inside the app (a pass at startup, then every 24h),
 or leave it off and run `POST /api/v1/analytics/rollup` (admin token) from
