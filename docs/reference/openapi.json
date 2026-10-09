@@ -3175,19 +3175,31 @@
     "/healthz": {
       "get": {
         "summary": "Healthz",
+        "description": "Liveness (D14): the process serves and reaches its database.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Healthz Healthz Get"
-                }
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readyz",
+        "description": "Readiness (D14): database + inference engine. `degraded` = a\nrequested backend fell back (still serving, deterministically).",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

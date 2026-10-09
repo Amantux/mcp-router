@@ -74,7 +74,8 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 
 | method | path | auth | summary | description |
 |---|---|---|---|---|
-| `GET` | `/healthz` | PUBLIC | Healthz |  |
+| `GET` | `/healthz` | PUBLIC | Healthz | Liveness (D14): the process serves and reaches its database. |
+| `GET` | `/readyz` | PUBLIC | Readyz | Readiness (D14): database + inference engine. `degraded` = a |
 
 ## policy
 
@@ -152,4 +153,4 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/tools/{tool_id}/enable` | ADMIN | Enable Tool |  |
 | `POST` | `/api/v1/tools/{tool_id}/disable` | ADMIN | Disable Tool |  |
 
-62 routes.
+63 routes.

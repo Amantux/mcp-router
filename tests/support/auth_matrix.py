@@ -44,6 +44,7 @@ EITHER_ROUTES: dict[tuple[str, str], str] = {
 }
 PUBLIC_ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/healthz"): "liveness probe (D14)",
+    ("GET", "/readyz"): "readiness probe (D14, E1 P-108)",
 }
 
 _METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
