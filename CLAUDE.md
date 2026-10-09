@@ -45,3 +45,4 @@
 - camelCase on the wire, snake_case inside. UUID string ids. UTC aware datetimes.
 - Routers thin; logic in services. One shared loader/helper per concern.
 - Commit per logical change; Co-Authored-By + Claude-Session trailers.
+- Skills: one exposure path (`gateway/skills.py::SkillExposure`), visibility only from the latest routing decision, curated errors; conventions + residuals in `docs/skills.md`.
