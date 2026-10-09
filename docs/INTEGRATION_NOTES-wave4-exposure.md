@@ -44,3 +44,14 @@ Download the bundle, unzip into a temp dir, read `.mcp-router-bundle.json`
 (`{"skills": [names]}`). Remove from `~/.claude/skills` only the dirs listed in the
 *previous* marker (never user-authored skills), copy the new dirs in, and keep the
 new marker at `~/.claude/skills/.mcp-router-bundle.json`.
+
+## Reviewer verdict on 3cc6a40: CHANGES (no blockers) — OPEN, not yet fixed
+1. serve.py:97 `e["path"]` KeyError on malformed manifest entry (crashes bundle / raw 500); one invalid entry poisons the whole allowlist → build allowlist leniently, skip bad entries.
+2. serve.py:101-111 TOCTOU symlink/FIFO swap between realpath check and open → open with O_NOFOLLOW / openat on a dir fd, fstat the fd for regular-file + size checks.
+3. bundle.py has no gate → add `SkillExposure.bundle()` running resolve + _gate + audit per skill before returning bytes.
+4. serve.py `.html`/`.js` mime types → stored XSS if passed through as Content-Type; serve text/plain or attachment + nosniff.
+5. Resource reads bump activation_count → distinct outcome/flag for reads.
+6. load_routed is 2N queries per call → single query by name/id with selectinload(source).
+7. nit: case-insensitive dup names; skill named like MARKER.
+8. nit: nested metadata str() repr.
+Also: `routed_ids` must be derived server-side from the agent's own route, never taken from the client.
