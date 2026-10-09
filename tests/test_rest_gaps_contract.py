@@ -139,3 +139,16 @@ def test_openapi_property_casing(client: TestClient) -> None:
         op = spec["paths"][path][method]
         ok = op["responses"].get("200", {}).get("content", {}).get("application/json", {})
         assert "$ref" not in ok.get("schema", {}), f"{path} is typed now: move it to the schemas"
+
+
+def test_setup_page_shows_the_exact_first_principal_409_text() -> None:
+    """Integration (E2 x E4): the wizard renders the backend's curated 409
+    text verbatim, so the two copies of the sentence must stay identical."""
+    from pathlib import Path
+
+    from mcprouter.api.routes_policy import FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
+
+    page = Path(__file__).resolve().parents[1] / "ui/src/pages/setup/SetupPage.tsx"
+    m = re.search(r'export const FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = "([^"]*)";', page.read_text())
+    assert m is not None, "SetupPage.tsx no longer exports the constant"
+    assert m.group(1) == FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
