@@ -75,7 +75,7 @@ def run_cases(
                 case=case,
                 # Kinds are scored separately: tool metrics see only tools, so a
                 # skill ranked first does not count as a "wrong tool".
-                returned=[f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind != "skill"],
+                returned=[f"{t.server_name}/{t.tool_name}" for t in res.tools if t.kind == "tool"],
                 returned_skills=[t.tool_name for t in res.tools if t.kind == "skill"],
                 no_match=res.no_match,
                 fallback_used=res.fallback_used,

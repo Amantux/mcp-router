@@ -32,7 +32,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import cast
 
-from sqlalchemy import Table, bindparam, select, update
+from sqlalchemy import Table, bindparam, func, select, update
 from sqlalchemy.orm import Session
 
 from mcprouter.inference.engine import batched
@@ -134,9 +134,9 @@ SKILL_BODY_EMBED_CHARS = 1024
 
 
 def canonical_skill_text(name: str, description: str, body: str) -> str:
-    """Skill identity for embedding: "name: description" + the first 1KB of body.
+    """Skill identity for embedding: "name: description" + the first 1024 characters of body.
 
-    Body beyond 1KB is deliberately excluded: the opening section carries the
+    Body beyond that is deliberately excluded: the opening section carries the
     "when to use" signal, and long bodies would otherwise dominate the vector.
     """
     return f"{name}: {description.strip()}\n{body[:SKILL_BODY_EMBED_CHARS]}"
@@ -154,7 +154,8 @@ def embed_pending_skills(
             S.id,
             S.name,
             S.description,
-            S.body,
+            # Only the embedded prefix is loaded; bodies are unbounded Text.
+            func.substr(S.body, 1, SKILL_BODY_EMBED_CHARS).label("body"),
             S.embedding_backend,
             S.embedding_text_hash,
             S.updated_at,
