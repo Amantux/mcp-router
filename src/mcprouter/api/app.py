@@ -43,12 +43,13 @@ from mcprouter.api.routes_models import router as models_router
 from mcprouter.api.routes_policy import router as policy_router
 from mcprouter.api.routes_route import install_routing
 from mcprouter.api.routes_servers import router as servers_router
+from mcprouter.api.static import mount_ui
 from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.discovery import DiscoveryService, SyncLoop
 from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
-from mcprouter.gateway.server import build_gateway
+from mcprouter.gateway.server import build_gateway, gateway_transport_security
 from mcprouter.gateway.skills import SkillExposure
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
 from mcprouter.inference.engine import InferenceEngine
@@ -214,7 +215,11 @@ def create_app(
     app.include_router(routes_skills.agent_router)  # BEFORE router: /skills/bundle
     app.include_router(routes_skills.router)
     build_gateway(
-        app, manager=manager, route_fn=route_fn, skills=skill_exposure
+        app,
+        manager=manager,
+        route_fn=route_fn,
+        skills=skill_exposure,
+        transport_security=gateway_transport_security(settings.allowed_hosts),
     )  # /mcp; wraps the lifespan
 
     @app.get("/healthz")
@@ -226,6 +231,8 @@ def create_app(
         return {"status": "ok"}
 
     app.mount("/metrics", make_asgi_app())
+    # Dashboard + SPA fallback: registered LAST so API, /mcp and /metrics win.
+    mount_ui(app, settings.ui_dist)
     # Outermost: refuse oversized bodies before routing, auth or parsing.
     app.add_middleware(BodySizeLimitMiddleware)
     return app

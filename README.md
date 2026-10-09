@@ -140,7 +140,7 @@ export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
 export MCPR_AGENT_KEYS="my-agent:$(openssl rand -hex 24)"
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 
-cd ui && npm ci && npm run dev              # dashboard on :5180
+cd ui && npm ci && npm run build            # dashboard served at :8400/
 ```
 
 Register servers via the dashboard or `POST /api/v1/servers` (admin token),
