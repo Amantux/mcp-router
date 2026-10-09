@@ -342,7 +342,11 @@ async def activate_skill(
     body = body or ActivateIn()
     exp = _exposure(request)
     agent, initiated_by = await _acting_agent(request, body.agent_id)
-    rrid = None if initiated_by else body.route_request_id
+    rrid = None
+    if not initiated_by and body.route_request_id:  # agent-supplied: must be its own decision
+        rrid = await anyio.to_thread.run_sync(
+            exp._manager.owned_route_request_id, agent, body.route_request_id
+        )
     act = await _call(
         request, exp.activate, agent, skill_id, route_request_id=rrid, initiated_by=initiated_by
     )

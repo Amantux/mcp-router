@@ -58,6 +58,7 @@ from mcprouter.models import (
     MCPServerRecord,
     MCPToolRecord,
     PolicyRule,
+    RoutingDecisionRecord,
     SkillRecord,
     utcnow,
 )
@@ -244,6 +245,20 @@ class ExecutionManager:
             s.commit()
             return rec.id
 
+    def owned_route_request_id(self, agent_id: str, route_request_id: object) -> str | None:
+        """Attribution only to one of the agent's OWN routing decisions: a
+        malformed, unknown or other-agent id is stored NULL (never an error)."""
+        rrid = _attribution(route_request_id)
+        if rrid is None:
+            return None
+        with self._factory() as s:
+            owned = s.scalar(
+                select(RoutingDecisionRecord.id).where(
+                    RoutingDecisionRecord.id == rrid, RoutingDecisionRecord.agent_id == agent_id
+                )
+            )
+        return rrid if owned is not None else None
+
     def record_skill_activation(
         self,
         agent_id: str,
@@ -344,7 +359,9 @@ class ExecutionManager:
         affects authorization: policy, availability, validation and approval
         run exactly as for the principal."""
         tool_id = tool if isinstance(tool, str) else tool.id
-        rrid = _attribution(route_request_id)
+        rrid = await anyio.to_thread.run_sync(
+            self.owned_route_request_id, principal.agent_id, route_request_id
+        )
         prov = _provenance(initiated_by, principal.agent_id)
         # Private deep copy FIRST: what is validated is exactly what is invoked.
         args = copy.deepcopy(arguments)

@@ -88,8 +88,10 @@ def env(sec_db: sessionmaker[Session], tmp_path: Path) -> Iterator[Env]:
 
 def test_activate_as_agent(env: Env) -> None:
     env.route("alice", env.a)
+    with env.db() as s:  # alice's own decision -> attributed
+        rr1 = s.scalars(select(RoutingDecisionRecord.id)).one()
     r = env.client.post(
-        f"/api/v1/skills/{env.a}/activate", json={"routeRequestId": "rr1"}, headers=H_ALICE
+        f"/api/v1/skills/{env.a}/activate", json={"routeRequestId": rr1}, headers=H_ALICE
     )
     assert r.status_code == 200, r.text
     out = r.json()
@@ -102,7 +104,7 @@ def test_activate_as_agent(env: Env) -> None:
         "ok",
         None,
     )
-    assert row.route_request_id == "rr1"
+    assert row.route_request_id == rr1
 
 
 def test_visibility_is_server_side_latest_decision(env: Env) -> None:
@@ -320,3 +322,18 @@ def test_admin_cannot_impersonate_disabled_agent(env: Env) -> None:
     ):
         assert (r.status_code, r.json()["detail"]) == (403, AGENT_DISABLED), r.text
     assert env.rows() == []
+
+
+def test_forged_route_request_id_is_stored_null(env: Env) -> None:
+    """Decision 5: an activation citing bob's decision is unattributed."""
+    env.route("alice", env.a)
+    env.route("bob", env.a)
+    with env.db() as s:
+        bob_rid = s.scalars(
+            select(RoutingDecisionRecord.id).where(RoutingDecisionRecord.agent_id == "bob")
+        ).one()
+    r = env.client.post(
+        f"/api/v1/skills/{env.a}/activate", json={"routeRequestId": bob_rid}, headers=H_ALICE
+    )
+    assert r.status_code == 200, r.text
+    assert [x.route_request_id for x in env.rows()] == [None]
