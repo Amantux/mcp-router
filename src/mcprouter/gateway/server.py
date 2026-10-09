@@ -49,7 +49,7 @@ import mcp_types as types
 from fastapi import FastAPI
 from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken
-from mcp.server.context import ServerRequestContext
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.models import InitializationOptions
@@ -64,6 +64,7 @@ from mcp.server.subscriptions import (
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.authentication import AuthCredentials
@@ -257,6 +258,35 @@ class _RouterMCPServer(Server[Any]):
         )
 
 
+INTERNAL_ERROR_MESSAGE = "Internal server error"
+
+
+class _CuratedErrors:
+    """Server middleware: an uncaught handler exception becomes a curated
+    INTERNAL_ERROR on BOTH protocol eras.
+
+    Without it the handshake-era dispatcher answers ``ErrorData(code=0,
+    message=str(exc))`` (SDK ``jsonrpc_dispatcher``), which would send e.g. a
+    SQLAlchemy statement or DSN fragment to the agent. ``MCPError`` (already
+    curated) and pydantic ``ValidationError`` (the SDK maps it to a sanitised
+    INVALID_PARAMS) pass through untouched. Logs the exception TYPE only."""
+
+    async def __call__(
+        self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
+    ) -> HandlerResult:
+        try:
+            return await call_next(ctx)
+        except (MCPError, ValidationError):
+            raise
+        except Exception as exc:  # noqa: BLE001 — curated boundary: type name only
+            log.warning(
+                "gateway.handler_failed method=%s exc_type=%s",
+                scrub_log(str(ctx.method)),
+                type(exc).__name__,
+            )
+            raise MCPError(types.INTERNAL_ERROR, INTERNAL_ERROR_MESSAGE) from None
+
+
 def _text(text: str, *, is_error: bool) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)], is_error=is_error
@@ -375,6 +405,8 @@ class GatewayServer:
             on_list_resources=self._on_list_resources,
             on_read_resource=self._on_read_resource,
         )
+        # Innermost, so the SDK's OpenTelemetry middleware records the curated error.
+        self.server.middleware.append(_CuratedErrors())
         self._starlette = self.server.streamable_http_app(
             streamable_http_path=MCP_PATH, transport_security=transport_security, host=host
         )
