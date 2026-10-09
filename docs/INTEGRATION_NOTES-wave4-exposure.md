@@ -87,3 +87,17 @@ Also: `routed_ids` must be derived server-side from the agent's own route, never
   checked before upstream dispatch, so an upstream server named "router" cannot
   shadow them (its tools are simply unreachable under those two names).
 - `_track_session` now also runs on prompts/get and resources/read.
+
+## S3c step 2 — serve.py hardening
+
+- Resource files open with `O_NOFOLLOW|O_CLOEXEC`; `fstat` on the fd must be a
+  regular file and `O_NONBLOCK` (a FIFO cannot hang a worker). Closes the swap-to-symlink
+  TOCTOU on the FINAL component only. **Open:** an intermediate directory
+  swapped to a symlink after realpath() still escapes unless the entry has a
+  `sha256` (reviewer proved it). Fix: require sha256, or walk with dir fds.
+- `.html/.htm/.xhtml/.svg/.svgz/.xml` are never served as text: always an
+  `application/octet-stream` blob (mime-XSS posture).
+- If the manifest entry carries `sha256`, the bytes read must still match, else
+  `stale` ("Resource changed since the skill was indexed."). Entries without a
+  `sha256` are served unchecked (legacy/test manifests) — integrator: ingest
+  should always write it; consider requiring it once all sources re-index.

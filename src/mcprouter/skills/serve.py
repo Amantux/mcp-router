@@ -10,7 +10,9 @@ paths ingest recorded in ``resource_manifest``, and size-capped.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -37,6 +39,10 @@ class ResourceContent:
     def is_text(self) -> bool:
         return self.text is not None
 
+
+# Markup a browser would execute: never served as text (mime-XSS posture);
+# always an application/octet-stream blob.
+_ACTIVE_CONTENT_EXT = frozenset({".html", ".htm", ".xhtml", ".svg", ".svgz", ".xml"})
 
 _TEXT_MIME = {
     ".md": "text/markdown",
@@ -94,29 +100,52 @@ class SkillFiles:
 
     def read_resource(self, skill: SkillRecord, resource_path: str) -> ResourceContent:
         rel = normalize_relpath(resource_path)
-        manifest = {normalize_relpath(str(e["path"])) for e in skill.resource_manifest or []}
-        if rel not in manifest:
+        entries = {
+            normalize_relpath(str(e["path"])): e
+            for e in skill.resource_manifest or []
+            if isinstance(e, dict) and isinstance(e.get("path"), str)
+        }
+        if rel not in entries:
             raise SkillServeError("not_in_manifest", "Resource is not part of this skill.")
         sdir = self.skill_dir(skill.relative_path)
         real = os.path.realpath(os.path.join(sdir, rel))
         if not _within(real, sdir) or real == sdir:
             raise SkillServeError("invalid_path", "Resource path escapes the skill directory.")
+        # O_NOFOLLOW + fstat on the opened fd: a final component swapped to a
+        # symlink (or non-regular file) after realpath() is refused, not followed.
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0)  # a FIFO must not hang a worker thread
+        )
         try:
-            st = os.stat(real)
-            if not os.path.isfile(real):
-                raise SkillServeError("not_found", "Resource not found.")
-            if st.st_size > self._max:
-                raise SkillServeError("too_large", "Resource exceeds the size cap.")
-            with open(real, "rb") as fh:
-                data = fh.read(self._max + 1)
+            fd = os.open(real, flags)
         except FileNotFoundError:
             raise SkillServeError("not_found", "Resource not found.") from None
+        except OSError:  # ELOOP: swapped to a symlink after the escape check
+            raise SkillServeError(
+                "invalid_path", "Resource path escapes the skill directory."
+            ) from None
+        try:
+            st = os.fstat(fd)  # before fdopen: it refuses directories itself
+            if not stat.S_ISREG(st.st_mode):
+                os.close(fd)
+                raise SkillServeError("not_found", "Resource not found.")
+            if st.st_size > self._max:
+                os.close(fd)
+                raise SkillServeError("too_large", "Resource exceeds the size cap.")
+            with os.fdopen(fd, "rb") as fh:
+                data = fh.read(self._max + 1)
         except OSError:
             raise SkillServeError("unreadable", "Resource could not be read.") from None
-        if len(data) > self._max:  # grew between stat and read
+        if len(data) > self._max:  # grew between fstat and read
             raise SkillServeError("too_large", "Resource exceeds the size cap.")
+        want = entries[rel].get("sha256")
+        if isinstance(want, str) and want and hashlib.sha256(data).hexdigest() != want.lower():
+            raise SkillServeError("stale", "Resource changed since the skill was indexed.")
         ext = PurePosixPath(rel).suffix.lower()
-        if b"\x00" not in data:
+        if ext not in _ACTIVE_CONTENT_EXT and b"\x00" not in data:
             try:
                 text = data.decode("utf-8")
                 return ResourceContent(rel, _TEXT_MIME.get(ext, "text/plain"), text=text)
