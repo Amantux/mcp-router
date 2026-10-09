@@ -139,6 +139,21 @@ export interface RouteRequest {
   agentId: string;
   maxTools: number;
   allowedServers?: string[];
+  /** S2d item 2: may only LOWER the principal/global skills cap (1..1000). */
+  maxSkills?: number;
+  /** S2d item 2: narrows the routed kinds; omitted = both. */
+  kinds?: RouteKind[];
+}
+
+export type RouteKind = "tool" | "skill";
+
+/** S2d item 2 (aligned): /route skills[{source, skill, score, bodyTokensEst}]; simulate adds skillId. */
+export interface RoutedSkill {
+  skillId?: string;
+  source: string;
+  skill: string;
+  score: number;
+  bodyTokensEst: number;
 }
 
 /** SPEC §9 tools:[{server, tool, score}]; interfaces.RoutedTool adds tool_id. */
@@ -161,6 +176,9 @@ export interface RouteResponse {
   // of /route; camelised by the client. null maxServersApplied = unlimited.
   maxToolsApplied?: number;
   maxServersApplied?: number | null;
+  /** S2d item 2: skills routed separately from tools (never mixed into tools[]). */
+  skills?: RoutedSkill[];
+  maxSkillsApplied?: number | null;
   cached?: boolean;
 }
 
@@ -333,7 +351,7 @@ export interface ApprovalDecision {
  * applied = min(requested ?? principal, principal, globalCap); null = no cap.
  */
 export interface BudgetClamp {
-  budget: "maxTools" | "maxServers" | string;
+  budget: "maxTools" | "maxServers" | "maxSkills" | string;
   requested: number | null;
   principal: number | null;
   globalCap: number | null;
@@ -349,6 +367,8 @@ export interface FilteredTool {
   serverName: string;
   toolName: string;
   reason: string;
+  /** S2d item 2: "tool" | "skill" on every diagnostics entry (absent on older backends). */
+  kind?: RouteKind;
   /** Pipeline stage that removed it ("policy", "budget", "maxServers", ...), if given. */
   stage?: string;
 }
@@ -359,6 +379,8 @@ export interface PipelineStage {
   stage: string;
   before: number;
   after: number;
+  /** Pruned entries counted per kind, when the stage lists them (S2d item 2). */
+  prunedByKind?: Partial<Record<RouteKind, number>>;
 }
 
 export interface SimulateRequest {
@@ -366,6 +388,8 @@ export interface SimulateRequest {
   query: string;
   maxTools?: number;
   maxServers?: number;
+  maxSkills?: number;
+  kinds?: RouteKind[];
 }
 
 // CONTRACT: POST /api/v1/route/simulate (admin) → RouteResponse fields plus
@@ -381,6 +405,8 @@ export interface SimulateResponse {
   latencyMs: number;
   maxToolsApplied: number | null;
   maxServersApplied: number | null;
+  skills: RoutedSkill[];
+  maxSkillsApplied: number | null;
   clamps: BudgetClamp[];
   candidates: number | null;
   stages: PipelineStage[];

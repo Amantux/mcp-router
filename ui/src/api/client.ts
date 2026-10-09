@@ -48,6 +48,8 @@ import type {
   RouteRequest,
   RouteResponse,
   RoutedTool,
+  RoutedSkill,
+  RouteKind,
   ToolDetail,
   ToolQuery,
   JsonObject,
@@ -336,11 +338,24 @@ function normaliseRoutedTool(raw: Record<string, unknown>): RoutedTool {
   };
 }
 
+/** S2d item 2 (aligned): {source, skill, score, bodyTokensEst} (+ skillId on simulate). */
+export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
+  return {
+    skillId: (raw.skillId as string | undefined) ?? undefined,
+    source: String(raw.source ?? raw.sourceName ?? ""),
+    skill: String(raw.skill ?? raw.name ?? ""),
+    score: Number(raw.score ?? 0),
+    bodyTokensEst: Number(raw.bodyTokensEst ?? 0),
+  };
+}
+
 // CONTRACT: no auth header is sent; the simulator assumes the dev/admin API is
 // reachable without an agent key (or that the backend authorises the UI separately).
 export async function simulateRoute(body: RouteRequest): Promise<RouteResponse> {
   const raw = await request<RouteResponse & { tools: Record<string, unknown>[] }>("POST", `${API_BASE}/route`, { body });
-  return { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
+  const out: RouteResponse = { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
+  if (Array.isArray(raw.skills)) out.skills = (raw.skills as unknown as Record<string, unknown>[]).map(normaliseRoutedSkill);
+  return out;
 }
 
 // ------------------------------------------------------------ models/health
@@ -530,7 +545,14 @@ function normaliseFiltered(raw: Loose): FilteredTool {
     toolName: String(raw.toolName ?? raw.tool ?? raw.name ?? ""),
     reason: String(raw.reason ?? raw.detail ?? "filtered"),
     stage: (raw.stage as string | undefined) ?? undefined,
+    kind: raw.kind === "skill" || raw.kind === "tool" ? raw.kind : undefined,
   };
+}
+
+function countKinds(entries: Loose[]): Partial<Record<RouteKind, number>> | undefined {
+  const out: Partial<Record<RouteKind, number>> = {};
+  for (const e of entries) if (e.kind === "tool" || e.kind === "skill") out[e.kind] = (out[e.kind] ?? 0) + 1;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Tolerant mapping of the simulate payload (diagnostics may be top-level or nested). */
@@ -543,6 +565,7 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     stage: String(st.stage ?? st.name ?? "stage"),
     before: Number(st.before ?? 0),
     after: Number(st.after ?? 0),
+    prunedByKind: countKinds(arr(st.pruned)),
   }));
   // Backend (routes_route.DiagnosticsOut): diagnostics.budgetClamps[] and
   // diagnostics.candidatesConsidered[] (a list; the lens shows its length).
@@ -553,10 +576,12 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     agentId: String(raw.agentId ?? agentId),
     tools,
     fallbackUsed: raw.fallbackUsed === true,
-    noMatch: raw.noMatch === true || tools.length === 0,
+    noMatch: raw.noMatch === true || (tools.length === 0 && arr(raw.skills).length === 0),
     latencyMs: Number(raw.latencyMs ?? 0),
     maxToolsApplied: numOrNull(raw.maxToolsApplied),
     maxServersApplied: numOrNull(raw.maxServersApplied),
+    skills: arr(raw.skills).map(normaliseRoutedSkill),
+    maxSkillsApplied: numOrNull(raw.maxSkillsApplied),
     clamps: clamps.map((c) => ({
       budget: String(c.budget),
       requested: numOrNull(c.requested),
