@@ -3,13 +3,11 @@
     .venv/bin/python scripts/gen_config_docs.py           # rewrite the file
     .venv/bin/python scripts/gen_config_docs.py --check   # exit 1 if it is stale
 
-Source of truth, in order:
-
-1. ``mcprouter.settings.SETTINGS_SPEC`` when it exists (the wave-6 registry:
-   one entry per variable with env, type, default, choices, secret, doc).
-2. Otherwise, introspection: the ``get("MCPR_…")`` calls in ``Settings.from_env``
-   and ``AoaiSettings.from_env`` give the variable names, the dataclass fields
-   give type and default, and ``DOCS`` below gives the description.
+Source of truth: ``mcprouter.settings.SETTINGS_SPEC`` (one entry per variable:
+env, type, default, choices, secret, doc, file_var). Each ``file_var`` gets its
+own row after its variable. ``DOCS`` below holds the longer user-facing text
+and wins over the registry's short ``doc``; a variable without a ``DOCS`` entry
+uses the registry text, so a new setting is never undocumented.
 
 The drift test (tests/test_docs_consistency.py) fails when the committed file
 differs from a fresh render, so a new setting cannot ship undocumented.
@@ -18,12 +16,8 @@ differs from a fresh render, so a new setting cannot ship undocumented.
 from __future__ import annotations
 
 import argparse
-import ast
-import dataclasses
-import inspect
-import re
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -43,7 +37,7 @@ class Var:
     doc: str
 
 
-# Descriptions for the introspection fallback (SETTINGS_SPEC `doc` wins when set).
+# User-facing descriptions; they win over SETTINGS_SPEC `doc` (the fallback).
 DOCS: dict[str, str] = {
     "MCPR_DATABASE_URL": "SQLAlchemy URL of the Postgres + pgvector database. Compose derives it "
     "from `POSTGRES_*`; the default matches the dev override (`127.0.0.1:5434`).",
@@ -131,6 +125,7 @@ DEPLOY_ONLY: tuple[tuple[str, str, str], ...] = (
         "Port uvicorn listens on inside the container (entrypoint, healthcheck).",
     ),
     ("MCPR_DB_WAIT_TRIES", "30", "Entrypoint database wait attempts, 2 s apart."),
+    ("MCPR_DATA_DIR", "/data", "Entrypoint: directory probed for writability at start."),
     ("MCPR_IMAGE", "mcp-router:local", "Image tag compose builds and runs."),
     ("MCPR_BASE_IMAGE", "mcp-router:local", "Base image the inference flavor builds on."),
     ("MCPR_INFERENCE_IMAGE", "mcp-router:local-inference", "Inference flavor image tag."),
@@ -145,17 +140,34 @@ DEPLOY_ONLY: tuple[tuple[str, str, str], ...] = (
 TOOLING: tuple[tuple[str, str], ...] = (
     ("MCPR_RUN_SLOW", "Run the slow and live-model tests (`1`)."),
     ("MCPR_REQUIRE_DB", "From v0.6: fail instead of skip when the test database is down."),
+    (
+        "MCPR_ALLOW_ANY_DB",
+        "From v0.6: let the suite wipe a database whose name has no `_test` word (`1`).",
+    ),
+    (
+        "MCPR_ENFORCE_ROUTE_COVERAGE",
+        "From v0.6: fail unless every API route was requested and returned a 2xx (`1`).",
+    ),
+    (
+        "MCPR_TEST_BASE_DATABASE_URL",
+        "Set by the suite itself: the operator's URL handed to pytest-xdist workers.",
+    ),
     ("MCPR_AGENT_KEY", "`scripts/smoke.sh`: the key half of one `MCPR_AGENT_KEYS` pair."),
 )
 
-_ENUM_COMMENT = re.compile(r"#\s*([a-z][\w-]*(?:\s*\|\s*[a-z][\w-]*)+)\s*$")
+# SETTINGS_SPEC `type` -> the "Values" column when there are no choices.
 _TYPE_NAMES = {
     "str": "string",
     "int": "integer",
     "float": "number",
     "bool": "boolean",
-    "int | None": "integer (optional)",
-    "tuple[str, ...]": "comma list",
+    "opt_int": "integer (optional)",
+    "secret": "string",
+    "upper": "string",
+    "enum": "string",
+    "device": "`auto`, `cpu`, `cuda` or `cuda:<index>`",
+    "hosts": "comma list",
+    "agent_keys": "comma list of `agentId:key`",
 }
 
 
@@ -169,133 +181,26 @@ def render_default(value: Any) -> str:
     return str(value)
 
 
-def _get(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, Mapping):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
-
-
 def from_spec(spec: Iterable[Any]) -> list[Var]:
-    """Adapter for E1's SETTINGS_SPEC entries (object or mapping)."""
+    """One Var per SETTINGS_SPEC entry, plus one per `file_var` (a path)."""
     out = []
     for entry in spec:
-        env = str(_get(entry, "env"))
-        typ = _get(entry, "type", "")
-        type_name = typ.__name__ if isinstance(typ, type) else str(typ)
+        env = str(entry.env)
         out.append(
             Var(
                 env=env,
-                type=_TYPE_NAMES.get(type_name, type_name),
-                default=render_default(_get(entry, "default")),
-                choices=tuple(str(c) for c in (_get(entry, "choices") or ())),
-                secret=bool(_get(entry, "secret", False)),
-                doc=str(_get(entry, "doc") or DOCS.get(env, "")),
+                type=_TYPE_NAMES.get(str(entry.type), str(entry.type)),
+                default=render_default(entry.default),
+                choices=tuple(str(c) for c in entry.choices),
+                secret=bool(entry.secret),
+                doc=DOCS.get(env) or str(entry.doc),
             )
         )
+        if entry.file_var:
+            fv = str(entry.file_var)
+            doc = DOCS.get(fv) or f"File holding `{env}` (Docker secret); wins over `{env}`."
+            out.append(Var(fv, "path", "", (), True, doc))
     return out
-
-
-def _env_name(node: ast.AST) -> str | None:
-    if (
-        isinstance(node, ast.Call)
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and isinstance(node.args[0].value, str)
-        and re.fullmatch(r"MCPR_[A-Z0-9_]+", node.args[0].value)
-    ):
-        return node.args[0].value
-    return None
-
-
-def _env_to_field(cls_node: ast.ClassDef) -> dict[str, str]:
-    """env name -> dataclass field, in source order, from `field=get("MCPR_X", …)`
-    keywords in from_env ("" when no keyword wraps the call: the caller derives
-    the field from the env suffix). `_secret("MCPR_X", get)` also reads MCPR_X_FILE."""
-    keyword_of: dict[int, str] = {}
-    for node in ast.walk(cls_node):
-        if isinstance(node, ast.keyword) and node.arg:
-            for sub in ast.walk(node.value):
-                if _env_name(sub):
-                    keyword_of.setdefault(id(sub), node.arg)
-    found: list[tuple[int, int, str, str]] = []
-    for node in ast.walk(cls_node):
-        env = _env_name(node)
-        if env is None:
-            continue
-        assert isinstance(node, ast.Call)
-        found.append((node.lineno, node.col_offset, env, keyword_of.get(id(node), "")))
-        if isinstance(node.func, ast.Name) and node.func.id == "_secret":
-            found.append((node.lineno, node.col_offset + 1, env + "_FILE", ""))
-    mapping: dict[str, str] = {}
-    for _line, _col, env, field_name in sorted(found):
-        mapping.setdefault(env, field_name)
-    return mapping
-
-
-def _is_secret_name(env: str) -> bool:
-    return env.endswith(("_KEY", "_KEYS", "_TOKEN", "_FILE", "_PASSWORD"))
-
-
-def _field_comments(source: str, cls_name: str) -> dict[str, str]:
-    tree = ast.parse(source)
-    lines = source.splitlines()
-    out: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == cls_name:
-            for stmt in node.body:
-                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                    out[stmt.target.id] = lines[stmt.lineno - 1]
-    return out
-
-
-def from_module(mod: ModuleType) -> list[Var]:
-    """Introspection fallback: works on the real module or a test fixture."""
-    source = inspect.getsource(mod)
-    tree = ast.parse(source)
-    choices_override = _engine_choices()
-    out: list[Var] = []
-    for cls_name, prefix in (("Settings", "MCPR_"), ("AoaiSettings", "MCPR_AOAI_")):
-        cls = getattr(mod, cls_name, None)
-        node = next(
-            (n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls_name), None
-        )
-        if cls is None or node is None:
-            continue
-        fields = {f.name: f for f in dataclasses.fields(cls)}
-        comments = _field_comments(source, cls_name)
-        for env, fname in _env_to_field(node).items():
-            is_file = env.endswith("_FILE")
-            base = env.removesuffix("_FILE")
-            name = fname or base.removeprefix(prefix).lower()
-            if is_file:
-                name = base.removeprefix(prefix).lower()
-            f = fields.get(name)
-            if f is None and not is_file:
-                continue
-            secret = _is_secret_name(env) or (f is not None and not f.repr)
-            choices: tuple[str, ...] = ()
-            if is_file:
-                typ, default = "path", ""
-            else:
-                assert f is not None
-                typ = _TYPE_NAMES.get(str(f.type), str(f.type))
-                default = render_default(f.default)
-                m = _ENUM_COMMENT.search(comments.get(name, ""))
-                if m:
-                    choices = tuple(c.strip() for c in m.group(1).split("|"))
-            choices = choices_override.get(env, choices)
-            out.append(Var(env, typ, default, choices, secret, DOCS.get(env, "")))
-    return out
-
-
-def _engine_choices() -> dict[str, tuple[str, ...]]:
-    from mcprouter.inference import engine
-
-    return {
-        "MCPR_EMBEDDING_BACKEND": tuple(engine.EMBEDDING_BACKENDS),
-        "MCPR_DECISION_BACKEND": tuple(engine.DECISION_BACKENDS),
-        "MCPR_OPERATING_MODE": tuple(engine.MODE_CONCURRENCY),
-    }
 
 
 def collect(mod: ModuleType | None = None) -> list[Var]:
@@ -303,8 +208,7 @@ def collect(mod: ModuleType | None = None) -> list[Var]:
         import mcprouter.settings
 
         mod = mcprouter.settings
-    spec = getattr(mod, "SETTINGS_SPEC", None)
-    return from_spec(spec) if spec is not None else from_module(mod)
+    return from_spec(mod.SETTINGS_SPEC)
 
 
 def _cell(text: str) -> str:

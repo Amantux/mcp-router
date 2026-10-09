@@ -18,9 +18,6 @@ Rules
   8  ``METHOD /api/v1/...`` mentions exist in the OpenAPI route set
   9  ``python -m <module> --flag`` examples: every flag is in ``--help``
   10 Dockerfile ``NODE_VERSION`` is on the ``.nvmrc`` release line (``22`` -> ``22.x.y``)
-
-Allowlists marked PENDING name things other wave-6 fences ship; a test fails as
-soon as one of them lands, so the entry gets deleted instead of rotting.
 """
 
 from __future__ import annotations
@@ -84,14 +81,13 @@ def load_generator(root: Path = REPO) -> ModuleType:
     return mod
 
 
-def settings_env_names(root: Path) -> set[str]:
-    """Every MCPR_* the settings module reads (get(...) and _secret(... ) -> +_FILE)."""
-    src = (root / "src" / "mcprouter" / "settings.py").read_text(encoding="utf-8")
-    names = set(re.findall(r"\bget\(\s*\"(MCPR_[A-Z0-9_]+)\"", src))
-    for secret in re.findall(r"_secret\(\s*\"(MCPR_[A-Z0-9_]+)\"", src):
-        names |= {secret, secret + "_FILE"}
-    names |= set(re.findall(r"\benv=\"(MCPR_[A-Z0-9_]+)\"", src))  # SETTINGS_SPEC entries
-    return names
+def settings_env_names() -> set[str]:
+    """Every MCPR_* the E1 registry declares: SETTINGS_SPEC (+ `_FILE` variants)
+    and the compose/entrypoint-only ENV_ONLY_SPEC."""
+    from mcprouter.settings import ENV_ONLY_SPEC, SETTINGS_SPEC
+
+    names = {s.env for s in (*SETTINGS_SPEC, *ENV_ONLY_SPEC)}
+    return names | {s.file_var for s in SETTINGS_SPEC if s.file_var}
 
 
 def code_text(root: Path, *, exclude: Iterable[Path] = ()) -> str:
@@ -128,15 +124,7 @@ def github_slugs(md: str) -> set[str]:
     return out
 
 
-# Files other wave-6 fences ship (E7 merges last, so they exist by then).
-PENDING_FILES = {
-    "docs/reference/api.md": "E2 P-212",
-    "tests/test_layering.py": "E6 P-607",
-}
-
-
-def check_links(root: Path, pending: Iterable[str] = ()) -> list[str]:
-    pending = set(pending)
+def check_links(root: Path) -> list[str]:
     problems = []
     for f in doc_files(root):
         text = strip_fences(f.read_text(encoding="utf-8"))
@@ -149,11 +137,9 @@ def check_links(root: Path, pending: Iterable[str] = ()) -> list[str]:
             where = f"{rel(root, f)} -> {target}"
             if path_part:
                 try:
-                    dest_rel = dest.relative_to(root.resolve()).as_posix()
+                    dest.relative_to(root.resolve())
                 except ValueError:
                     problems.append(f"{where}: points outside the repository")
-                    continue
-                if dest_rel in pending:
                     continue
                 if not dest.exists():
                     problems.append(f"{where}: missing file")
@@ -175,8 +161,8 @@ _PATH_TOKEN = re.compile(
 BUILD_ARTIFACTS = {"ui/dist": "npm run build output, served by the API"}
 
 
-def check_paths(root: Path, pending: Iterable[str] = ()) -> list[str]:
-    pending = set(pending) | set(BUILD_ARTIFACTS)
+def check_paths(root: Path) -> list[str]:
+    pending = set(BUILD_ARTIFACTS)
     problems = []
     for f in doc_files(root):
         for token in inline_code(f.read_text(encoding="utf-8")):
@@ -205,25 +191,18 @@ def check_paths(root: Path, pending: Iterable[str] = ()) -> list[str]:
 
 # --------------------------------------------------------------------------- rule 3
 
-# Knobs that compose, the image, the entrypoint, CI or the tests read (not Settings).
+# Knobs the tests, CI or smoke script read; not in the registry (compose,
+# image and entrypoint knobs are: settings.ENV_ONLY_SPEC).
 NON_SETTINGS = {
-    "MCPR_HOST_PORT",
-    "MCPR_PORT",
-    "MCPR_IMAGE",
-    "MCPR_BASE_IMAGE",
-    "MCPR_INFERENCE_IMAGE",
-    "MCPR_TORCH_INDEX_URL",
-    "MCPR_DB_WAIT_TRIES",
     "MCPR_RUN_SLOW",
     "MCPR_AGENT_KEY",
+    "MCPR_REQUIRE_DB",
+    "MCPR_ALLOW_ANY_DB",
+    "MCPR_ENFORCE_ROUTE_COVERAGE",
+    "MCPR_TEST_BASE_DATABASE_URL",
 }
 # Names that only exist in docs on purpose.
 DOC_ONLY = {"MCPR_KEY": "the client-side variable in the INSTALL.md client snippets"}
-# Documented as "from v0.6"; shipped by another fence.
-PENDING_ENV = {
-    "MCPR_BIND": "E1 P-101 (compose port string)",
-    "MCPR_REQUIRE_DB": "E5 P-503",
-}
 
 _ENV_TOKEN = re.compile(r"\bMCPR_[A-Z0-9_]+")
 
@@ -292,26 +271,6 @@ def check_env_example(root: Path, choices: dict[str, tuple[str, ...]]) -> list[s
     for name in sorted(compose_vars - listed):
         problems.append(f".env.example: compose reads ${{{name}}} but the template omits it")
     return problems
-
-
-# .env.example belongs to E1 (P-107 rewrites it). These are its violations at the
-# wave-6 base; each must still occur, so the set empties itself when E1 lands.
-KNOWN_ENV_EXAMPLE_PROBLEMS = {
-    ".env.example: MCPR_EMBEDDING_BACKEND=local is not one of ['hash', 'bge', 'aoai']",
-    ".env.example: MCPR_EMBEDDING_BACKEND lists `local`, not a valid value",
-    ".env.example: compose reads ${MCPR_AGENT_KEYS} but the template omits it",
-    ".env.example: compose reads ${MCPR_ADMIN_TOKEN} but the template omits it",
-    ".env.example: compose reads ${MCPR_ALLOWED_HOSTS} but the template omits it",
-    ".env.example: compose reads ${MCPR_BASE_IMAGE} but the template omits it",
-    ".env.example: compose reads ${MCPR_DEVICE} but the template omits it",
-    ".env.example: compose reads ${MCPR_HOST_PORT} but the template omits it",
-    ".env.example: compose reads ${MCPR_IMAGE} but the template omits it",
-    ".env.example: compose reads ${MCPR_INFERENCE_IMAGE} but the template omits it",
-    ".env.example: compose reads ${MCPR_TORCH_INDEX_URL} but the template omits it",
-    ".env.example: compose reads ${POSTGRES_DB} but the template omits it",
-    ".env.example: compose reads ${POSTGRES_PASSWORD} but the template omits it",
-    ".env.example: compose reads ${POSTGRES_USER} but the template omits it",
-}
 
 
 # --------------------------------------------------------------------------- rule 6
@@ -437,7 +396,6 @@ def _live_openapi() -> dict[str, object] | None:
 # --------------------------------------------------------------------------- rule 9
 
 _CLI = re.compile(r"python -m ((?:testbed|bench|mcprouter)(?:\.\w+)+)([^\n`|]*)")
-PENDING_MODULES = {"mcprouter.migrate": "E6 P-601"}
 
 
 def documented_cli(root: Path) -> dict[str, set[str]]:
@@ -462,12 +420,9 @@ def help_text(module: str) -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def check_cli(documented: dict[str, set[str]], pending: Iterable[str] = ()) -> list[str]:
-    pending = set(pending)
+def check_cli(documented: dict[str, set[str]]) -> list[str]:
     problems = []
     for module, flags in sorted(documented.items()):
-        if module in pending:
-            continue
         out = help_text(module)
         if out is None:
             problems.append(f"python -m {module} --help fails")
@@ -505,42 +460,32 @@ def code_vars(gen: ModuleType) -> list[object]:
 
 
 def test_rule1_links_and_anchors_resolve() -> None:
-    assert check_links(REPO, PENDING_FILES) == []
+    assert check_links(REPO) == []
 
 
 def test_rule2_backticked_paths_and_symbols_exist() -> None:
-    assert check_paths(REPO, PENDING_FILES) == []
-
-
-def test_pending_files_have_not_landed() -> None:
-    landed = sorted(p for p in PENDING_FILES if (REPO / p).exists())
-    assert landed == [], f"landed: delete from PENDING_FILES: {landed}"
+    assert check_paths(REPO) == []
 
 
 def test_rule3_documented_env_vars_exist() -> None:
-    allowed = settings_env_names(REPO) | NON_SETTINGS | set(DOC_ONLY) | set(PENDING_ENV)
+    allowed = settings_env_names() | NON_SETTINGS | set(DOC_ONLY)
     assert check_env_documented(REPO, allowed) == []
 
 
-def test_rule3_allowlists_do_not_rot() -> None:
+def test_rule3_allowlist_does_not_rot() -> None:
     code = code_text(REPO, exclude=[THIS, REPO / "scripts" / "gen_config_docs.py"])
-    settings = settings_env_names(REPO)
+    settings = settings_env_names()
     unused = sorted(n for n in NON_SETTINGS if n not in code or n in settings)
     assert unused == [], f"NON_SETTINGS entries not read outside settings: {unused}"
-    landed = sorted(n for n in PENDING_ENV if n in code or n in settings)
-    assert landed == [], f"landed: move from PENDING_ENV to the registry/NON_SETTINGS: {landed}"
 
 
 def test_rule4_every_setting_is_in_the_configuration_reference() -> None:
-    assert check_env_reverse(REPO, settings_env_names(REPO)) == []
+    assert check_env_reverse(REPO, settings_env_names()) == []
 
 
 def test_rule5_env_example_values_are_valid(code_vars: list[object]) -> None:
     choices = {v.env: v.choices for v in code_vars if v.choices}  # type: ignore[attr-defined]
-    problems = set(check_env_example(REPO, choices))
-    assert problems - KNOWN_ENV_EXAMPLE_PROBLEMS == set()
-    fixed = KNOWN_ENV_EXAMPLE_PROBLEMS - problems
-    assert fixed == set(), f"fixed upstream: delete from KNOWN_ENV_EXAMPLE_PROBLEMS: {fixed}"
+    assert check_env_example(REPO, choices) == []
 
 
 def _defaults(gen: ModuleType, code_vars: list[object]) -> dict[str, str]:
@@ -566,21 +511,7 @@ def test_rule8_documented_endpoints_exist() -> None:
 
 
 def test_rule9_documented_cli_flags_exist() -> None:
-    assert check_cli(documented_cli(REPO), PENDING_MODULES) == []
-
-
-def test_pending_modules_have_not_landed() -> None:
-    landed = sorted(
-        m for m in PENDING_MODULES if importlib.util.find_spec(m.rsplit(".", 1)[0]) and _has(m)
-    )
-    assert landed == [], f"landed: delete from PENDING_MODULES: {landed}"
-
-
-def _has(module: str) -> bool:
-    try:
-        return importlib.util.find_spec(module) is not None
-    except ModuleNotFoundError:
-        return False
+    assert check_cli(documented_cli(REPO)) == []
 
 
 def test_rule10_dockerfile_node_matches_nvmrc() -> None:
@@ -668,28 +599,13 @@ def test_mutation_rule6_wrong_defaults(tmp_path: Path) -> None:
     assert any("MCPR_Z (default `old`)" in p for p in problems)
 
 
-def test_mutation_rule7_new_setting_without_regenerating(gen: ModuleType, tmp_path: Path) -> None:
-    src = (REPO / "src" / "mcprouter" / "settings.py").read_text(encoding="utf-8")
-    src = src.replace(
-        "    dedup_max_pairs: int = 5000\n",
-        "    dedup_max_pairs: int = 5000\n    canary_knob: int = 7\n",
-        1,
-    ).replace(
-        "            dedup_max_pairs=",
-        '            canary_knob=int(get("MCPR_CANARY_KNOB", "7")),\n            dedup_max_pairs=',
-        1,
-    )
-    assert "MCPR_CANARY_KNOB" in src, "fixture anchor moved; update the mutation"
-    path = _write(tmp_path, "settings_mut.py", src)
-    spec = importlib.util.spec_from_file_location("settings_mut", path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["settings_mut"] = mod
-    try:
-        spec.loader.exec_module(mod)
-        rendered = gen.render(gen.collect(mod))
-    finally:
-        del sys.modules["settings_mut"]
+def test_mutation_rule7_new_setting_without_regenerating(gen: ModuleType) -> None:
+    from types import SimpleNamespace
+
+    from mcprouter.settings import SETTINGS_SPEC, SettingSpec
+
+    canary = SettingSpec("MCPR_CANARY_KNOB", "canary_knob", "int", 7, "canary")
+    rendered = gen.render(gen.collect(SimpleNamespace(SETTINGS_SPEC=(*SETTINGS_SPEC, canary))))
     committed = (REPO / "docs" / "reference" / "configuration.md").read_text(encoding="utf-8")
     assert "`MCPR_CANARY_KNOB` | `7`" in rendered
     assert rendered != committed
