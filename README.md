@@ -183,7 +183,7 @@ spins up realistic MCP servers with overlapping tools across five domains.
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| 1277 backend + 111 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| 1339 backend (+5 skipped) + 131 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 |
 | 100 servers / 1,000 tools full refresh in 6.1s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |

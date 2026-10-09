@@ -132,7 +132,7 @@ def create_app(
                 await loop.stop()
             await anyio.to_thread.run_sync(inference.unload)
 
-    app = FastAPI(title="MCP Router", version="0.4.0", docs_url="/docs", lifespan=lifespan)
+    app = FastAPI(title="MCP Router", version="0.5.0", docs_url="/docs", lifespan=lifespan)
     engine = make_engine(settings)
     init_db(engine)  # Base + approval_requests + eval_results (Alembic deferred)
     init_registry(engine)  # FTS + dedup-pair indexes (idempotent)
