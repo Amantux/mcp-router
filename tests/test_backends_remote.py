@@ -493,7 +493,10 @@ def test_slow_drip_real_time_budget() -> None:
     t0 = _t.monotonic()
     with pytest.raises(RemoteTimeoutError):
         m.noul("s", "q")
-    assert _t.monotonic() - t0 <= 0.3 + 0.15
+    # The hard stop is what matters: the unfixed path took ~9 s against a
+    # 1 s budget. 0.5 s of slack absorbs scheduler latency on a loaded host
+    # (seen: +0.18 s under 8 xdist workers) without hiding a real regression.
+    assert _t.monotonic() - t0 <= 0.3 + 0.5
 
 
 def test_unknown_option_mass_refused() -> None:

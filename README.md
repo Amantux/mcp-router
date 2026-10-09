@@ -252,7 +252,7 @@ these commands.
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| Backend: `1 failed, 2045 passed, 6 skipped` (2052 collected; skips are slow, live-model and `[inference]`-only). The one failure, `test_semaphore_caps_concurrent_inference[performance]`, is timing-sensitive and failed only with the host at load average ~250; it passes on its own. UI: `Tests 241 passed (241)` in 30 files. e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| Backend: `2062 passed, 10 skipped` with `-n 8` on `main` (skips are slow, live-model and `[inference]`-only; the route-coverage gate counts as a skip under xdist). UI: `Tests 255 passed (255)` in 31 files on Node 22. e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 — **at risk**: CPU measurements put it out of reach; see [hardware-validation.md](docs/hardware-validation.md) |
 | 100 servers / 1,000 tools full refresh in 6.0s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |
