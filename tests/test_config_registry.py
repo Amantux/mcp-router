@@ -204,6 +204,13 @@ def test_enum_values_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
 NON_ROUTER = {
     "MCPR_AGENT_KEY": "scripts/smoke.sh input: the key part of one MCPR_AGENT_KEYS entry",
     "MCPR_AOAI": "prefix in messages/f-strings (MCPR_AOAI_*), not a variable",
+    # Test-suite knobs (tests/conftest.py, tests/support/db.py, CI): never read
+    # by the router, documented under "tooling" by scripts/gen_config_docs.py.
+    "MCPR_RUN_SLOW": "pytest: run slow/live-model tests",
+    "MCPR_REQUIRE_DB": "pytest: fail instead of skip when the test DB is down",
+    "MCPR_ALLOW_ANY_DB": "pytest: allow wiping a non-*_test database",
+    "MCPR_TEST_BASE_DATABASE_URL": "pytest-xdist: operator URL carried to workers",
+    "MCPR_ENFORCE_ROUTE_COVERAGE": "pytest: MT-1 route coverage on full runs",
 }
 # Every os.environ / os.getenv use under src/, as file::function. A new env
 # read must be added here deliberately (and almost always belongs in settings).
