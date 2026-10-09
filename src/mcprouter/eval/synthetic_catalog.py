@@ -16,13 +16,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import EmbeddingBackend, ScopeFilter
-from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
+from mcprouter.registry.classify import classify_skill
 from mcprouter.routing.scope import StaticScope
 
 # server -> (domain, status, enabled, [(tool, description, operation, tags)])
@@ -359,3 +363,158 @@ def synthetic_scope_resolver(
         return scopes.get(agent_id, default)
 
     return resolve
+
+
+# --------------------------------------------- appended: Wave-4 skills fixture
+# Two sources, 15 spec-valid skills over the five tool domains. Deliberate
+# hazards: near-duplicate pairs (team-skills/pdf-fill ~ community-skills/
+# pdf-form-filler, team-skills/pr-review ~ community-skills/pr-reviewer), two
+# execute-class skills (has_scripts + Bash), and skills whose descriptions
+# overlap a seeded TOOL (pdf-fill vs filesystem/write_file, sql-report vs
+# postgres/run_query, email-triage vs email/read_email, ...) for mixed cases.
+# Classification is GROUND TRUTH set directly and marked reviewed, so an
+# auto-classifier pass can never move it.
+
+SKILL_SOURCES: tuple[str, ...] = ("team-skills", "community-skills")
+SKILL_CLASSIFICATION_SOURCE = "synthetic-ground-truth"
+
+
+@dataclass(frozen=True)
+class SyntheticSkill:
+    source: str
+    name: str
+    description: str
+    body: str
+    domain: str
+    operation: str  # read | write | execute
+    has_scripts: bool = False
+    allowed_tools: tuple[str, ...] = ()
+
+    @property
+    def ref(self) -> str:
+        return f"{self.source}/{self.name}"
+
+    @property
+    def body_tokens_est(self) -> int:
+        return len(self.body) // 4
+
+
+def _sk(
+    source: str, name: str, desc: str, body: str, domain: str, op: str, **kw: Any
+) -> SyntheticSkill:
+    return SyntheticSkill(source, name, desc, body, domain, op, **kw)
+
+
+_T, _C = SKILL_SOURCES
+SKILLS: tuple[SyntheticSkill, ...] = (
+    _sk(_T, "pdf-fill", "Fill in PDF form fields from supplied values and write the completed PDF.",
+        "Map each supplied value onto the matching AcroForm field, flatten, save a copy.",
+        "files", "write"),
+    _sk(_T, "pdf-extract", "Extract text and tables from PDF documents for analysis.",
+        "Read each page, keep reading order, return tables as markdown.", "files", "read"),
+    _sk(_T, "release-notes", "Write release notes from the pull requests merged since the last tag.",
+        "Group merged pull requests by label, one bullet each, breaking changes first.",
+        "development", "write"),
+    _sk(_T, "pr-review", "Review a pull request diff for bugs, missing tests and risky changes.",
+        "Read the diff hunk by hunk; report findings with file and line.", "development", "read"),
+    _sk(_T, "deploy-service", "Deploy a service to staging or production with the bundled scripts.",
+        "Use scripts/deploy.sh with the target environment; check health afterwards.",
+        "development", "execute", has_scripts=True, allowed_tools=("Bash",)),
+    _sk(_T, "sql-report", "Compose a SQL query for a business question and summarize the rows as a report.",
+        "Inspect the schema first, prefer aggregates, cite the query used.", "databases", "read"),
+    _sk(_T, "schema-migration", "Apply a database schema migration with the bundled migration scripts.",
+        "Use scripts/migrate.sh against the target database after a backup.",
+        "databases", "execute", has_scripts=True, allowed_tools=("Bash",)),
+    _sk(_T, "standup-summary", "Summarize recent Slack channel activity into a daily standup digest.",
+        "Bucket messages into done, doing and blocked; one line per person.",
+        "communication", "read"),
+    _sk(_T, "email-triage", "Triage an inbox: categorize and prioritize unread email messages.",
+        "Label each message urgent, normal or ignore; list the urgent ones first.",
+        "communication", "read"),
+    _sk(_T, "meeting-scheduler", "Plan a meeting: find a slot that suits all attendees and create the calendar invite.",
+        "Check every attendee's availability, propose two options, then book one.",
+        "productivity", "write"),
+    _sk(_T, "meeting-notes", "Write structured meeting notes with decisions and action items.",
+        "Sections: attendees, decisions, action items with owners and due dates.",
+        "productivity", "write"),
+    _sk(_C, "pdf-form-filler", "Fill PDF forms automatically from structured data and write out the filled form.",
+        "Match keys to form field names, fill, save next to the original.", "files", "write"),
+    _sk(_C, "pr-reviewer", "Review pull requests and comment on bugs and code quality problems.",
+        "Look at the changed files and summarise the problems found.", "development", "read"),
+    _sk(_C, "csv-cleanup", "Clean and normalize a CSV file and write the cleaned copy.",
+        "Trim whitespace, unify date formats, drop duplicate rows.", "files", "write"),
+    _sk(_C, "incident-postmortem", "Create a blameless incident postmortem document from a timeline.",
+        "Sections: summary, impact, timeline, root cause, follow-ups.", "development", "write"),
+)  # fmt: skip
+NEAR_DUPLICATE_SKILLS = (
+    ("team-skills/pdf-fill", "community-skills/pdf-form-filler"),
+    ("team-skills/pr-review", "community-skills/pr-reviewer"),
+)
+
+
+def _stable_id(kind: str, key: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"mcprouter-synthetic:{kind}:{key}"))
+
+
+def skill_classification_mismatches() -> list[tuple[str, str, str]]:
+    """(ref, ground_truth_op, classifier_op) wherever the rule-based skill
+    classifier disagrees with the fixture's ground-truth operation."""
+    out: list[tuple[str, str, str]] = []
+    for sk in SKILLS:
+        c = classify_skill(
+            sk.name,
+            sk.description,
+            sk.body,
+            has_scripts=sk.has_scripts,
+            allowed_tools=list(sk.allowed_tools),
+        )
+        if c.operation != sk.operation:
+            out.append((sk.ref, sk.operation, c.operation))
+    return out
+
+
+def seed_synthetic_skills(s: Session, embedder: EmbeddingBackend) -> dict[str, str]:
+    """Insert the skill sources + skills with deterministic ids and
+    ground-truth (reviewed) classification; returns source name -> id.
+    Caller commits."""
+    source_ids: dict[str, str] = {}
+    for src in SKILL_SOURCES:
+        rec = SkillSourceRecord(
+            id=_stable_id("source", src),
+            name=src,
+            kind="directory",
+            location=f"/synthetic/{src}",
+            status="healthy",
+        )
+        s.add(rec)
+        source_ids[src] = rec.id
+    s.flush()
+    vectors = embedder.embed([f"{sk.name.replace('-', ' ')}: {sk.description}" for sk in SKILLS])
+    for sk, vec in zip(SKILLS, vectors, strict=True):
+        digest = hashlib.sha256(f"{sk.description}\n{sk.body}".encode()).hexdigest()
+        s.add(
+            SkillRecord(
+                id=_stable_id("skill", sk.ref),
+                source_id=source_ids[sk.source],
+                name=sk.name,
+                description=sk.description,
+                body=sk.body,
+                relative_path=sk.name,
+                allowed_tools=list(sk.allowed_tools),
+                has_scripts=sk.has_scripts,
+                resource_manifest=(
+                    [{"path": "scripts/run.sh", "sha256": digest}] if sk.has_scripts else []
+                ),
+                content_hash=digest,
+                manifest_hash=hashlib.sha256(sk.ref.encode()).hexdigest(),
+                body_tokens_est=sk.body_tokens_est,
+                domain=sk.domain,
+                operation=sk.operation,
+                classification_reviewed=True,
+                classification_source=SKILL_CLASSIFICATION_SOURCE,
+                embedding=vec,
+                embedding_backend=embedder.name,
+            )
+        )
+    s.flush()
+    return source_ids
