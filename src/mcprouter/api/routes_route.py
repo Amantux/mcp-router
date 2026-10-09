@@ -45,13 +45,11 @@ from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 
+from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
     _dev_mode_active,
@@ -59,6 +57,7 @@ from mcprouter.api.deps_auth import (
     get_principal,
     require_admin,
 )
+from mcprouter.api.errors import install_error_handlers
 from mcprouter.eval.dataset import DatasetError, load_named
 from mcprouter.eval.runner import DEFAULT_EVAL_MAX_TOOLS, case_rows, compute_metrics, run_cases
 from mcprouter.eval.store import ensure_eval_table, save_eval_result
@@ -134,20 +133,6 @@ class _Wire(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
-async def _curated_validation_error(request: Request, exc: Exception) -> Response:
-    """Routing paths: 422 WITHOUT echoing input (the query may carry secrets).
-    Every other path keeps FastAPI's default behaviour unchanged."""
-    if not isinstance(exc, RequestValidationError):  # pragma: no cover - registration guard
-        raise exc
-    if not request.url.path.startswith(router.prefix + "/route"):
-        return await request_validation_exception_handler(request, exc)
-    detail = [
-        {"loc": list(e.get("loc", ())), "msg": str(e.get("msg", ""))[:200], "type": e.get("type")}
-        for e in exc.errors()[:20]
-    ]
-    return JSONResponse(status_code=422, content={"detail": detail})
-
-
 class RoutedToolOut(BaseModel):
     server: str
     tool: str
@@ -204,7 +189,7 @@ def _skill_tokens(request: Request, skills: list[RoutedTool]) -> dict[str, int]:
     route cache don't carry it)."""
     if not skills:
         return {}
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         rows = s.execute(
             select(SkillRecord.id, SkillRecord.body_tokens_est).where(
                 SkillRecord.id.in_([t.tool_id for t in skills])
@@ -225,7 +210,8 @@ def install_routing(
             "No routing scope resolver installed — /api/v1/route uses a PERMISSIVE "
             "allow-all scope. Dev only; the gateway must install a resolver."
         )
-    app.add_exception_handler(RequestValidationError, _curated_validation_error)
+    # Partial apps (tests) that only install routing keep the curated 422.
+    install_error_handlers(app)
     app.include_router(router)
 
 
@@ -253,7 +239,7 @@ def resolve_allowed(
     is not an existence oracle for servers the caller may not see."""
     if names is None:
         return None
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         ids, unknown = resolve_server_names(s, names)
     known = [n for n in dict.fromkeys(names) if n not in unknown]
     visible = scope.server_ids()
@@ -427,7 +413,7 @@ def _ref(c: ToolCandidate) -> ToolRefOut:
 def _simulation_principal(request: Request, agent_id: str) -> AgentPrincipal:
     security = request.app.state.security
     principal: AgentPrincipal | None
-    with request.app.state.session_factory() as s:
+    with session_factory(request)() as s:
         principal = s.scalars(
             select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
         ).one_or_none()

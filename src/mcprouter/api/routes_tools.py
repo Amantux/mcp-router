@@ -12,8 +12,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from mcprouter.api.acting import admin_actor
+from mcprouter.api.deps import get_session
+from mcprouter.api.errors import curated_errors
 from mcprouter.generation import bump_catalog
-from mcprouter.registry.api_deps import curated_errors, get_session, require_admin
 from mcprouter.registry.catalog import (
     MAX_LIMIT,
     ClassificationUpdate,
@@ -37,7 +39,7 @@ from mcprouter.registry.wire import (
 router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
-AdminDep = Annotated[str, Depends(require_admin)]
+AdminDep = Annotated[str, Depends(admin_actor)]
 
 
 @router.get("", response_model=ToolPageOut)

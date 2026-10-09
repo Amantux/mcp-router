@@ -668,15 +668,18 @@ class ExecutionManager:
         """agent_id given => only that agent's approval is visible."""
         return await anyio.to_thread.run_sync(self._get, approval_id, agent_id)
 
-    def _list(self, status: str | None) -> list[ApprovalView]:
+    def _list(self, status: str | None, limit: int = 200) -> list[ApprovalView]:
         with self._factory() as s:
-            q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc()).limit(200)
+            q = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc()).limit(limit)
             if status:
                 q = q.where(ApprovalRequest.status == status)
             return [_view(r) for r in s.scalars(q).all()]
 
-    async def list_approvals(self, status: str | None = None) -> list[ApprovalView]:
-        return await anyio.to_thread.run_sync(self._list, status)
+    async def list_approvals(
+        self, status: str | None = None, limit: int = 200
+    ) -> list[ApprovalView]:
+        """Newest first, at most `limit` rows (the route bounds it)."""
+        return await anyio.to_thread.run_sync(self._list, status, limit)
 
 
 def _view(row: ApprovalRequest) -> ApprovalView:

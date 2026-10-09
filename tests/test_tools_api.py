@@ -196,6 +196,74 @@ def test_dedup_accept_leaves_tools_enabled(client: TestClient, ids: dict[str, st
         assert client.get(f"/api/v1/tools/{tid}").json()["enabled"] is True
 
 
+def _open_suggestion(client: TestClient) -> dict[str, object]:
+    assert client.post("/api/v1/dedup/suggestions", json={}).status_code == 200
+    item: dict[str, object] = client.get("/api/v1/dedup/suggestions").json()["items"][0]
+    return item
+
+
+def _stored_preference(db: sessionmaker[Session], sid: str) -> str | None:
+    from mcprouter.models import DuplicateSuggestion
+
+    with db() as s:
+        row = s.get(DuplicateSuggestion, sid)
+        assert row is not None
+        return row.preferred_tool_id
+
+
+def test_dedup_accept_persists_reviewer_pick(
+    client: TestClient, ids: dict[str, str], db: sessionmaker[Session]
+) -> None:
+    """D12 / P-201: the scanner prefers A; the reviewer picks B and B is stored."""
+    sug = _open_suggestion(client)
+    assert sug["preferredToolId"] == ids["a"]
+    r = client.post(
+        f"/api/v1/dedup/suggestions/{sug['id']}/accept", json={"preferredToolId": ids["b"]}
+    )
+    assert r.status_code == 200
+    assert r.json()["preferredToolId"] == ids["b"]
+    assert _stored_preference(db, str(sug["id"])) == ids["b"]
+
+
+def test_dedup_accept_rejects_foreign_preference(
+    client: TestClient, ids: dict[str, str], db: sessionmaker[Session]
+) -> None:
+    sug = _open_suggestion(client)
+    url = f"/api/v1/dedup/suggestions/{sug['id']}/accept"
+    r = client.post(url, json={"preferredToolId": "not-in-pair"})
+    assert r.status_code == 422
+    assert "toolA or toolB" in r.json()["detail"]
+    assert client.post(url, json={"bogus": 1}).status_code == 422  # extra="forbid"
+    # Nothing changed: still open with the scanner's pick.
+    assert _stored_preference(db, str(sug["id"])) == ids["a"]
+    assert client.get("/api/v1/dedup/suggestions").json()["items"][0]["status"] == "open"
+
+
+def test_dedup_accept_empty_body_keeps_scanner_pick(
+    client: TestClient, ids: dict[str, str], db: sessionmaker[Session]
+) -> None:
+    sug = _open_suggestion(client)
+    r = client.post(f"/api/v1/dedup/suggestions/{sug['id']}/accept", json={})
+    assert r.status_code == 200 and r.json()["preferredToolId"] == ids["a"]
+    assert _stored_preference(db, str(sug["id"])) == ids["a"]
+
+
+def test_dedup_accept_without_body_keeps_scanner_pick(
+    client: TestClient, ids: dict[str, str], db: sessionmaker[Session]
+) -> None:
+    """Pre-D12 clients send no body at all."""
+    sug = _open_suggestion(client)
+    r = client.post(f"/api/v1/dedup/suggestions/{sug['id']}/accept")
+    assert r.status_code == 200 and r.json()["preferredToolId"] == ids["a"]
+    assert _stored_preference(db, str(sug["id"])) == ids["a"]
+
+
+def test_dedup_run_reports_truncated_field(client: TestClient, ids: dict[str, str]) -> None:
+    """P-201/P-603: `truncated` is on the wire (null until the detector reports it)."""
+    body = client.post("/api/v1/dedup/suggestions", json={}).json()
+    assert "truncated" in body and body["truncated"] in (None, False, True)
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
