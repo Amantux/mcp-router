@@ -110,7 +110,13 @@ def test_unrouted_skill_is_invisible(db: sessionmaker[Session], tmp_path: Path) 
             exp.activate("agent-a", ref, [a])
         assert ei.value.code == "not_found"
     assert exp.load_routed([]) == []  # default exposure: none until routed
-    assert _rows(db) == []
+    # Owner decision: an unknown/unrouted access is audited as a denial
+    # (still a 404 to the caller); no skill id is attributed or bumped.
+    rows = _rows(db)
+    assert [(r.outcome, r.detail, r.skill_id) for r in rows] == [
+        ("denied", "not routed", None),
+        ("denied", "not routed", None),
+    ]
 
 
 def test_policy_recheck_denies_and_audits(db: sessionmaker[Session], tmp_path: Path) -> None:

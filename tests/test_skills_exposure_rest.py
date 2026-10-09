@@ -259,7 +259,11 @@ def test_non_skill_route_entries_grant_nothing(env: Env) -> None:
         )
         s.commit()
     r = env.client.post(f"/api/v1/skills/{env.b}/activate", headers=H_ALICE)
-    assert r.status_code == 404 and env.rows() == []
+    assert r.status_code == 404
+    # Owner decision: unrouted access is audited as a denial, never as access.
+    assert [(x.outcome, x.detail, x.skill_id) for x in env.rows()] == [
+        ("denied", "not routed", None)
+    ]
 
 
 def test_stale_resource_is_409(env: Env, tmp_path: Path) -> None:

@@ -247,7 +247,7 @@ class ExecutionManager:
     def record_skill_activation(
         self,
         agent_id: str,
-        skill_id: str,
+        skill_id: str | None,
         outcome: str,
         detail: str,
         route_request_id: str | None = None,

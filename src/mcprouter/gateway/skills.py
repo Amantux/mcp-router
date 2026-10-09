@@ -138,6 +138,27 @@ class SkillExposure:
                 return sk, src
         raise SkillAccessError("not_found", "Unknown skill.")
 
+    def _resolve_audited(
+        self,
+        agent_id: str,
+        name_or_id: str,
+        routed_ids: Iterable[str],
+        route_request_id: str | None,
+        initiated_by: str | None,
+    ) -> tuple[SkillRecord, SkillSourceRecord]:
+        """resolve(), auditing an unknown/unrouted access as outcome "denied",
+        detail "not routed" (owner decision). No skill id is attributed: the
+        ref is caller-controlled and may not name a real skill. The caller
+        still sees the same curated 404."""
+        try:
+            return self.resolve(name_or_id, routed_ids)
+        except SkillAccessError as exc:
+            if exc.code == "not_found":
+                self._manager.record_skill_activation(
+                    agent_id, None, "denied", "not routed", route_request_id, initiated_by
+                )
+            raise
+
     def _internal(
         self,
         agent_id: str,
@@ -189,7 +210,9 @@ class SkillExposure:
         route_request_id: str | None = None,
         initiated_by: str | None = None,
     ) -> Activation:
-        sk, src = self.resolve(name_or_id, routed_ids)
+        sk, src = self._resolve_audited(
+            agent_id, name_or_id, routed_ids, route_request_id, initiated_by
+        )
         self._gate(agent_id, sk, src, route_request_id, initiated_by)
         try:
             body = read_body(sk, self._body_max)
@@ -215,7 +238,9 @@ class SkillExposure:
         route_request_id: str | None = None,
         initiated_by: str | None = None,
     ) -> ResourceContent:
-        sk, src = self.resolve(name_or_id, routed_ids)
+        sk, src = self._resolve_audited(
+            agent_id, name_or_id, routed_ids, route_request_id, initiated_by
+        )
         self._gate(agent_id, sk, src, route_request_id, initiated_by)
         files = SkillFiles(source_root(src, self._cache_dir), self._res_max)
         try:
