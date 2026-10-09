@@ -52,8 +52,6 @@ import type {
   PolicyRule,
   Principal,
   RegisterServerRequest,
-  RouteRequest,
-  RouteResponse,
   RoutedTool,
   RoutedSkill,
   AnalyticsKind,
@@ -380,7 +378,7 @@ function normaliseRoutedTool(raw: Record<string, unknown>): RoutedTool {
 }
 
 /** S2d item 2 (aligned): {source, skill, score, bodyTokensEst} (+ skillId on simulate). */
-export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
+function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill {
   return {
     skillId: (raw.skillId as string | undefined) ?? undefined,
     source: String(raw.source ?? raw.sourceName ?? ""),
@@ -388,15 +386,6 @@ export function normaliseRoutedSkill(raw: Record<string, unknown>): RoutedSkill 
     score: Number(raw.score ?? 0),
     bodyTokensEst: Number(raw.bodyTokensEst ?? 0),
   };
-}
-
-// CONTRACT: no auth header is sent; the simulator assumes the dev/admin API is
-// reachable without an agent key (or that the backend authorises the UI separately).
-export async function simulateRoute(body: RouteRequest): Promise<RouteResponse> {
-  const raw = await request<RouteResponse & { tools: Record<string, unknown>[] }>("POST", `${API_BASE}/route`, { body });
-  const out: RouteResponse = { ...raw, tools: (raw.tools ?? []).map(normaliseRoutedTool) };
-  if (Array.isArray(raw.skills)) out.skills = (raw.skills as unknown as Record<string, unknown>[]).map(normaliseRoutedSkill);
-  return out;
 }
 
 // ------------------------------------------------------------ models/health

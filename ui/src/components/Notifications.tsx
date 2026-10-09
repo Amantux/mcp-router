@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   MessageBar,
@@ -37,6 +37,19 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const [notes, setNotes] = useState<Note[]>([]);
   const nextId = useRef(1);
   const dismiss = useCallback((id: number) => setNotes((n) => n.filter((x) => x.id !== id)), []);
+  // Auto-dismiss timers die with the provider, so none fires after unmount.
+  const timers = useRef(new Set<number>());
+  useEffect(() => {
+    const live = timers.current;
+    return () => {
+      live.forEach((t) => window.clearTimeout(t));
+      live.clear();
+    };
+  }, []);
+  // Exactly one stack renders per provider, wherever several are mounted.
+  const [stackOwner, setStackOwner] = useState<string | null>(null);
+  const claimStack = useCallback((id: string) => setStackOwner((o) => o ?? id), []);
+  const releaseStack = useCallback((id: string) => setStackOwner((o) => (o === id ? null : o)), []);
 
   const api = useMemo<NotifyApi>(
     () => ({
@@ -56,7 +69,11 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       success: (message) => {
         const id = nextId.current++;
         setNotes((n) => [...n, { id, intent: "success", title: message, body: "" }]);
-        window.setTimeout(() => dismiss(id), SUCCESS_MS);
+        const t = window.setTimeout(() => {
+          timers.current.delete(t);
+          dismiss(id);
+        }, SUCCESS_MS);
+        timers.current.add(t);
       },
     }),
     [dismiss],
@@ -64,18 +81,33 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider value={api}>
-      <NotesContext.Provider value={{ notes, dismiss }}>{children}</NotesContext.Provider>
+      <NotesContext.Provider value={{ notes, dismiss, stackOwner, claimStack, releaseStack }}>{children}</NotesContext.Provider>
     </Ctx.Provider>
   );
 }
 
-const NotesContext = createContext<{ notes: Note[]; dismiss: (id: number) => void }>({ notes: [], dismiss: () => {} });
+const NotesContext = createContext<{
+  notes: Note[];
+  dismiss: (id: number) => void;
+  stackOwner: string | null;
+  claimStack: (id: string) => void;
+  releaseStack: (id: string) => void;
+}>({ notes: [], dismiss: () => {}, stackOwner: null, claimStack: () => {}, releaseStack: () => {} });
 
-/** Renders the notification stack; placed once at the top of the content column. */
+/**
+ * Renders the notification stack; placed once at the top of the content column. If
+ * more than one is mounted under a provider, only the first renders, so a bar never
+ * shows twice (and tests see the same single stack as production).
+ */
 export function NotificationStack() {
-  const { notes, dismiss } = useContext(NotesContext);
+  const { notes, dismiss, stackOwner, claimStack, releaseStack } = useContext(NotesContext);
   const styles = useStyles();
-  if (notes.length === 0) return null;
+  const me = useId();
+  useEffect(() => {
+    claimStack(me);
+    return () => releaseStack(me);
+  }, [me, claimStack, releaseStack]);
+  if (stackOwner !== me || notes.length === 0) return null;
   return (
     <MessageBarGroup className={styles.group} animate="exit-only">
       {notes.map((n) => (

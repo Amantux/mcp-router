@@ -116,7 +116,7 @@ const CASES: Case[] = [
     name: "Playground skills",
     ui: <PlaygroundPage />,
     route: "/playground?tab=skills",
-    ok: { [`GET ${API}/skills`]: page, [`GET ${API}/servers`]: [], [`GET ${API}/tools`]: page },
+    ok: { [`GET ${API}/skills`]: page },
     fails: `GET ${API}/skills`,
     emptyCopy: /No enabled skills yet/,
     what: "Skills",

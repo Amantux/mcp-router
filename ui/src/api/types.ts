@@ -132,19 +132,6 @@ export interface DuplicateSuggestion {
 }
 
 // ----------------------------------------------------------------- routing
-// SPEC §9 body is {query, agent_id, max_tools, allowed_servers?}.
-// CONTRACT: sent camelCase per the wire convention; backend should accept both.
-export interface RouteRequest {
-  query: string;
-  agentId: string;
-  maxTools: number;
-  allowedServers?: string[];
-  /** S2d item 2: may only LOWER the principal/global skills cap (1..1000). */
-  maxSkills?: number;
-  /** S2d item 2: narrows the routed kinds; omitted = both. */
-  kinds?: RouteKind[];
-}
-
 export type RouteKind = "tool" | "skill";
 
 /** S2d item 2 (aligned): /route skills[{source, skill, score, bodyTokensEst}]; simulate adds skillId. */
@@ -162,24 +149,6 @@ export interface RoutedTool {
   serverName: string;
   toolName: string;
   score: number;
-}
-
-export interface RouteResponse {
-  requestId: string;
-  tools: RoutedTool[];
-  fallbackUsed: boolean;
-  latencyMs: number;
-  modelVersion?: string;
-  // interfaces.RouteResult.no_match — not in SPEC §9 literal, present in the contract.
-  noMatch?: boolean;
-  // Wave 2 (budgets): sent snake_case (max_tools_applied, ...) like the rest
-  // of /route; camelised by the client. null maxServersApplied = unlimited.
-  maxToolsApplied?: number;
-  maxServersApplied?: number | null;
-  /** S2d item 2: skills routed separately from tools (never mixed into tools[]). */
-  skills?: RoutedSkill[];
-  maxSkillsApplied?: number | null;
-  cached?: boolean;
 }
 
 // ------------------------------------------------------------ models/health

@@ -313,7 +313,7 @@ type Mode = "form" | "json";
  * Who a playground run goes as. An admin-only session must name the agent it acts
  * for (the backend refuses admin runs with no agent), so it gets a picker.
  */
-function useRunAs() {
+export function useRunAs() {
   const auth = useAuth();
   const adminOnly = auth.hasAdminToken && !auth.hasAgentKey;
   const [runAs, setRunAs] = useState("");
@@ -794,23 +794,15 @@ function SkillsPlayground() {
   );
 }
 
-export function PlaygroundPage() {
+/** The tools tab. Its loaders live here so the Skills tab never fetches tools (A3-020). */
+function ToolsPlayground() {
   const s = useStyles();
   const c = useCommonStyles();
-  const auth = useAuth();
   const [params, setParams] = useSearchParams();
   const selectedId = params.get("tool");
   const [serverId, setServerId] = useState("");
   const [query, setQuery] = useState("");
   const q = useDebounced(query, 200);
-
-  // Resolve the agent id behind the agent key, so the page can say who runs the tool.
-  useEffect(() => {
-    if (!auth.hasAgentKey || auth.agentId || auth.agentKeyRejected) return;
-    const ctrl = new AbortController();
-    getMe(ctrl.signal).catch(() => {});
-    return () => ctrl.abort();
-  }, [auth.hasAgentKey, auth.agentId, auth.agentKeyRejected]);
 
   const servers = useLoader("Load servers", (sig) => listServers(sig), []);
   const tools = useLoader(
@@ -822,6 +814,81 @@ export function PlaygroundPage() {
   const items = tools.data?.items ?? [];
   const selected = selectedId && detail.data?.id === selectedId ? detail.data : undefined;
 
+  return (
+    <div className={s.layout}>
+      <div className={s.picker}>
+        <Field label="Server">
+          <Select value={serverId} onChange={(_, d) => setServerId(d.value)}>
+            <option value="">All servers</option>
+            {(servers.data ?? []).map((sv) => (
+              <option key={sv.id} value={sv.id}>
+                {sv.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Find a tool">
+          <SearchBox value={query} onChange={(_, d) => setQuery(d.value)} placeholder="Name or description" />
+        </Field>
+        {tools.loading && !tools.data ? (
+          <LoadingRow label="Loading tools…" />
+        ) : tools.failed && !tools.data ? (
+          <ErrorState what="Tools" onRetry={tools.reload} />
+        ) : items.length === 0 ? (
+          <Caption1>{q || serverId ? "No enabled tools match." : "No enabled tools yet. Register a server first."}</Caption1>
+        ) : (
+          <ul className={s.list} aria-label="Tools">
+            {items.map((t) => (
+              <li key={t.id}>
+                <button
+                  type="button"
+                  className={mergeClasses(s.item, t.id === selectedId && s.itemActive)}
+                  aria-current={t.id === selectedId ? "true" : undefined}
+                  onClick={() => setParams({ tool: t.id })}
+                >
+                  <strong>{t.name}</strong>
+                  <Caption1 className={c.muted}>
+                    {t.serverName ?? ""} · {t.operation}
+                  </Caption1>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div>
+        {!selectedId ? (
+          <EmptyState
+            icon={<WrenchRegular />}
+            title="Pick a tool to try it"
+            body="The argument form is generated from the tool's input schema. Runs go through the same policy, approval and audit path as an agent's call."
+          />
+        ) : !selected ? (
+          detail.loading ? (
+            <LoadingRow label="Loading tool…" />
+          ) : (
+            <Caption1>That tool couldn't be loaded.</Caption1>
+          )
+        ) : (
+          <ToolRunner key={`${selected.id}:${selected.schemaHash}`} tool={selected} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PlaygroundPage() {
+  const auth = useAuth();
+  const [params, setParams] = useSearchParams();
+
+  // Resolve the agent id behind the agent key, so the page can say who runs the tool.
+  useEffect(() => {
+    if (!auth.hasAgentKey || auth.agentId || auth.agentKeyRejected) return;
+    const ctrl = new AbortController();
+    getMe(ctrl.signal).catch(() => {});
+    return () => ctrl.abort();
+  }, [auth.hasAgentKey, auth.agentId, auth.agentKeyRejected]);
+
   const tab = params.has("skill") || params.get("tab") === "skills" ? "skills" : "tools";
 
   return (
@@ -831,69 +898,7 @@ export function PlaygroundPage() {
         <Tab value="tools">Tools</Tab>
         <Tab value="skills">Skills</Tab>
       </TabList>
-      {tab === "skills" ? (
-        <SkillsPlayground />
-      ) : (
-        <div className={s.layout}>
-        <div className={s.picker}>
-          <Field label="Server">
-            <Select value={serverId} onChange={(_, d) => setServerId(d.value)}>
-              <option value="">All servers</option>
-              {(servers.data ?? []).map((sv) => (
-                <option key={sv.id} value={sv.id}>
-                  {sv.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Find a tool">
-            <SearchBox value={query} onChange={(_, d) => setQuery(d.value)} placeholder="Name or description" />
-          </Field>
-          {tools.loading && !tools.data ? (
-            <LoadingRow label="Loading tools…" />
-          ) : tools.failed && !tools.data ? (
-            <ErrorState what="Tools" onRetry={tools.reload} />
-          ) : items.length === 0 ? (
-            <Caption1>{q || serverId ? "No enabled tools match." : "No enabled tools yet. Register a server first."}</Caption1>
-          ) : (
-            <ul className={s.list} aria-label="Tools">
-              {items.map((t) => (
-                <li key={t.id}>
-                  <button
-                    type="button"
-                    className={mergeClasses(s.item, t.id === selectedId && s.itemActive)}
-                    aria-current={t.id === selectedId ? "true" : undefined}
-                    onClick={() => setParams({ tool: t.id })}
-                  >
-                    <strong>{t.name}</strong>
-                    <Caption1 className={c.muted}>
-                      {t.serverName ?? ""} · {t.operation}
-                    </Caption1>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div>
-          {!selectedId ? (
-            <EmptyState
-              icon={<WrenchRegular />}
-              title="Pick a tool to try it"
-              body="The argument form is generated from the tool's input schema. Runs go through the same policy, approval and audit path as an agent's call."
-            />
-          ) : !selected ? (
-            detail.loading ? (
-              <LoadingRow label="Loading tool…" />
-            ) : (
-              <Caption1>That tool couldn't be loaded.</Caption1>
-            )
-          ) : (
-            <ToolRunner key={`${selected.id}:${selected.schemaHash}`} tool={selected} />
-          )}
-        </div>
-        </div>
-      )}
+      {tab === "skills" ? <SkillsPlayground /> : <ToolsPlayground />}
     </>
   );
 }

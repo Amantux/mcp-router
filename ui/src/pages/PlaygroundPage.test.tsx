@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { NotificationsProvider } from "../components/Notifications";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { setCredentials } from "../api/auth";
-import { ExecutionOutcomeView, PlaygroundPage } from "./PlaygroundPage";
+import { ExecutionOutcomeView, PlaygroundPage, useRunAs } from "./PlaygroundPage";
 
 const TOOL = {
   id: "t1",
@@ -202,9 +204,7 @@ const SKILL = { id: "k1", source_id: "src1", source_name: "team-skills", name: "
 function mockSkill(activate: (body: unknown) => { status?: number; json?: unknown }) {
   return mockFetch({
     "GET /api/v1/skills": () => ({ json: { items: [SKILL], total: 1 } }),
-    // The page also loads the tools tab's lists (A3-020) and resolves the agent key.
-    "GET /api/v1/servers": () => ({ json: [] }),
-    "GET /api/v1/tools": () => ({ json: { items: [], total: 0 } }),
+    // The page resolves the agent key's id (the 429 test sets one).
     "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
     "GET /api/v1/skills/k1": () => ({ json: SKILL }),
     "POST /api/v1/skills/k1/activate": activate,
@@ -237,6 +237,8 @@ describe("PlaygroundPage skills tab", () => {
     expect(container.querySelector("pre b")).toBeNull();
     const post = calls.find((c) => c.method === "POST")!;
     expect((post.body as Record<string, unknown>).agentId).toBe("billing-bot");
+    // The Skills tab never loads the tools tab's lists (A3-020).
+    expect(calls.some((c) => c.path === "/api/v1/tools" || c.path === "/api/v1/servers")).toBe(false);
   });
 
   it("maps a 429 activation onto the shared outcome renderer", async () => {
@@ -250,3 +252,34 @@ describe("PlaygroundPage skills tab", () => {
     expect(await screen.findByTestId("outcome-rate_limited")).toBeTruthy();
   });
 });
+
+describe("useRunAs", () => {
+  const wrap = ({ children }: { children: ReactNode }) => <NotificationsProvider>{children}</NotificationsProvider>;
+  it("admin-only: lists enabled agents, names the impersonation, and flags a failed list", async () => {
+    setCredentials({ adminToken: "adm" });
+    let fail = false;
+    mockFetch({
+      "GET /api/v1/principals": () =>
+        fail ? { status: 500 } : { json: [{ id: "p1", agent_id: "on-bot", enabled: true }, { id: "p2", agent_id: "off-bot", enabled: false }] },
+    });
+    const { result, unmount } = renderHook(() => useRunAs(), { wrapper: wrap });
+    await waitFor(() => expect(result.current.agents).toEqual(["on-bot"]));
+    expect([result.current.adminOnly, result.current.who]).toEqual([true, "the admin token"]);
+    act(() => result.current.setRunAs("on-bot"));
+    expect(result.current.who).toBe("agent “on-bot” (admin-initiated)");
+    unmount();
+    fail = true;
+    const again = renderHook(() => useRunAs(), { wrapper: wrap });
+    await waitFor(() => expect(again.result.current.agentsFailed).toBe(true));
+    expect(again.result.current.agents).toEqual([]);
+  });
+
+  it("with an agent key there is no picker and no principals call", () => {
+    setCredentials({ agentKey: "agt" });
+    const { calls } = mockFetch({});
+    const { result } = renderHook(() => useRunAs(), { wrapper: wrap });
+    expect(result.current.adminOnly).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+});
+

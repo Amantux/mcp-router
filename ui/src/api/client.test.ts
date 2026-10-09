@@ -13,7 +13,6 @@ import {
   listTools,
   refreshServer,
   normaliseSimulation,
-  simulateRoute,
   snakeToCamel,
 } from "./client";
 import { mockFetch } from "../test/render";
@@ -97,44 +96,6 @@ describe("client requests", () => {
   it("defaults missing tool versions to an empty list", async () => {
     mockFetch({ "GET /api/v1/tools/t1": () => ({ json: { id: "t1", name: "x" } }) });
     expect((await getTool("t1")).versions).toEqual([]);
-  });
-
-  it("normalises the SPEC §9 literal route response ({server, tool}, snake_case)", async () => {
-    const { calls } = mockFetch({
-      "POST /api/v1/route": () => ({
-        json: { request_id: "r1", tools: [{ server: "github", tool: "list_prs", score: 0.81 }], fallback_used: false, latency_ms: 42.1 },
-      }),
-    });
-    const res = await simulateRoute({ query: "prs", agentId: "a1", maxTools: 5 });
-    expect(res).toEqual({
-      requestId: "r1",
-      tools: [{ toolId: undefined, serverName: "github", toolName: "list_prs", score: 0.81 }],
-      fallbackUsed: false,
-      latencyMs: 42.1,
-    });
-    expect(calls[0].body).toEqual({ query: "prs", agentId: "a1", maxTools: 5 });
-  });
-
-  it("camelises the wave-2 /route budget fields (sent snake_case)", async () => {
-    mockFetch({
-      "POST /api/v1/route": () => ({
-        json: {
-          request_id: "r2",
-          tools: [],
-          fallback_used: false,
-          latency_ms: 3,
-          no_match: true,
-          max_tools_applied: 5,
-          max_servers_applied: null,
-          cached: true,
-        },
-      }),
-    });
-    const res = await simulateRoute({ query: "prs", agentId: "a1", maxTools: 5 });
-    expect(res.maxToolsApplied).toBe(5);
-    expect(res.maxServersApplied).toBeNull();
-    expect(res.cached).toBe(true);
-    expect(res.noMatch).toBe(true);
   });
 
   it("executeTool sends agentId/routeRequestId only when given, and keeps result content opaque", async () => {
@@ -244,25 +205,7 @@ describe("refreshServer", () => {
   });
 });
 
-describe("skills on /route and /route/simulate (S2d item 2)", () => {
-  it("camelises /route skills[] and max_skills_applied", async () => {
-    mockFetch({
-      "POST /api/v1/route": () => ({
-        json: {
-          request_id: "r1",
-          tools: [{ server: "docs", tool: "fill_pdf_form", score: 0.91 }],
-          skills: [{ source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }],
-          fallback_used: false, latency_ms: 12, no_match: false,
-          max_tools_applied: 5, max_servers_applied: null, max_skills_applied: 1,
-        },
-      }),
-    });
-    const r = await simulateRoute({ query: "pdf", agentId: "a", maxTools: 5, maxSkills: 1 });
-    expect(r.tools.map((t) => t.toolName)).toEqual(["fill_pdf_form"]);
-    expect(r.skills).toEqual([{ skillId: undefined, source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }]);
-    expect(r.maxSkillsApplied).toBe(1);
-  });
-
+describe("skills on /route/simulate (S2d item 2)", () => {
   it("normalises simulate skills, kinds, per-kind pruning and the maxSkills clamp", () => {
     const s = normaliseSimulation(
       {
