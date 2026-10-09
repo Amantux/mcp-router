@@ -22,7 +22,7 @@ The ones a deployment usually sets:
 |---|---|---|
 | `MCPR_ADMIN_TOKEN` | unset | Admin API bearer. Set it for every deployment. |
 | `MCPR_AGENT_KEYS` | unset | `id:key[,id:key]`; seeds agent principals at start (then the setup wizard is skipped). |
-| `POSTGRES_PASSWORD` | `mcprouter` | Required in `.env` from v0.6. |
+| `POSTGRES_PASSWORD` | unset | Required from v0.6: compose refuses to start without it. |
 | `MCPR_BIND` | `127.0.0.1` | From v0.6: host address the API port is published on. |
 | `MCPR_HOST_PORT` | `8400` | Host port for the API. |
 | `MCPR_ALLOWED_HOSTS` | unset | Extra `Host` names accepted (reverse proxy, LAN name). |
@@ -45,6 +45,18 @@ Exported shell variables work too (compose reads the shell environment before
   `127.0.0.1`, `[::1]` and `MCPR_ALLOWED_HOSTS` (any port). A mismatch gets
   **421** with a JSON body. This blocks DNS-rebinding attacks from web pages in
   your browser.
+- **Credential length.** `MCPR_ADMIN_TOKEN` and every key in
+  `MCPR_AGENT_KEYS` must be at least 32 characters (`openssl rand -hex 32`);
+  a shorter one stops the container at start with exit 2 and a FATAL line
+  naming the variable.
+- **Secrets from files.** `MCPR_DATABASE_URL`, `MCPR_AGENT_KEYS`,
+  `MCPR_ADMIN_TOKEN`, `MCPR_DECISION_API_KEY` and `MCPR_AOAI_API_KEY` each
+  have a `_FILE` variant (for example `MCPR_ADMIN_TOKEN_FILE=/run/secrets/admin`)
+  that wins over the plain variable, so the value never sits in the process
+  environment.
+- **Schema first.** The entrypoint runs `python -m mcprouter.migrate upgrade`
+  before it starts uvicorn; a failed migration stops the container (exit 1)
+  instead of serving an old schema.
 
 ### Open and protected surfaces
 
@@ -129,7 +141,9 @@ docker compose logs -f api
 | Request body | 1 MiB (413 above it) | every API and MCP route |
 | Tool executions and skill activations | `MCPR_RATE_LIMIT_PER_AGENT_PER_MIN` (120) per agent | execution manager |
 | Decision edge | `MCPR_DECISION_RATE_LIMIT_PER_MIN` (120) per principal (from v0.6) | `POST /api/v1/decision/systemone` |
-| MCP sessions | `MCPR_MCP_MAX_SESSIONS` (1000) total, `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent (from v0.6) | `/mcp` |
+| MCP sessions | `MCPR_MCP_MAX_SESSIONS` (1000) total, `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent credential (from v0.6) | `/mcp` |
+| `router.find_tools` re-routes | `MCPR_RATE_LIMIT_PER_AGENT_PER_MIN` (120) per agent | `/mcp` |
+| Route feedback | 30 per minute per principal, REST and MCP together | `POST /api/v1/route/{request_id}/feedback`, `router.feedback` |
 | Tool call deadline | `MCPR_DEFAULT_TOOL_TIMEOUT_S` (30 s) | execution manager |
 | Git skill source clone | 120 s, 200 MiB | `src/mcprouter/skills/gitsource.py` |
 

@@ -22,8 +22,8 @@ setup:  ## locked venv (python 3.12 + dev extra) and ui deps (node from .nvmrc)
 setup-check:
 	@test -x $(BIN)/pytest || { echo "run: make setup"; exit 1; }
 
-db-up:  ## Postgres+pgvector on 127.0.0.1:5434 (dev override)
-	$(COMPOSE_DEV) up -d --wait db
+db-up:  ## Postgres+pgvector on 127.0.0.1:5434 (dev override; test password unless POSTGRES_PASSWORD is set)
+	POSTGRES_PASSWORD=$${POSTGRES_PASSWORD:-mcprouter} $(COMPOSE_DEV) up -d --wait db
 
 lint: setup-check  ## ruff check + format check + lockfile check
 	$(BIN)/ruff check .

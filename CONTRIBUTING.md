@@ -26,7 +26,7 @@ Without make:
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install -e '.[dev]'
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db
+POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db
 cd ui && npm ci && cd ..
 ```
 
@@ -127,11 +127,22 @@ default differs from the code, or a documented CLI flag is gone.
 
 ## 11. Releases
 
-Releases are cut by tagging `vX.Y.Z` on a commit with a green `CI` run on
-`master`. From v0.6 the release workflow verifies the tag against
-`pyproject.toml` and the top `CHANGELOG.md` heading before it publishes the
-images. Update `CHANGELOG.md` (move the Unreleased entries under the new
-version) in the same pull request as the version bump.
+1. In one pull request: bump the version in `pyproject.toml` and
+   `ui/package.json` (`tests/test_version_lockstep.py` holds them, the
+   package metadata, `/openapi.json` and the MCP server equal) and move the
+   `## [Unreleased]` entries under `## [X.Y.Z] - <date>` in `CHANGELOG.md`.
+2. Merge it; wait for the `CI` push run on `master` to go green.
+3. Tag that commit `vX.Y.Z` and push the tag.
+
+From v0.6 `.github/workflows/release.yml` publishes nothing unless its
+`verify` job passes: the tag is `v` + the `pyproject.toml` version, the top
+versioned `CHANGELOG.md` heading is that version
+(`.github/scripts/release_verify.py`), a green `CI` push run exists for the
+exact SHA on `master`, and the SHA is an ancestor of `origin/master`. Only
+then do both images build and push, with provenance and an SBOM. `:latest`
+and `:latest-inference` move only for a plain `vX.Y.Z` tag that is the
+highest one; a pre-release tag (`v0.7.0rc1`, with the same pyproject
+version) never moves them.
 
 ## 12. Security reports
 

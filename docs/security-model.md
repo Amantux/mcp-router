@@ -125,7 +125,10 @@ metadata because `models.py` is frozen.
   conditional `UPDATE … WHERE status='pending' AND expires_at > now
   RETURNING`, so concurrent approvals race in the database and exactly one
   wins. A test runs 8 concurrent approvals and sees one execution.
-- Approvals **expire after 10 minutes**.
+- Approvals **expire after 10 minutes**. An expired approval can no longer
+  be approved (410). Denying one still succeeds: `deny` answers 200 with
+  status `denied` and clears its arguments, so an admin can always close a
+  stale request.
 - The claimed call re-runs policy, availability, a **schema-hash equality
   check** and validation against *current* state. Revoking the rule or
   changing the tool's schema after the request voids it.
@@ -141,7 +144,16 @@ metadata because `models.py` is frozen.
   Non-HTTP scopes are rejected.
 - The wrapper sets `scope["user"]`, so the SDK **binds each MCP session to
   the credential that created it**. Another agent presenting that
-  `Mcp-Session-Id` gets 404.
+  `Mcp-Session-Id` gets 404. *(From v0.6)* the binding is to the credential,
+  not just the agent: after a key rotation the old key's sessions and
+  `subscriptions/listen` streams are closed, never notified. Rotating a key,
+  disabling a principal (`PATCH … enabled=false`) or deleting it closes them
+  at once; the next re-route re-checks as well.
+- *(From v0.6)* Session caps: `MCPR_MCP_MAX_SESSIONS` (1000) in total and
+  `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent **credential**, so a
+  rotated-away key's sessions never use up the new key's budget. The next
+  `initialize` over the cap gets 429. `/mcp` bodies are capped at 1 MiB like
+  every other route.
 - `tools/list` returns the agent's last route result, or a deterministic
   default when no route has run: the top-N most-used tools, with a stable-id
   tiebreak.
@@ -157,10 +169,15 @@ metadata because `models.py` is frozen.
   **redacted before it reaches the routing model**. The meta tool is
   rate-limited per agent, router failures are curated, and the previous
   exposure is kept on failure. A discovered tool cannot shadow its name.
+- *(From v0.6)* Meta-tool arguments (`router.find_tools`, `router.feedback`
+  and the skill tools) are validated against the schema each tool
+  advertises, with the execution pipeline's validator. A bad call gets an
+  `isError` result `Refused: invalid arguments (…)` that names the location
+  and keyword, never the values.
 - `tools/list_changed` is sent only to the agent whose exposure changed:
   - Handshake-era sessions get it on their standalone stream.
   - 2026-07-28-era clients get it via `subscriptions/listen` on a
-    **per-agent** bus.
+    bus **per agent and credential** *(from v0.6)*.
 
 ## 5. Redaction (`execution/redaction`)
 

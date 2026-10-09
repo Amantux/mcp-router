@@ -185,7 +185,7 @@ Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22
 (`.nvmrc`), Docker Compose v2 for the database. From the repository root:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db  # dev-only: pgvector on 127.0.0.1:5434
+POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db  # dev-only: pgvector on 127.0.0.1:5434
 uv venv --python 3.12 .venv
 uv pip install -e '.[dev]'                  # zero-ML core
 uv pip install -e '.[inference]'            # optional: real embeddings + Laya

@@ -59,9 +59,11 @@ For an offline host, pre-load the models into `mcpr-models-cache` and set
 
 From 0.6.0 the schema is versioned with Alembic.
 
-- **Automatic.** On startup the app takes a Postgres advisory lock and runs
-  `upgrade head`, so several starting containers never race. A database that
-  is already at `head` gets no DDL at all.
+- **Automatic.** The container entrypoint runs
+  `python -m mcprouter.migrate upgrade` before it starts uvicorn (a failure
+  stops the container, exit 1), and the app's own startup runs the same step.
+  Both take a Postgres advisory lock, so several starting containers never
+  race. A database that is already at `head` gets no DDL at all.
 - **Manual.** To migrate before switching traffic, run the same step by hand:
   `docker compose run --rm api python -m mcprouter.migrate` (source install:
   `.venv/bin/python -m mcprouter.migrate`).

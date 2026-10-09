@@ -30,7 +30,7 @@ reverse proxy, troubleshooting): [deploy.md](deploy.md).
 **From source** (the [README source install](../README.md#run-from-source)):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db   # dev only: 127.0.0.1:5434
+POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db   # dev only: 127.0.0.1:5434
 uv venv --python 3.12 .venv && uv pip install -e '.[dev]'   # add '.[inference]' for real embeddings
 (cd ui && npm ci && npm run build)                           # dashboard, before the server starts
 export MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEYS=...

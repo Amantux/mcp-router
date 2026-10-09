@@ -115,7 +115,11 @@ DOCS: dict[str, str] = {
 # Read by compose, the entrypoint, the image or the tooling, never by Settings.
 DEPLOY_ONLY: tuple[tuple[str, str, str], ...] = (
     ("POSTGRES_USER", "mcprouter", "Database user created by the `db` service."),
-    ("POSTGRES_PASSWORD", "mcprouter", "Database password. Change it for anything non-local."),
+    (
+        "POSTGRES_PASSWORD",
+        "",
+        "Database password. Required from v0.6: compose refuses to start without it.",
+    ),
     ("POSTGRES_DB", "mcprouter", "Database name."),
     ("MCPR_HOST_PORT", "8400", "Host port compose publishes the API on."),
     ("MCPR_BIND", "127.0.0.1", "From v0.6: host address compose publishes the API on."),

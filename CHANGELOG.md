@@ -30,8 +30,11 @@ Planned as 0.6.0 (wave 6: hardening and full test coverage).
 - Node 22 (`node`, `npm`, `npx`) in the image, so imported `npx` stdio servers
   run in the container.
 - Structured logging (`MCPR_LOG_LEVEL`, `MCPR_LOG_FORMAT`).
-- Per-agent MCP session cap (`MCPR_MCP_MAX_SESSIONS_PER_AGENT`) and a
+- Per-credential MCP session cap (`MCPR_MCP_MAX_SESSIONS_PER_AGENT`) and a
   decision-edge rate limit (`MCPR_DECISION_RATE_LIMIT_PER_MIN`).
+- MCP sessions and listen streams are bound to the key that opened them:
+  rotating a key, disabling or deleting a principal closes them at once.
+- `_FILE` variants for every secret (`MCPR_ADMIN_TOKEN_FILE`, …).
 - Docs: `CONTRIBUTING.md`, `docs/architecture.md`, `docs/upgrade.md`, and the
   generated `docs/reference/configuration.md` and `docs/reference/api.md`, plus
   `docs/reference/cli.md`.
@@ -54,14 +57,17 @@ Planned as 0.6.0 (wave 6: hardening and full test coverage).
 - Alembic migrations replace the startup `ALTER TABLE` list. Revision `0001`
   is the baseline; `0002` adds the HNSW vector indexes and a routing-decision
   index. A 0.5 database is bridged and stamped automatically on first start.
-- Migrations run at startup under an advisory lock; `python -m mcprouter.migrate`
-  runs them by hand. One-step downgrade from `0002`; an old image refuses a
+- Migrations run at startup under an advisory lock (the container entrypoint
+  runs `python -m mcprouter.migrate upgrade` before uvicorn); the same
+  command runs them by hand. One-step downgrade from `0002`; an old image refuses a
   newer schema.
 
 ### API
 
 - `POST /api/v1/dedup/suggestions/{id}/accept` takes an optional
-  `preferredToolId`; dedup scans report `truncated`.
+  `preferredToolId`; dedup scans report `truncated` (always a boolean).
+- `GET /api/v1/analytics/suggestions` answers a curated 503 when the
+  staleness scan of a large decision log times out.
 - `GET /api/v1/skills` accepts `sourceId` and `hasScripts`.
 - Validation errors no longer echo request input; unknown body fields are
   rejected (422).
