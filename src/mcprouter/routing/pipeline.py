@@ -69,6 +69,7 @@ from mcprouter.interfaces import (
     ToolCandidate,
 )
 from mcprouter.models import (
+    SKILL_ID_PREFIX,
     MCPServerRecord,
     MCPToolRecord,
     RoutingDecisionRecord,
@@ -672,11 +673,11 @@ def _kind_counts(raw: list[ToolCandidate], out: list[ToolCandidate]) -> dict[str
 
 
 def _ckey(c: ToolCandidate) -> str:
-    return c.tool_id if c.kind == "tool" else f"skill:{c.tool_id}"
+    return c.tool_id if c.kind == "tool" else f"{SKILL_ID_PREFIX}{c.tool_id}"
 
 
 def _decision_id(t: RoutedTool) -> str:
-    return t.tool_id if t.kind == "tool" else f"skill:{t.tool_id}"
+    return t.tool_id if t.kind == "tool" else f"{SKILL_ID_PREFIX}{t.tool_id}"
 
 
 def _min_set(*values: int | None) -> int | None:

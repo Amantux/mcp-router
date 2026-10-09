@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.analytics.funnel import merged_funnel, totals
 from mcprouter.analytics.tokens import tool_token_map
 from mcprouter.analytics.window import all_time
-from mcprouter.models import utcnow
+from mcprouter.models import SKILL_ID_PREFIX, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class FunnelCollector:
                 f = merged_funnel(s, all_time(utcnow()), tool_token_map(s))
                 s.rollback()
             t = totals(f)
-            sk = [c for tid, c in f.items() if tid.startswith("skill:")]
+            sk = [c for tid, c in f.items() if tid.startswith(SKILL_ID_PREFIX)]
             values = {
                 "surfaced": t.surfaced,
                 "selected": t.selected,

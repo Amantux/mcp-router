@@ -45,6 +45,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from mcprouter.models import (
+    SKILL_ID_PREFIX,
     DuplicateSuggestion,
     MCPServerRecord,
     MCPToolRecord,
@@ -227,7 +228,6 @@ def run_dedup(
 #   >= threshold alone (names/schemas are not comparable across kinds).
 #   tool_a_id = bare tool id, tool_b_id = "skill:<id>", rationale "cross-kind:".
 # Suggestions are advisory only: accept/dismiss never touch `enabled`.
-SKILL_PREFIX = "skill:"
 
 _SKILL_PAIRS_SQL = text(
     """
@@ -259,7 +259,7 @@ _CROSS_SQL = text(
 
 
 def skill_ref(skill_id: str) -> str:
-    return f"{SKILL_PREFIX}{skill_id}"
+    return f"{SKILL_ID_PREFIX}{skill_id}"
 
 
 def _skill_traits(sk: SkillRecord) -> set[str]:

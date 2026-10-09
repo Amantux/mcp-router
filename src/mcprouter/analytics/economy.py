@@ -60,6 +60,7 @@ from mcprouter.analytics.funnel import ATT_CTE, LIVE_DECISION_SQL, SURF_CTE, rat
 from mcprouter.analytics.tokens import ESTIMATOR, skill_token_maps
 from mcprouter.analytics.window import Window
 from mcprouter.models import (
+    SKILL_ID_PREFIX,
     AgentPrincipal,
     MCPServerRecord,
     MCPToolRecord,
@@ -215,7 +216,7 @@ def agent_catalog_tokens(
                 if evaluate(principal, srv, t, agent_rules).allow
             )
             + sum(
-                skill_tokens.get(f"skill:{sk.id}", 0)
+                skill_tokens.get(f"{SKILL_ID_PREFIX}{sk.id}", 0)
                 for sk, src in skills
                 if evaluate_skill(principal, src, sk, agent_rules).allow
             )

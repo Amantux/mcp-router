@@ -34,6 +34,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 384
+# Skills share id space with tools in routing decisions, feedback, analytics
+# and dedup suggestions as "skill:<skill id>" (RoutingDecisionRecord.
+# selected_tool_ids and friends). The ONE spelling of that prefix.
+SKILL_ID_PREFIX = "skill:"
 
 
 def _uuid() -> str:

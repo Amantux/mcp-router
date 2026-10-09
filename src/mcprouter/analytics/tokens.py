@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord
+from mcprouter.models import SKILL_ID_PREFIX, MCPServerRecord, MCPToolRecord, SkillRecord
 
 CHARS_PER_TOKEN = 4
 ESTIMATOR = "chars/4 over compact JSON of name+description+inputSchema"
@@ -86,6 +86,6 @@ def skill_token_maps(session: Session) -> tuple[dict[str, int], dict[str, int]]:
             SkillRecord.id, SkillRecord.name, SkillRecord.description, SkillRecord.body_tokens_est
         )
     ).all()
-    meta = {f"skill:{sid}": skill_metadata_tokens(n, d) for sid, n, d, _ in rows}
-    body = {f"skill:{sid}": int(b or 0) for sid, _, _, b in rows}
+    meta = {f"{SKILL_ID_PREFIX}{sid}": skill_metadata_tokens(n, d) for sid, n, d, _ in rows}
+    body = {f"{SKILL_ID_PREFIX}{sid}": int(b or 0) for sid, _, _, b in rows}
     return meta, body

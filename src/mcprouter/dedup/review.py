@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from mcprouter.analytics.funnel import merged_funnel, pair_evidence
 from mcprouter.analytics.window import parse_window
-from mcprouter.dedup.detect import SKILL_PREFIX
 from mcprouter.models import (
+    SKILL_ID_PREFIX,
     DuplicateSuggestion,
     MCPServerRecord,
     MCPToolRecord,
@@ -128,8 +128,8 @@ def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, S
     """Resolve both kinds: bare ids are tools (serverName = server), "skill:<id>"
     refs are skills (serverName = skill source name; id keeps the prefix)."""
     refs = {r.tool_a_id for r in rows} | {r.tool_b_id for r in rows}
-    tool_ids = {x for x in refs if not x.startswith(SKILL_PREFIX)}
-    skill_ids = {x[len(SKILL_PREFIX) :] for x in refs if x.startswith(SKILL_PREFIX)}
+    tool_ids = {x for x in refs if not x.startswith(SKILL_ID_PREFIX)}
+    skill_ids = {x[len(SKILL_ID_PREFIX) :] for x in refs if x.startswith(SKILL_ID_PREFIX)}
     out = {
         tid: SuggestionToolRef(id=tid, name=name, server_name=srv, enabled=enabled)
         for tid, name, srv, enabled in session.execute(
@@ -146,7 +146,7 @@ def _tool_refs(session: Session, rows: list[DuplicateSuggestion]) -> dict[str, S
             .join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
             .where(SkillRecord.id.in_(skill_ids))
         ).all():
-            ref = f"{SKILL_PREFIX}{sid}"
+            ref = f"{SKILL_ID_PREFIX}{sid}"
             out[ref] = SuggestionToolRef(id=ref, name=name, server_name=src, enabled=enabled)
     return out
 

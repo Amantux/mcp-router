@@ -23,7 +23,6 @@ from mcprouter.api.routes_skills_agent import (
     _INTERNAL,
     _NOT_FOUND_CODES,
     ADMIN_NEEDS_AGENT_SKILL,
-    SKILL_ID_PREFIX,
     SKIPPED_HEADER_MAX,
     UNKNOWN_SKILL,
     ActivateIn,
@@ -43,6 +42,7 @@ from mcprouter.api.routes_skills_agent import (
     skills_bundle,
     skipped_header,
 )
+from mcprouter.models import SKILL_ID_PREFIX
 
 __all__ = [
     "_acting_agent",

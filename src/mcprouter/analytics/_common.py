@@ -11,9 +11,13 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
-
-SKILL_PREFIX = "skill:"
+from mcprouter.models import (
+    SKILL_ID_PREFIX,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillRecord,
+    SkillSourceRecord,
+)
 
 
 @dataclass(frozen=True)
@@ -40,5 +44,5 @@ def meta(session: Session) -> dict[str, CatalogMeta]:
             SkillRecord.id, SkillRecord.name, SkillSourceRecord.name, SkillSourceRecord.enabled
         ).join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
     ).all():
-        out[SKILL_PREFIX + sid] = CatalogMeta(name, src, enabled)
+        out[SKILL_ID_PREFIX + sid] = CatalogMeta(name, src, enabled)
     return out

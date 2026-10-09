@@ -52,6 +52,7 @@ from mcprouter.analytics.wire import (
     WastedOut,
     WindowOut,
 )
+from mcprouter.models import SKILL_ID_PREFIX
 
 SortKey = Literal[
     "surfaced",
@@ -113,13 +114,12 @@ def _curve_out(points: list[fn.RankPoint]) -> list[RankPointOut]:
 _Meta = CatalogMeta
 _meta = meta
 
-SKILL_PREFIX = "skill:"
 Kind = Literal["tool", "skill", "all"]
 
 
 def kind_of(tid: str) -> Literal["tool", "skill"]:
     """Funnel ids are kind-keyed: "skill:<skill id>" vs a bare tool id."""
-    return "skill" if tid.startswith(SKILL_PREFIX) else "tool"
+    return "skill" if tid.startswith(SKILL_ID_PREFIX) else "tool"
 
 
 def _tool_out(

@@ -29,7 +29,7 @@ from mcprouter.gateway.skills import (
     SkillAccessError,
     SkillExposure,
 )
-from mcprouter.models import RoutingDecisionRecord
+from mcprouter.models import SKILL_ID_PREFIX, RoutingDecisionRecord
 from mcprouter.skills.serve import resource_mime
 
 agent_router = APIRouter(prefix="/api/v1")
@@ -44,7 +44,6 @@ agent_router = APIRouter(prefix="/api/v1")
 # server-side (`routed_skill_ids`), never taken from the client.
 
 
-SKILL_ID_PREFIX = "skill:"
 UNKNOWN_SKILL = SKILL_UNKNOWN
 ADMIN_NEEDS_AGENT_SKILL = ADMIN_NEEDS_AGENT  # alias (P-206: one message, in api/acting.py)
 # code -> HTTP status; the curated message comes from gateway.skills'

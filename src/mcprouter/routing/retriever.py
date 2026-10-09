@@ -42,7 +42,13 @@ from sqlalchemy import ColumnElement, Engine, and_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.interfaces import EmbeddingBackend, ToolCandidate
-from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
+from mcprouter.models import (
+    SKILL_ID_PREFIX,
+    MCPServerRecord,
+    MCPToolRecord,
+    SkillRecord,
+    SkillSourceRecord,
+)
 from mcprouter.registry.schema import index_exists
 from mcprouter.routing.cache import QueryEmbeddingCache
 
@@ -197,7 +203,7 @@ class _Row:
     @property
     def key(self) -> str:
         """Fusion key: tools bare, skills "skill:<id>" (no cross-kind collision)."""
-        return self.tool_id if self.kind == "tool" else f"skill:{self.tool_id}"
+        return self.tool_id if self.kind == "tool" else f"{SKILL_ID_PREFIX}{self.tool_id}"
 
 
 class HybridRetriever:

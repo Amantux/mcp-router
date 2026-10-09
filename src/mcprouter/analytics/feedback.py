@@ -24,11 +24,10 @@ from sqlalchemy.orm import Session
 from mcprouter.analytics._common import meta
 from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.execution.redaction import scrub_log
-from mcprouter.models import RouteFeedback, RoutingDecisionRecord
+from mcprouter.models import SKILL_ID_PREFIX, RouteFeedback, RoutingDecisionRecord
 
 NOTE_MAX = 500
 MAX_ITEMS = 50
-SKILL_PREFIX = "skill:"
 
 
 class FeedbackError(Exception):
@@ -75,14 +74,14 @@ def clean_note(note: str | None) -> str | None:
 def _resolve(item: FeedbackItem, surfaced: list[str], names: dict[str, str]) -> str:
     if item.id:
         tid = item.id
-        if item.kind == "skill" and not tid.startswith(SKILL_PREFIX):
-            tid = SKILL_PREFIX + tid
+        if item.kind == "skill" and not tid.startswith(SKILL_ID_PREFIX):
+            tid = SKILL_ID_PREFIX + tid
         if tid in surfaced:
             return tid
     elif item.name:
         hits = [t for t in surfaced if names.get(t) == item.name]
         if item.kind:
-            hits = [t for t in hits if (t.startswith(SKILL_PREFIX)) == (item.kind == "skill")]
+            hits = [t for t in hits if (t.startswith(SKILL_ID_PREFIX)) == (item.kind == "skill")]
         if len(hits) == 1:
             return hits[0]
         if len(hits) > 1:
@@ -129,7 +128,7 @@ def record_feedback(
         rows[tid] = {
             "route_request_id": d.id,
             "agent_id": d.agent_id,
-            "target_kind": "skill" if tid.startswith(SKILL_PREFIX) else "tool",
+            "target_kind": "skill" if tid.startswith(SKILL_ID_PREFIX) else "tool",
             "target_id": tid,
             "helpful": bool(it.helpful),
             "note": clean_note(it.note),

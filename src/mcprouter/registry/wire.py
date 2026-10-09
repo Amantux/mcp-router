@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from mcprouter.models import DuplicateSuggestion, MCPToolRecord, ToolVersionRecord
+from mcprouter.models import SKILL_ID_PREFIX, DuplicateSuggestion, MCPToolRecord, ToolVersionRecord
 
 Operation = Literal["read", "write", "execute", "unknown"]
 _DOMAIN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
@@ -269,6 +269,6 @@ def suggestion_out(sug: DuplicateSuggestion, refs: dict[str, SuggestionToolRef])
         resolved_at=sug.resolved_at,
         resolution_note=sug.resolution_note,
         created_at=sug.created_at,
-        kind_a="skill" if sug.tool_a_id.startswith("skill:") else "tool",
-        kind_b="skill" if sug.tool_b_id.startswith("skill:") else "tool",
+        kind_a="skill" if sug.tool_a_id.startswith(SKILL_ID_PREFIX) else "tool",
+        kind_b="skill" if sug.tool_b_id.startswith(SKILL_ID_PREFIX) else "tool",
     )
