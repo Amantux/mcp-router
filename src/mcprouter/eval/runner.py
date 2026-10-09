@@ -67,6 +67,7 @@ def run_cases(
                 agent_id=case.agent_id,
                 max_tools=max_tools,
                 allowed_servers=allowed_ids,
+                kinds=case.kinds,
             ),
             scope_resolver(case.agent_id),
         )
