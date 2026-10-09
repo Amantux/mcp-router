@@ -137,7 +137,9 @@ def _host_list(raw: str) -> tuple[str, ...]:
     for item in (p.strip().lower() for p in raw.split(",")):
         if not item:
             continue
-        if not re.fullmatch(r"(\[[0-9a-f:]+\]|[a-z0-9.-]+)(:(\d{1,5}|\*))?", item):
+        if not re.fullmatch(
+            r"(\[[0-9a-f:]+\]|[a-z0-9.-]*[a-z0-9][a-z0-9.-]*)(:(\d{1,5}|\*))?", item
+        ):
             raise ValueError(f"MCPR_ALLOWED_HOSTS: invalid host {item!r}")
         out.append(item)
     return tuple(out)

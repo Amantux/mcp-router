@@ -100,7 +100,7 @@ def test_host_list_parsing() -> None:
         "10.0.0.5:8400",
         "[::1]:*",
     )
-    for bad in ("*", "evil.com\r\nX: y", "a b", "host:abc", "http://x"):
+    for bad in ("*", "evil.com\r\nX: y", "a b", "host:abc", "http://x", "..", "-", ".-:80"):
         with pytest.raises(ValueError):
             _host_list(bad)
 
