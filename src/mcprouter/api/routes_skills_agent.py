@@ -22,7 +22,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.api.acting import ADMIN_NEEDS_AGENT, act_as_agent
 from mcprouter.api.deps_auth import security_of
 from mcprouter.auth import AGENT_ID_PATTERN
-from mcprouter.gateway.skills import SkillAccessError, SkillExposure
+from mcprouter.gateway.skills import (
+    SKILL_ERROR_MESSAGES,
+    SKILL_INTERNAL,
+    SKILL_UNKNOWN,
+    SkillAccessError,
+    SkillExposure,
+)
 from mcprouter.models import RoutingDecisionRecord
 from mcprouter.skills.serve import resource_mime
 
@@ -39,22 +45,24 @@ agent_router = APIRouter(prefix="/api/v1")
 
 
 SKILL_ID_PREFIX = "skill:"
-UNKNOWN_SKILL = "Unknown skill or resource."
+UNKNOWN_SKILL = SKILL_UNKNOWN
 ADMIN_NEEDS_AGENT_SKILL = ADMIN_NEEDS_AGENT  # alias (P-206: one message, in api/acting.py)
-# code -> (status, curated message). Unknown and unrouted share ONE message so
-# a caller cannot probe which skills exist; path problems look the same.
-_ERRORS: dict[str, tuple[int, str]] = {
-    "denied": (403, "Skill activation denied by policy."),
-    "rate_limited": (429, "Too many skill activations; retry later."),
-    "too_large": (413, "Skill resource exceeds the size limit."),
-    "too_many": (413, "Too many skills routed to bundle; narrow the routing."),
-    "stale": (409, "Skill resource is out of date; re-index the skill."),
-    "duplicate_name": (
-        409,
-        "Two routed skills share a name and cannot be bundled together; activate them singly.",
-    ),
+# code -> HTTP status; the curated message comes from gateway.skills'
+# SKILL_ERROR_MESSAGES, shared with the MCP surface. Unknown and unrouted share
+# ONE message so a caller cannot probe which skills exist; path problems look
+# the same.
+_STATUS: dict[str, int] = {
+    "denied": 403,
+    "rate_limited": 429,
+    "too_large": 413,
+    "too_many": 413,
+    "stale": 409,
+    "duplicate_name": 409,
 }
-_INTERNAL = (500, "Internal error while serving the skill.")
+_ERRORS: dict[str, tuple[int, str]] = {
+    code: (status, SKILL_ERROR_MESSAGES[code]) for code, status in _STATUS.items()
+}
+_INTERNAL = (500, SKILL_INTERNAL)
 _NOT_FOUND_CODES = frozenset(
     {"not_found", "invalid_name", "invalid_path", "not_in_manifest", "unreadable"}
 )

@@ -87,6 +87,9 @@ from mcprouter.execution.redaction import redact, scrub_log
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.gateway.exposure import ExposureStore
 from mcprouter.gateway.skills import (
+    SKILL_ERROR_MESSAGES,
+    SKILL_INTERNAL,
+    SKILL_UNKNOWN,
     Activation,
     SkillAccessError,
     SkillExposure,
@@ -183,14 +186,10 @@ _FEEDBACK_TOOL_DEF = types.Tool(
 ACTIVATE_SKILL_TOOL = "router.activate_skill"
 READ_SKILL_RESOURCE_TOOL = "router.read_skill_resource"
 _SKILL_URI_PREFIX = "skill://"
-# Curated by error code: never echo a path, skill id or serve-layer message.
-_SKILL_ERRORS: dict[str, str] = {
-    "rate_limited": "Too many skill activations; retry later.",
-    "denied": "Skill access denied by policy.",
-    "too_large": "Skill resource is too large.",
-}
-_SKILL_UNKNOWN = "Unknown skill or resource."
-_SKILL_INTERNAL = "Internal error while serving the skill."
+# Curated by error code (gateway.skills' shared table, same text as REST):
+# never echo a path, skill id or serve-layer message.
+_SKILL_UNKNOWN = SKILL_UNKNOWN
+_SKILL_INTERNAL = SKILL_INTERNAL
 
 _SKILL_TOOL_DEFS = [
     types.Tool(
@@ -242,7 +241,7 @@ def _meta_args_refusal(name: str, arguments: dict[str, Any] | None) -> types.Cal
 
 
 def _skill_error(exc: SkillAccessError) -> str:
-    return _SKILL_ERRORS.get(exc.code, _SKILL_UNKNOWN)
+    return SKILL_ERROR_MESSAGES.get(exc.code, SKILL_UNKNOWN)
 
 
 def _skill_mcp_error(exc: Exception) -> MCPError:

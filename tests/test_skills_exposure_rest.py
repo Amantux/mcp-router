@@ -170,7 +170,8 @@ def test_denied_and_rate_limited(env: Env) -> None:
     env.route("alice", env.a)
     env.policy.allow = False
     r = env.client.post(f"/api/v1/skills/{env.a}/activate", headers=H_ALICE)
-    assert r.status_code == 403 and "policy" in r.json()["detail"]
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Skill activation denied by policy."
     env.policy.allow = True
     env.client.app.state.skill_exposure._limiter = SlidingWindowLimiter(0, 60.0)  # type: ignore[attr-defined]
     assert env.client.post(f"/api/v1/skills/{env.a}/activate", headers=H_ALICE).status_code == 429
@@ -348,3 +349,16 @@ def test_forged_route_request_id_is_stored_null(env: Env) -> None:
     )
     assert r.status_code == 200, r.text
     assert [x.route_request_id for x in env.rows()] == [None]
+
+
+@pytest.mark.parametrize(
+    "code", ["denied", "rate_limited", "too_large", "stale", "not_found", "invalid_path"]
+)
+def test_rest_and_mcp_curate_a_skill_error_code_identically(code: str) -> None:
+    """HS-C-012: one code -> message table behind both surfaces."""
+    from mcprouter.api.routes_skills_agent import _http_error
+    from mcprouter.gateway.server import _skill_mcp_error
+    from mcprouter.gateway.skills import SkillAccessError
+
+    exc = SkillAccessError(code, "serve-layer text that must not leak")
+    assert _http_error(exc).detail == _skill_mcp_error(exc).error.message

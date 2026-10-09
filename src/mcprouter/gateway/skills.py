@@ -62,6 +62,25 @@ class DenyAllSkillPolicy:
         return [self.check(agent_id, sk, src) for sk, src in items]
 
 
+# The ONE curated code -> message table for skill errors: REST
+# (api.routes_skills_agent, which adds the HTTP status) and MCP
+# (gateway.server) both answer from it, so a code reads the same on either
+# surface. Codes not listed (not_found, invalid_*, ...) read as SKILL_UNKNOWN,
+# so a caller cannot probe which skills or paths exist.
+SKILL_ERROR_MESSAGES: dict[str, str] = {
+    "denied": "Skill activation denied by policy.",
+    "rate_limited": "Too many skill activations; retry later.",
+    "too_large": "Skill resource exceeds the size limit.",
+    "too_many": "Too many skills routed to bundle; narrow the routing.",
+    "stale": "Skill resource is out of date; re-index the skill.",
+    "duplicate_name": (
+        "Two routed skills share a name and cannot be bundled together; activate them singly."
+    ),
+}
+SKILL_UNKNOWN = "Unknown skill or resource."
+SKILL_INTERNAL = "Internal error while serving the skill."
+
+
 class SkillAccessError(Exception):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -190,7 +209,7 @@ class SkillExposure:
             )
         except Exception:  # noqa: BLE001,S110 -- audit is best-effort on a failure path
             pass
-        return SkillAccessError("internal", "Internal error while serving the skill.")
+        return SkillAccessError("internal", SKILL_INTERNAL)
 
     # ------------------------------------------------------------- gating
     def _gate(
@@ -205,13 +224,13 @@ class SkillExposure:
             self._manager.record_skill_activation(
                 agent_id, sk.id, "rate_limited", "rate limited", route_request_id, initiated_by
             )
-            raise SkillAccessError("rate_limited", "Too many skill activations; retry later.")
+            raise SkillAccessError("rate_limited", SKILL_ERROR_MESSAGES["rate_limited"])
         allowed, reason = self._policy.check(agent_id, sk, src)
         if not allowed:
             self._manager.record_skill_activation(
                 agent_id, sk.id, "denied", f"policy: {reason}", route_request_id, initiated_by
             )
-            raise SkillAccessError("denied", "Skill activation denied by policy.")
+            raise SkillAccessError("denied", SKILL_ERROR_MESSAGES["denied"])
 
     def activate(
         self,
@@ -296,7 +315,7 @@ class SkillExposure:
             self._manager.record_skill_activation(
                 agent_id, routed[0][0].id, "rate_limited", "bundle", route_request_id, initiated_by
             )
-            raise SkillAccessError("rate_limited", "Too many skill activations; retry later.")
+            raise SkillAccessError("rate_limited", SKILL_ERROR_MESSAGES["rate_limited"])
         allowed = []
         verdicts = self._policy.check_many(agent_id, routed)  # 3. policy re-check
         for (sk, src), (ok, reason) in zip(routed, verdicts, strict=True):
@@ -312,7 +331,7 @@ class SkillExposure:
                     initiated_by,
                 )
         if not allowed:
-            raise SkillAccessError("denied", "Skill activation denied by policy.")
+            raise SkillAccessError("denied", SKILL_ERROR_MESSAGES["denied"])
         try:
             data, skipped = build_bundle(allowed)
         except BundleError as exc:

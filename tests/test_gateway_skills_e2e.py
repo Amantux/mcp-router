@@ -243,7 +243,7 @@ async def test_e2e_skills_routed_audited_isolated(served: dict[str, Any]) -> Non
         await _reroute(bob, route, [b])
         with pytest.raises(MCPError) as ei:
             await bob.get_prompt(OTHER)
-        assert ei.value.error.message == "Skill access denied by policy."
+        assert ei.value.error.message == "Skill activation denied by policy."
         denied = [x for x in _rows(db, "bob") if x.skill_id is not None]
         assert [(x.outcome, x.resource_kind, x.skill_id) for x in denied] == [
             ("denied", "skill", b)
