@@ -67,6 +67,15 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
   const [pending, setPending] = useState(false);
   const locError = validateSourceLocation(kind, location);
   const nameError = name.trim() ? null : "Enter a name.";
+  // Every close (added or cancelled) starts the next open blank, errors hidden.
+  const close = () => {
+    setKind("directory");
+    setName("");
+    setLocation("");
+    setGitRef("");
+    setTouched(false);
+    onClose();
+  };
 
   const submit = async () => {
     setTouched(true);
@@ -76,7 +85,7 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
       await createSkillSource({ name: name.trim(), kind, location: location.trim(), ...(kind === "git" && gitRef.trim() ? { gitRef: gitRef.trim() } : {}) });
       notify.success(`Added skill source “${name.trim()}”. Sync it to catalog its skills.`);
       onAdded();
-      onClose();
+      close();
     } catch (e) {
       notify.error(`Add skill source “${name.trim()}”`, e);
     } finally {
@@ -85,40 +94,50 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
   };
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && close()}>
       <DialogSurface>
-        <DialogBody>
-          <DialogTitle>Add skill source</DialogTitle>
-          <DialogContent style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Field label="Name" validationMessage={touched ? nameError : undefined}>
-              <Input value={name} onChange={(_, d) => setName(d.value)} />
-            </Field>
-            <Field label="Kind">
-              <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as SkillSourceKind)}>
-                <Radio value="directory" label="Directory" />
-                <Radio value="git" label="Git (https)" />
-              </RadioGroup>
-            </Field>
-            <Field
-              label={kind === "git" ? "Repository URL" : "Directory path"}
-              hint={kind === "git" ? "https only, e.g. https://github.com/org/skills" : "Absolute path on the router host"}
-              validationMessage={touched ? locError : undefined}
-            >
-              <Input value={location} onChange={(_, d) => setLocation(d.value)} />
-            </Field>
-            {kind === "git" && (
-              <Field label="Ref" hint="Branch, tag or commit. Leave blank for the default branch.">
-                <Input value={gitRef} onChange={(_, d) => setGitRef(d.value)} />
+        <form
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+        >
+          <DialogBody>
+            <DialogTitle>Add skill source</DialogTitle>
+            <DialogContent style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <Field label="Name" validationMessage={touched ? nameError : undefined}>
+                <Input value={name} onChange={(_, d) => setName(d.value)} />
               </Field>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" disabled={pending} onClick={() => void submit()}>
-              {pending ? "Adding…" : "Add source"}
-            </Button>
-          </DialogActions>
-        </DialogBody>
+              <Field label="Kind">
+                <RadioGroup layout="horizontal" value={kind} onChange={(_, d) => setKind(d.value as SkillSourceKind)}>
+                  <Radio value="directory" label="Directory" />
+                  <Radio value="git" label="Git (https)" />
+                </RadioGroup>
+              </Field>
+              <Field
+                label={kind === "git" ? "Repository URL" : "Directory path"}
+                hint={kind === "git" ? "https only, e.g. https://github.com/org/skills" : "Absolute path on the router host"}
+                validationMessage={touched ? locError : undefined}
+              >
+                <Input value={location} onChange={(_, d) => setLocation(d.value)} />
+              </Field>
+              {kind === "git" && (
+                <Field label="Ref" hint="Branch, tag or commit. Leave blank for the default branch.">
+                  <Input value={gitRef} onChange={(_, d) => setGitRef(d.value)} />
+                </Field>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={close} disabled={pending}>
+                Cancel
+              </Button>
+              <Button appearance="primary" type="submit" disabled={pending}>
+                {pending ? "Adding…" : "Add source"}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </form>
       </DialogSurface>
     </Dialog>
   );

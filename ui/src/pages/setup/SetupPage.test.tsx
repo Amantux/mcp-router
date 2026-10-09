@@ -115,3 +115,56 @@ describe("SetupPage wizard", () => {
     expect(posts("/skill-sources")[0].body).toEqual({ name: "team-skills", kind: "directory", location: "/srv/team-skills" });
   });
 });
+
+describe("SetupPage messages", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    setCredentials({ adminToken: ADMIN });
+  });
+  afterEach(() => clearCredentials());
+
+  it("a 409 on a skill source reads as curated advice, never `HTTP 409 from /api/…`, and clears on step change", async () => {
+    routes({ "POST /api/v1/skill-sources": () => ({ status: 409 }) });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    goTo("Skill sources");
+    fireEvent.change(screen.getByLabelText("Directory path"), { target: { value: "/srv/team-skills" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add directory source" }));
+    const msg = await screen.findByRole("status");
+    expect(msg.textContent).toBe("Add directory source failed (HTTP 409). It conflicts with existing data (for example a duplicate name). Change the input and retry.");
+    expect(msg.textContent).not.toContain("/api/");
+    goTo("Agent identity");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("dev mode without an admin token: creating the first agent shows the backend's 409 guidance (D11)", async () => {
+    routes({
+      "GET /api/v1/setup/status": () => ({ json: { ...STATUS, hasAdminToken: false, devMode: true } }),
+      "POST /api/v1/principals": () => ({ status: 409 }),
+    });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    await screen.findByText("Admin token configured: false");
+    goTo("Agent identity");
+    fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode.");
+  });
+
+  it("the health check reports unloaded models instead of a vacuous ok", async () => {
+    const backend = (loaded: boolean) => ({ backend: loaded ? "x" : null });
+    routes({
+      "GET /api/v1/models/health": () => ({ json: { loaded: true, mode: "balanced", device: "cpu", embedding: backend(true), decision: backend(false), memory: {} } }),
+    });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    goTo("Verify");
+    fireEvent.click(screen.getByRole("button", { name: "Run checks" }));
+    expect(await screen.findByText("models not loaded: decision; servers 0, tools 0")).toBeTruthy();
+  });
+
+  it("a refused clipboard says so instead of an unhandled rejection", async () => {
+    routes();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => Promise.reject(new Error("insecure origin")) } });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    fireEvent.click(screen.getByRole("button", { name: "Copy suggestion" }));
+    expect((await screen.findByRole("status")).textContent).toMatch(/Couldn't copy to the clipboard/);
+  });
+});
+

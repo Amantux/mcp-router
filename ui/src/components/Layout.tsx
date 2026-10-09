@@ -120,7 +120,7 @@ export function Layout() {
         {/* Remount pages when credentials change so every view refetches under the new identity. */}
         <Outlet key={auth.epoch} />
       </main>
-      <ConnectPanel open={connectOpen} onClose={() => setConnectOpen(false)} />
+      <ConnectPanel open={connectOpen} onClose={() => setConnectOpen(false)} warnRemount={pathname.startsWith("/setup")} />
     </div>
   );
 }

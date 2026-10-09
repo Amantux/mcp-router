@@ -12,7 +12,9 @@ import {
   Text,
 } from "@fluentui/react-components";
 import {
+  ApiError,
   completeSetup,
+  describeError,
   createPrincipal,
   createRule,
   createSkillSource,
@@ -79,8 +81,17 @@ function loadStep(): number {
   }
 }
 
+/** D11: the backend's 409 for a first principal in dev mode without MCPR_ADMIN_TOKEN. */
+export const FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN = "Set MCPR_ADMIN_TOKEN before creating the first principal; creating one ends dev mode.";
+
+/** Curated wizard message for a failed call: never the raw `HTTP 409 from /api/…`. */
+export function describeFailure(what: string, e: unknown): string {
+  const { status, advice } = describeError(e);
+  return `${what} failed${status ? ` (${status})` : ""}. ${advice}`;
+}
+
 export function SetupPage() {
-  const [step, setStep] = useState(loadStep);
+  const [step, setStepRaw] = useState(loadStep);
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [msg, setMsg] = useState("");
   const [token] = useState(suggestToken);
@@ -99,10 +110,20 @@ export function SetupPage() {
   const [rulesBusy, setRulesBusy] = useState(false);
   const [createdAgent, setCreatedAgent] = useState<string | null>(null); // server-confirmed id
   const url = `${window.location.origin}/mcp`;
+  // A message belongs to the step that produced it.
+  const setStep = (n: number) => {
+    setStepRaw(n);
+    setMsg("");
+  };
+  const copy = (text: string) =>
+    navigator.clipboard
+      .writeText(text)
+      .then(() => setMsg("Copied."))
+      .catch(() => setMsg("Couldn't copy to the clipboard here. Select the text and copy it manually."));
 
   const recheck = () =>
     getSetupStatus().then(setStatus, () =>
-      setMsg("Status needs the admin token (set it in Settings)."),
+      setMsg("Status needs the admin token. Paste it in Connect (gear icon, top right)."),
     );
   useEffect(() => {
     void recheck();
@@ -127,10 +148,10 @@ export function SetupPage() {
     );
   }, [apiKey]);
 
-  const run = (p: Promise<unknown>, ok: string) =>
+  const run = (what: string, p: Promise<unknown>, ok: string) =>
     p.then(
       () => setMsg(ok),
-      (e: unknown) => setMsg(e instanceof Error ? e.message : "Request failed"),
+      (e: unknown) => setMsg(describeFailure(what, e)),
     );
 
   const body = [
@@ -140,7 +161,7 @@ export function SetupPage() {
         stored in the database.
       </Text>
       <pre>{`MCPR_ADMIN_TOKEN=${token}`}</pre>
-      <Button onClick={() => void navigator.clipboard.writeText(token)}>
+      <Button onClick={() => void copy(token)}>
         Copy suggestion
       </Button>{" "}
       <Button onClick={() => void recheck()}>I've set it, re-check</Button>
@@ -173,6 +194,7 @@ export function SetupPage() {
         onClick={() => {
           try {
             void run(
+              "Import servers",
               importServers(JSON.parse(serversJson)),
               "Servers imported.",
             );
@@ -203,6 +225,7 @@ export function SetupPage() {
           if (!isHttpsGitUrl(gitUrl))
             return setMsg("Only https:// git URLs are accepted.");
           void run(
+            "Add skill source",
             createSkillSource({
               name: new URL(gitUrl).pathname.split("/").pop() || "skills",
               kind: "git",
@@ -226,6 +249,7 @@ export function SetupPage() {
           if (!isAbsolutePath(loc))
             return setMsg("Enter an absolute directory path, e.g. /srv/skills.");
           void run(
+            "Add directory source",
             createSkillSource({
               name: sourceName(loc),
               kind: "directory",
@@ -253,7 +277,14 @@ export function SetupPage() {
               setCreatedAgent(p.agentId);
               setApiKey(p.apiKey);
             },
-            () => setMsg("Could not create the agent."),
+            (e: unknown) =>
+              setMsg(
+                e instanceof ApiError && e.status === 409
+                  ? status && !status.hasAdminToken
+                    ? FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
+                    : `An agent “${agentId}” already exists. Choose another id.`
+                  : describeFailure("Create agent", e),
+              ),
           )
         }
       >
@@ -265,7 +296,7 @@ export function SetupPage() {
             Copy this key now. It is shown once and cannot be retrieved later.
           </Text>
           <pre data-testid="api-key">{apiKey}</pre>
-          <Button onClick={() => void navigator.clipboard.writeText(apiKey)}>
+          <Button onClick={() => void copy(apiKey)}>
             Copy key
           </Button>
         </div>
@@ -355,8 +386,9 @@ export function SetupPage() {
           void Promise.all([getModelsHealth(), getSetupStatus()]).then(
             ([h, s]) => {
               setStatus(s);
+              const notLoaded = h.models.filter((m) => !m.loaded).map((m) => m.kind);
               setHealth(
-                `${JSON.stringify(h).length > 0 ? "models: ok" : ""}; servers ${s.counts.servers}, tools ${s.counts.tools}`,
+                `${notLoaded.length ? `models not loaded: ${notLoaded.join(", ")}` : "models: loaded"}; servers ${s.counts.servers}, tools ${s.counts.tools}`,
               );
             },
             () => setHealth("Health check failed."),
@@ -369,7 +401,7 @@ export function SetupPage() {
       <Link to="/lens">Open Lens</Link>{" "}
       <Button
         appearance="primary"
-        onClick={() => void run(completeSetup(), "Setup complete.")}
+        onClick={() => void run("Finish setup", completeSetup(), "Setup complete.")}
       >
         Finish setup
       </Button>

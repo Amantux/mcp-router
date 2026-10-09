@@ -272,12 +272,18 @@ export interface Principal {
   agentId: string;
   enabled: boolean;
   maxTools: number;
+  /** Distinct-server exposure cap; null = unlimited. */
+  maxServers?: number | null;
+  /** Routed-skill exposure cap (separate from maxTools). */
+  maxSkills?: number;
   createdAt: string;
 }
 
 export interface CreatePrincipalRequest {
   agentId: string;
   maxTools: number;
+  maxServers?: number | null;
+  maxSkills?: number;
 }
 
 // CONTRACT: create returns the principal plus `apiKey` exactly once.
@@ -288,6 +294,8 @@ export interface CreatedPrincipal extends Principal {
 export interface PolicyRule {
   id: string;
   agentId: string;
+  /** "skill": serverId is a skill source id and toolName a skill-name glob. Absent = tool. */
+  resourceKind?: "tool" | "skill";
   serverId: string | null;
   toolName: string | null;
   maxOperation: OperationCeiling;

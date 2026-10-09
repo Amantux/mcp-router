@@ -27,7 +27,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { AddRegular, CopyRegular, ShieldKeyholeRegular } from "@fluentui/react-icons";
-import { createPrincipal, createRule, listPrincipals, listRules, listServers } from "../api/client";
+import { createPrincipal, createRule, listPrincipals, listRules, listServers, listSkillSources } from "../api/client";
 import { CEILINGS, type CreatedPrincipal, type OperationCeiling } from "../api/types";
 import { EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
@@ -45,7 +45,10 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
   const notify = useNotify();
   const [agentId, setAgentId] = useState("");
   const [maxTools, setMaxTools] = useState(8);
+  const [maxSkills, setMaxSkills] = useState(3);
+  const [maxServers, setMaxServers] = useState("");
   const [error, setError] = useState<string>();
+  const [serversError, setServersError] = useState<string>();
   const [pending, setPending] = useState(false);
   const submit = async () => {
     const id = agentId.trim();
@@ -54,10 +57,17 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
       return;
     }
     setError(undefined);
+    const servers = maxServers.trim() === "" ? null : Number(maxServers);
+    if (servers !== null && !(Number.isInteger(servers) && servers >= 1 && servers <= 1000)) {
+      setServersError("Enter a whole number from 1 to 1000, or leave it blank for no limit.");
+      return;
+    }
+    setServersError(undefined);
     setPending(true);
     try {
-      const created = await createPrincipal({ agentId: id, maxTools });
+      const created = await createPrincipal({ agentId: id, maxTools, maxServers: servers, maxSkills });
       setAgentId("");
+      setMaxServers("");
       onCreated(created);
     } catch (e) {
       notify.error(`Create principal “${id}”`, e);
@@ -82,7 +92,13 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
                 <Input value={agentId} onChange={(_, d) => setAgentId(d.value)} />
               </Field>
               <Field label="Max tools exposed per request">
-                <SpinButton value={maxTools} min={1} max={50} onChange={(_, d) => d.value != null && setMaxTools(d.value)} />
+                <SpinButton value={maxTools} min={1} max={64} onChange={(_, d) => d.value != null && setMaxTools(d.value)} />
+              </Field>
+              <Field label="Max skills exposed per request" hint="0 = this agent is never offered skills.">
+                <SpinButton value={maxSkills} min={0} max={64} onChange={(_, d) => d.value != null && setMaxSkills(d.value)} />
+              </Field>
+              <Field label="Max distinct servers per request" hint="Blank = no limit." validationMessage={serversError}>
+                <Input type="number" min={1} max={1000} value={maxServers} onChange={(_, d) => setMaxServers(d.value)} />
               </Field>
               <Caption1>New principals can't use any tool until you add an allow rule (deny by default).</Caption1>
             </DialogContent>
@@ -157,12 +173,15 @@ export function PolicyPage() {
   const principals = useLoader("Load principals", (sig) => listPrincipals(sig), []);
   const rules = useLoader("Load policy rules", (sig) => listRules(sig), []);
   const servers = useLoader("Load servers", (sig) => listServers(sig), []);
+  const sources = useLoader("Load skill sources", (sig) => listSkillSources(sig), []);
   const serverNames = useMemo(() => new Map((servers.data ?? []).map((x) => [x.id, x.name])), [servers.data]);
+  const sourceNames = useMemo(() => new Map((sources.data ?? []).map((x) => [x.id, x.name])), [sources.data]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [revealed, setRevealed] = useState<CreatedPrincipal | null>(null);
 
   const [ruleAgent, setRuleAgent] = useState("");
+  const [ruleKind, setRuleKind] = useState<"tool" | "skill">("tool");
   const [ruleServer, setRuleServer] = useState("");
   const [ruleTool, setRuleTool] = useState("");
   const [ruleCeiling, setRuleCeiling] = useState<OperationCeiling>("read");
@@ -180,12 +199,13 @@ export function PolicyPage() {
     try {
       await createRule({
         agentId: ruleAgent,
+        resourceKind: ruleKind,
         serverId: ruleServer || null,
         toolName: ruleTool.trim() || null,
         maxOperation: ruleCeiling,
         requiresApproval: ruleApproval,
       });
-      notify.success(`Added ${ruleCeiling} rule for “${ruleAgent}”`);
+      notify.success(`Added ${ruleCeiling} ${ruleKind} rule for “${ruleAgent}”`);
       setRuleTool("");
       rules.refresh();
     } catch (e) {
@@ -230,6 +250,8 @@ export function PolicyPage() {
               <TableHeaderCell>Agent id</TableHeaderCell>
               <TableHeaderCell>Status</TableHeaderCell>
               <TableHeaderCell className={c.num}>Max tools</TableHeaderCell>
+              <TableHeaderCell className={c.num}>Max skills</TableHeaderCell>
+              <TableHeaderCell className={c.num}>Max servers</TableHeaderCell>
               <TableHeaderCell className={c.num}>Rules</TableHeaderCell>
               <TableHeaderCell>Created</TableHeaderCell>
             </TableRow>
@@ -246,6 +268,8 @@ export function PolicyPage() {
                   </Badge>
                 </TableCell>
                 <TableCell className={c.num}>{p.maxTools}</TableCell>
+                <TableCell className={c.num}>{p.maxSkills ?? "—"}</TableCell>
+                <TableCell className={c.num}>{p.maxServers ?? <span className={c.muted}>no limit</span>}</TableCell>
                 <TableCell className={c.num}>{rlist.filter((r) => r.agentId === p.agentId).length}</TableCell>
                 <TableCell>{fmtTime(p.createdAt)}</TableCell>
               </TableRow>
@@ -277,17 +301,29 @@ export function PolicyPage() {
             ))}
           </Select>
         </Field>
-        <Field label="Server">
+        <Field label="Kind">
+          <Select
+            value={ruleKind}
+            onChange={(_, d) => {
+              setRuleKind(d.value as "tool" | "skill");
+              setRuleServer(""); // a server id is not a skill source id
+            }}
+          >
+            <option value="tool">Tools</option>
+            <option value="skill">Skills</option>
+          </Select>
+        </Field>
+        <Field label={ruleKind === "skill" ? "Skill source" : "Server"}>
           <Select value={ruleServer} onChange={(_, d) => setRuleServer(d.value)}>
-            <option value="">Any server</option>
-            {(servers.data ?? []).map((x) => (
+            <option value="">{ruleKind === "skill" ? "Any source" : "Any server"}</option>
+            {(ruleKind === "skill" ? (sources.data ?? []) : (servers.data ?? [])).map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name}
               </option>
             ))}
           </Select>
         </Field>
-        <Field label="Tool name" hint="Blank = any; glob allowed">
+        <Field label={ruleKind === "skill" ? "Skill name" : "Tool name"} hint="Blank = any; glob allowed">
           <Input value={ruleTool} onChange={(_, d) => setRuleTool(d.value)} placeholder="list_*" />
         </Field>
         <Field label="Operation ceiling" hint="read < write < execute">
@@ -317,8 +353,9 @@ export function PolicyPage() {
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Agent</TableHeaderCell>
-              <TableHeaderCell>Server</TableHeaderCell>
-              <TableHeaderCell>Tool</TableHeaderCell>
+              <TableHeaderCell>Kind</TableHeaderCell>
+              <TableHeaderCell>Server / source</TableHeaderCell>
+              <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Ceiling</TableHeaderCell>
               <TableHeaderCell>Approval</TableHeaderCell>
               <TableHeaderCell>Created</TableHeaderCell>
@@ -328,7 +365,14 @@ export function PolicyPage() {
             {rlist.map((r) => (
               <TableRow key={r.id}>
                 <TableCell>{r.agentId}</TableCell>
-                <TableCell>{r.serverId ? serverNames.get(r.serverId) ?? <span className={c.mono}>{r.serverId.slice(0, 8)}</span> : <span className={c.muted}>any</span>}</TableCell>
+                <TableCell>{r.resourceKind === "skill" ? "skill" : "tool"}</TableCell>
+                <TableCell>
+                  {r.serverId ? (
+                    ((r.resourceKind === "skill" ? sourceNames : serverNames).get(r.serverId) ?? <span className={c.mono}>{r.serverId.slice(0, 8)}</span>)
+                  ) : (
+                    <span className={c.muted}>any</span>
+                  )}
+                </TableCell>
                 <TableCell>{r.toolName ? <span className={c.mono}>{r.toolName}</span> : <span className={c.muted}>any</span>}</TableCell>
                 <TableCell>{r.maxOperation}</TableCell>
                 <TableCell>{r.requiresApproval ? <Badge appearance="tint" color="warning">required</Badge> : "—"}</TableCell>
