@@ -15,6 +15,11 @@ Fields:
   agent_id         str                                     (default "eval-agent")
   expect_no_match  bool — correct answer is no_match=true; requires empty
                    expected_tools.                                   (default false)
+  expected_skills  ["skill-name", ...] ranked by preference (Wave 4). Matched on
+                   the routed skill's name (RoutedTool.tool_name, kind=skill).
+  kinds            subset of ["tool", "skill"] the case exercises; derived from
+                   which expected_* lists are non-empty when omitted. A case
+                   with both kinds is a "mixed" case.
   expect_denied    bool — request targets an operation the agent is not
                    authorized for; requires forbidden_tools.         (default false)
 
@@ -31,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 DATASETS_DIR = Path(__file__).parent / "datasets"
+_KINDS = {"tool", "skill"}
 
 _ALLOWED_KEYS = {
     "id",
@@ -38,6 +44,8 @@ _ALLOWED_KEYS = {
     "category",
     "expected_tools",
     "forbidden_tools",
+    "expected_skills",
+    "kinds",
     "allowed_servers",
     "agent_id",
     "expect_no_match",
@@ -60,6 +68,8 @@ class EvalCase:
     agent_id: str = "eval-agent"
     expect_no_match: bool = False
     expect_denied: bool = False
+    expected_skills: tuple[str, ...] = ()
+    kinds: tuple[str, ...] = ("tool",)
 
 
 def available_datasets() -> dict[str, Path]:
@@ -123,6 +133,17 @@ def _parse_case(raw: object, lineno: int) -> EvalCase:
     flags = {k: raw.get(k, False) for k in ("expect_no_match", "expect_denied")}
     if not all(isinstance(v, bool) for v in flags.values()):
         raise DatasetError(f"line {lineno}: expect_* flags must be booleans")
+    skills = raw.get("expected_skills", [])
+    if not isinstance(skills, list) or not all(isinstance(t, str) and t for t in skills):
+        raise DatasetError(f"line {lineno}: 'expected_skills' must be a list of skill names")
+    kinds_raw = raw.get("kinds")
+    if kinds_raw is None:
+        kinds = tuple(k for k, v in (("tool", raw.get("expected_tools")), ("skill", skills)) if v)
+        kinds = kinds or ("tool",)
+    elif not isinstance(kinds_raw, list) or not kinds_raw or not set(kinds_raw) <= _KINDS:
+        raise DatasetError(f"line {lineno}: 'kinds' must be a non-empty subset of {sorted(_KINDS)}")
+    else:
+        kinds = tuple(k for k in ("tool", "skill") if k in kinds_raw)
     case = EvalCase(
         id=_str(raw, "id", lineno),
         query=_str(raw, "query", lineno),
@@ -133,9 +154,13 @@ def _parse_case(raw: object, lineno: int) -> EvalCase:
         agent_id=_str(raw, "agent_id", lineno, "eval-agent"),
         expect_no_match=flags["expect_no_match"],
         expect_denied=flags["expect_denied"],
+        expected_skills=tuple(skills),
+        kinds=kinds,
     )
-    if case.expect_no_match and case.expected_tools:
-        raise DatasetError(f"line {lineno}: expect_no_match cases cannot list expected_tools")
+    if case.expect_no_match and (case.expected_tools or case.expected_skills):
+        raise DatasetError(
+            f"line {lineno}: expect_no_match cases cannot list expected_tools/skills"
+        )
     if case.expect_denied and not case.forbidden_tools:
         raise DatasetError(f"line {lineno}: expect_denied cases must list forbidden_tools")
     return case
