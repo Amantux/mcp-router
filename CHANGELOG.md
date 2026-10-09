@@ -7,7 +7,9 @@ Upgrade steps: [docs/upgrade.md](docs/upgrade.md).
 
 ## [Unreleased]
 
-Planned as 0.6.0 (wave 6: hardening and full test coverage).
+## [0.6.0] - 2026-10-09
+
+Wave 6: security posture, full-surface test coverage with meta-tests, Alembic baseline, CI restructure.
 
 ### Breaking
 
