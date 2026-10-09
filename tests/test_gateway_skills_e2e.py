@@ -227,15 +227,19 @@ async def test_e2e_skills_routed_audited_isolated(served: dict[str, Any]) -> Non
             with pytest.raises(MCPError) as ei:
                 await call
             assert ei.value.error.message == "Unknown skill or resource."
-        # Unrouted lookups fail before a skill is resolved: nothing is audited
-        # (and certainly nothing "ok"/"read") for bob.
-        assert _rows(db, "bob") == []
+        # Unrouted lookups are audited as denied/"not routed" (skill unresolved,
+        # so skill_id is None) -- and never "ok"/"read" for bob.
+        unrouted = _rows(db, "bob")
+        assert sorted((x.outcome, x.detail, x.skill_id, x.resource_kind) for x in unrouted) == [
+            ("denied", "not routed", None, "skill"),
+            ("denied", "not routed", None, "skill"),
+        ]
         # Routed to bob but refused by policy -> curated denial + "denied" audit.
         await _reroute(bob, route, [b])
         with pytest.raises(MCPError) as ei:
             await bob.get_prompt(OTHER)
         assert ei.value.error.message == "Skill access denied by policy."
-        denied = _rows(db, "bob")
+        denied = [x for x in _rows(db, "bob") if x.skill_id is not None]
         assert [(x.outcome, x.resource_kind, x.skill_id) for x in denied] == [
             ("denied", "skill", b)
         ]
