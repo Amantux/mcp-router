@@ -146,11 +146,14 @@ def referencing_rule_count(session: Session, server_id: str) -> int:
     """Policy rules that name this server explicitly (``server_id`` match).
 
     Rules with ``server_id=None`` apply to any server and do not pin a
-    specific one, so they don't block deletion.
+    specific one, so they don't block deletion. Only ``resource_kind='tool'``
+    rules count: a skill rule's server_id is a skill-source id.
     """
     return int(
         session.scalar(
-            select(func.count()).select_from(PolicyRule).where(PolicyRule.server_id == server_id)
+            select(func.count())
+            .select_from(PolicyRule)
+            .where(PolicyRule.server_id == server_id, PolicyRule.resource_kind == "tool")
         )
         or 0
     )
