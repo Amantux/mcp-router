@@ -85,12 +85,15 @@ describe("PlaygroundPage", () => {
     setCredentials({ adminToken: "adm" });
     const { calls } = mockTool({ ...TOOL, name: "create_issue", operation: "write" }, () => ({ json: { status: "ok", detail: "ok", record_id: "r2", result: { content: [{ type: "text", text: '{"number":7}' }], is_error: false } } }));
     renderWithProviders(<PlaygroundPage />, { route: "/playground?tool=t1" });
-    await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
+    // Let every async load settle BEFORE typing: the principals option is the last
+    // thing to arrive, and typing into a form that is still being (re)mounted loses
+    // the value, which fails validation silently and never opens the dialog.
+    await screen.findByRole("option", { name: "billing-bot" }, { timeout: 5000 });
     // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
     expect(((await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 })) as HTMLButtonElement).disabled).toBe(true);
-    // The principals list loads asynchronously: wait for the option itself, not just the picker.
-    await screen.findByRole("option", { name: "billing-bot" }, { timeout: 5000 });
+    await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
     await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
+    expect(screen.queryByText("Required.")).toBeNull();
     await user.click(await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
     const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     expect(await within(dialog).findByText("Run create_issue as agent “billing-bot” (admin-initiated)?", {}, { timeout: 5000 })).toBeTruthy();
