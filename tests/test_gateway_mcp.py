@@ -29,7 +29,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
-from mcprouter.gateway.server import META_TOOL, PRINCIPAL_SCOPE_KEY, GatewayServer, build_gateway
+from mcprouter.gateway.server import (
+    FEEDBACK_TOOL,
+    META_TOOL,
+    PRINCIPAL_SCOPE_KEY,
+    GatewayServer,
+    build_gateway,
+)
 from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult
 from mcprouter.models import ExecutionRecord, MCPServerRecord, MCPToolRecord
 from mcprouter.settings import Settings
@@ -135,11 +141,12 @@ async def test_default_exposure_is_top_used_authorized_tools(world: dict[str, An
         "github.search_code",
         "github.list_issues",
         META_TOOL,
+        FEEDBACK_TOOL,
     ]
 
 
 async def test_no_rules_means_only_meta_tool(world: dict[str, Any]) -> None:
-    assert await _names(world["gw"], world["cat"], "alice") == [META_TOOL]
+    assert await _names(world["gw"], world["cat"], "alice") == [META_TOOL, FEEDBACK_TOOL]
 
 
 async def test_exposure_is_capped(world: dict[str, Any]) -> None:
@@ -153,7 +160,9 @@ async def test_exposure_is_capped(world: dict[str, Any]) -> None:
         s.refresh(p)
         s.expunge(p)
     cat.principals["alice"] = p
-    assert len(await _names(gw, cat, "alice")) == 2 + 1  # + meta tool
+    assert (
+        len(await _names(gw, cat, "alice")) == 2 + 2
+    )  # + router.find_tools, router.feedback (outside the cap)  # + meta tool
 
 
 async def test_routed_exposure_is_refiltered_through_policy(world: dict[str, Any]) -> None:
@@ -166,6 +175,7 @@ async def test_routed_exposure_is_refiltered_through_policy(world: dict[str, Any
         "github.list_issues",
         "github.create_issue",
         META_TOOL,
+        FEEDBACK_TOOL,
     ]
 
 
@@ -175,7 +185,13 @@ async def test_exposure_is_per_agent(world: dict[str, Any]) -> None:
     add_rule(db, "bob", max_operation="read")
     await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
     bob = await _names(gw, cat, "bob")
-    assert bob == ["files.read_file", "github.search_code", "github.list_issues", META_TOOL]
+    assert bob == [
+        "files.read_file",
+        "github.search_code",
+        "github.list_issues",
+        META_TOOL,
+        FEEDBACK_TOOL,
+    ]
 
 
 async def test_disabled_tool_not_listed(world: dict[str, Any]) -> None:
@@ -384,6 +400,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
             "github.list_issues",
             "github.create_issue",
             META_TOOL,
+            FEEDBACK_TOOL,
         ]
         res = await session.call_tool("github.list_issues", {"repo": "a/b"})
         assert res.is_error is False and inv.calls == [("github", "list_issues", {"repo": "a/b"})]
@@ -394,7 +411,7 @@ async def test_e2e_handshake_list_call_and_list_changed(served: dict[str, Any]) 
         with anyio.fail_after(5):
             await changed.wait()
         names = [t.name for t in (await session.list_tools()).tools]
-        assert names == ["github.list_issues", "github.create_issue", META_TOOL]
+        assert names == ["github.list_issues", "github.create_issue", META_TOOL, FEEDBACK_TOOL]
 
 
 async def test_e2e_session_is_bound_to_its_creator(served: dict[str, Any]) -> None:
@@ -443,7 +460,7 @@ async def test_e2e_modern_listen_receives_only_own_changes(served: dict[str, Any
                 event = await sub.__anext__()
             assert type(event).__name__ == "ToolsListChanged"
         names = [t.name for t in (await session.list_tools()).tools]
-        assert names == ["github.list_issues", "github.create_issue", META_TOOL]
+        assert names == ["github.list_issues", "github.create_issue", META_TOOL, FEEDBACK_TOOL]
 
 
 # ------------------------------------------------- adversarial-pass findings

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.app import create_app
-from mcprouter.gateway.server import META_TOOL
+from mcprouter.gateway.server import FEEDBACK_TOOL, META_TOOL
 from mcprouter.interfaces import RouteRequest
 from mcprouter.models import AgentPrincipal
 from mcprouter.routing.budgets import cap_servers, effective_budgets
@@ -235,7 +235,7 @@ async def test_gateway_exposure_honours_principal_max_servers(world: dict[str, A
         s.refresh(p)
         s.expunge(p)
     cat.principals["alice"] = p
-    names = [n for n in await _names(gw, cat, "alice") if n != META_TOOL]
+    names = [n for n in await _names(gw, cat, "alice") if n not in (META_TOOL, FEEDBACK_TOOL)]
     assert names == ["files.read_file"]  # top-used server only
     await gw._find_tools(p, {"query": "issues"})
     req = world["route"].requests[-1]
@@ -260,7 +260,11 @@ async def test_gateway_exposure_excludes_offline_servers(world: dict[str, Any]) 
     assert "files.read_file" not in await _names(gw, cat, "alice")  # default list
     world["route"].picks = ["files.read_file", "github.list_issues"]
     await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
-    assert await _names(gw, cat, "alice") == ["github.list_issues", META_TOOL]  # routed list
+    assert await _names(gw, cat, "alice") == [
+        "github.list_issues",
+        META_TOOL,
+        FEEDBACK_TOOL,
+    ]  # routed list
 
 
 # ------------------------------------------- analytics seam (route_request_id)
