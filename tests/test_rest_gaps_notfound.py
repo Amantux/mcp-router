@@ -91,3 +91,13 @@ def test_body_over_cap_is_413(client: TestClient, path: str) -> None:
     big = b'{"x":"' + b"a" * (MAX_BODY_BYTES + 1) + b'"}'
     r = client.post(path, content=big, headers={"Content-Type": "application/json"})
     assert r.status_code == 413, r.text
+
+
+def test_principal_get_by_id_happy(client: TestClient) -> None:
+    """Deterministic 2xx for GET /principals/{id} (MT-1 must not depend on order)."""
+    created = client.post("/api/v1/principals", json={"agentId": "getter"})
+    assert created.status_code == 201
+    pid = created.json()["id"]
+    r = client.get(f"/api/v1/principals/{pid}")
+    assert r.status_code == 200 and r.json()["agentId"] == "getter"
+    assert "apiKey" not in r.json()

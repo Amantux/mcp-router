@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import weakref
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -44,19 +45,22 @@ HITS: dict[tuple[str, str], set[int]] = {}
 NEGATIVE_ONLY: dict[tuple[str, str], str] = {}
 
 _real_request = TestClient.request
-_TEMPLATES: dict[int, list[tuple[re.Pattern[str], frozenset[str], str]]] = {}
+# Cached per app object (weak: an id() key would be reused by a later app
+# after garbage collection and resolve against the wrong route table).
+_TEMPLATES: weakref.WeakKeyDictionary[
+    FastAPI, list[tuple[re.Pattern[str], frozenset[str], str]]
+] = weakref.WeakKeyDictionary()
 
 
 def _templates(app: FastAPI) -> list[tuple[re.Pattern[str], frozenset[str], str]]:
-    key = id(app)
-    cached = _TEMPLATES.get(key)
+    cached = _TEMPLATES.get(app)
     if cached is None:
         cached = []
         for ctx in iter_route_contexts(app.routes):
             if isinstance(ctx.original_route, APIRoute) and ctx.path_regex is not None:
                 path = _CONVERTOR.sub(r"{\1}", ctx.path)
                 cached.append((ctx.path_regex, frozenset(ctx.methods or ()), path))
-        _TEMPLATES[key] = cached
+        _TEMPLATES[app] = cached
     return cached
 
 
