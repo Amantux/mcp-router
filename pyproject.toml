@@ -14,7 +14,7 @@ dependencies = [
   "mcp==2.3.0",
   "httpx==0.28.1",
   "prometheus-client==0.24.1",
-  "structlog==25.5.0",
+  "structlog==26.1.0",
   "jsonschema==4.26.0",
   # SKILL.md frontmatter (wave-4 skills); only yaml.safe_load is used.
   "pyyaml==6.0.3",
