@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -41,9 +40,8 @@ class NamedScope:
     max_skills: int | None = None
     calls: list[str] = field(default_factory=list)
 
-    @property
-    def _principal(self) -> Any:
-        return SimpleNamespace(max_skills=self.max_skills)
+    def principal_max_skills(self) -> int | None:
+        return self.max_skills
 
     def server_ids(self) -> list[str] | None:
         return None
