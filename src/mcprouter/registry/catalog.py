@@ -14,13 +14,13 @@ from dataclasses import dataclass, field
 from typing import Any
 from typing import cast as tcast
 
-from sqlalchemy import CursorResult, cast, func, select, text, update
+from sqlalchemy import CursorResult, case, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolVersionRecord
 from mcprouter.registry.audit import audit
-from mcprouter.registry.classify import OPERATIONS, Classification, ToolClassifier
+from mcprouter.registry.classify import OPERATION_WIDENING_RANK, OPERATIONS, Classification
 from mcprouter.registry.errors import InvalidArgument, ToolNotFound
 from mcprouter.registry.schema import tsv_sql
 
@@ -197,17 +197,37 @@ def update_classification(
 def apply_auto_classification(
     session: Session, tool_id: str, c: Classification, *, source: str | None = None
 ) -> bool:
-    """Write an AUTOMATIC classification. Returns False (and changes nothing)
-    when a human has reviewed the record.
+    """Write an AUTOMATIC classification: the only automatic writer of a
+    tool's classification. Returns False (and changes nothing) when a human
+    has reviewed the record.
 
-    The guard is in the UPDATE's WHERE clause, not a Python check on a loaded
-    object, so a classifier that read the tool before a human reviewed it
-    still cannot overwrite the human's values.
+    Unattended RE-classification never widens access: upstream metadata is
+    untrusted, so an operation an earlier automatic run set may only move
+    toward execute/unknown ("Delete a ticket" rewritten to "Get a ticket" must
+    not make the tool readable by read-only agents). A widening answer keeps
+    the stricter stored operation; domain/capabilities still update. A tool
+    never classified (`classification_source` NULL) takes any operation.
+
+    Both guards are in the UPDATE itself, not a Python check on a loaded
+    object, so a classifier that read the tool before a human reviewed it (or
+    before another run narrowed it) still cannot overwrite or widen it.
     Capabilities are only written when the classifier supplies some.
     """
     if c.operation not in OPERATIONS:
         raise InvalidArgument("operation must be one of read, write, execute, unknown.")
-    values: dict[str, Any] = {"operation": c.operation, "domain": c.domain}
+    rank = OPERATION_WIDENING_RANK[c.operation]
+    not_wider = [op for op, r in OPERATION_WIDENING_RANK.items() if r <= rank]
+    operation = case(
+        (
+            or_(
+                MCPToolRecord.classification_source.is_(None),
+                MCPToolRecord.operation.in_(not_wider),
+            ),
+            literal(c.operation),
+        ),
+        else_=MCPToolRecord.operation,  # would widen: keep the stricter class
+    )
+    values: dict[str, Any] = {"operation": operation, "domain": c.domain}
     if source is not None:
         values["classification_source"] = source
     if c.capabilities:
@@ -223,30 +243,6 @@ def apply_auto_classification(
     )
     result = tcast(CursorResult[Any], session.execute(stmt))
     return result.rowcount == 1
-
-
-@dataclass(frozen=True)
-class ClassifyRun:
-    classified: int
-    skipped_reviewed: int
-
-
-def auto_classify(
-    session: Session, classifier: ToolClassifier, tool_ids: list[str] | None = None
-) -> ClassifyRun:
-    stmt = select(
-        MCPToolRecord.id, MCPToolRecord.name, MCPToolRecord.description, MCPToolRecord.input_schema
-    ).where(MCPToolRecord.classification_reviewed.is_(False))
-    if tool_ids is not None:
-        stmt = stmt.where(MCPToolRecord.id.in_(tool_ids))
-    classified = skipped = 0
-    for tid, name, desc, schema in session.execute(stmt).all():
-        c = classifier.classify(name, desc or "", schema or {})
-        if apply_auto_classification(session, tid, c, source=classifier.name):
-            classified += 1
-        else:
-            skipped += 1  # reviewed between our read and the write
-    return ClassifyRun(classified=classified, skipped_reviewed=skipped)
 
 
 # ---------------------------------------------------------- enable/disable

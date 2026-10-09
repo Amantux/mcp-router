@@ -41,21 +41,19 @@ from mcprouter.inference.pipeline import embed_pending_tools
 from mcprouter.interfaces import EmbeddingBackend
 from mcprouter.models import MCPToolRecord
 from mcprouter.registry.catalog import apply_auto_classification
-from mcprouter.registry.classify import RuleBasedClassifier, ToolClassifier
+from mcprouter.registry.classify import (
+    OPERATION_WIDENING_RANK,
+    RuleBasedClassifier,
+    ToolClassifier,
+)
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
 
 
-# Severity for the non-widening rule: unknown is the MOST restricted class
-# (policy.engine treats anything unrecognised as execute, and above it here so
-# unknown -> execute counts as no widening).
-_SEVERITY = {"read": 0, "write": 1, "execute": 2}
-_UNKNOWN_RANK = 3
-
-
 def _rank(operation: str | None) -> int:
-    return _SEVERITY.get(operation or "", _UNKNOWN_RANK)
+    # Unrecognised counts as unknown, the most restricted class.
+    return OPERATION_WIDENING_RANK.get(operation or "", OPERATION_WIDENING_RANK["unknown"])
 
 
 def _classify_non_widening(s: Session, clf: ToolClassifier, tool_ids: list[str]) -> tuple[int, int]:
@@ -64,7 +62,8 @@ def _classify_non_widening(s: Session, clf: ToolClassifier, tool_ids: list[str])
     rewriting "Delete a ticket" to "Get a ticket" must not quietly make the
     tool readable by read-only agents. A tool never classified before
     (classification_source IS NULL) gets the classifier's answer, whatever it
-    is. Reviewed tools are excluded by apply_auto_classification's guard.
+    is. Both rules are enforced inside apply_auto_classification's UPDATE;
+    the Python comparison here only counts and logs the kept cases.
     Returns (classified, kept_operation)."""
     rows = s.execute(
         select(

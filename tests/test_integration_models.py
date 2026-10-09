@@ -12,7 +12,11 @@ from mcprouter.discovery import apply_listing
 from mcprouter.discovery.credentials import ServerCredentialRecord as ReExported
 from mcprouter.mcpclient import ToolDescriptor
 from mcprouter.models import DuplicateSuggestion, MCPToolRecord, ServerCredentialRecord
-from mcprouter.registry.catalog import ClassificationUpdate, auto_classify, update_classification
+from mcprouter.registry.catalog import (
+    ClassificationUpdate,
+    apply_auto_classification,
+    update_classification,
+)
 from mcprouter.registry.classify import RuleBasedClassifier
 from tests.support.registry_fixtures import make_server, make_tool
 
@@ -58,7 +62,9 @@ def test_classification_source_records_who_classified(db: SF) -> None:
         auto = make_tool(s, srv, "read_file", "Read the contents of a file")
         human = make_tool(s, srv, "write_file", "Write a file")
         s.flush()
-        auto_classify(s, RuleBasedClassifier(), [auto.id])
+        clf = RuleBasedClassifier()
+        c = clf.classify(auto.name, auto.description or "", auto.input_schema or {})
+        apply_auto_classification(s, auto.id, c, source=clf.name)
         update_classification(s, human.id, ClassificationUpdate(fields={}), actor="alice")
         s.commit()
         s.expire_all()

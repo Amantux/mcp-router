@@ -269,8 +269,10 @@ def classify_skill(
 
 
 SKILL_CLASSIFIER_NAME = "skill-rules-v1"
-# unknown is the MOST restricted for the non-widening comparison.
-_SKILL_WIDENING_RANK = {"read": 0, "write": 1, "execute": 2, "unknown": 3}
+# Non-widening order for unattended RE-classification (tools and skills):
+# unknown is the MOST restricted (policy treats it as execute, and above it so
+# unknown -> execute counts as no widening).
+OPERATION_WIDENING_RANK = {"read": 0, "write": 1, "execute": 2, "unknown": 3}
 
 
 def apply_skill_classification(
@@ -296,8 +298,8 @@ def apply_skill_classification(
 
     if c.operation not in OPERATIONS:
         raise ValueError("operation must be one of read, write, execute, unknown.")
-    rank = _SKILL_WIDENING_RANK[c.operation]
-    not_wider = [op for op, r in _SKILL_WIDENING_RANK.items() if r <= rank]
+    rank = OPERATION_WIDENING_RANK[c.operation]
+    not_wider = [op for op, r in OPERATION_WIDENING_RANK.items() if r <= rank]
     auto_ok = and_(
         SkillRecord.classification_reviewed.is_(False),
         or_(

@@ -6,21 +6,21 @@ from __future__ import annotations
 import math
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.models import MCPToolRecord
+from mcprouter.registry import catalog
 from mcprouter.registry.catalog import (
     ClassificationUpdate,
     ToolFilter,
     apply_auto_classification,
-    auto_classify,
     get_tool_detail,
     search_tools,
     set_enabled,
     update_classification,
 )
-from mcprouter.registry.classify import Classification, RuleBasedClassifier
+from mcprouter.registry.classify import Classification
 from mcprouter.registry.errors import InvalidArgument, ToolNotFound
 from mcprouter.registry.schema import init_registry
 from mcprouter.registry.stats import EMA_ALPHA, record_execution
@@ -287,26 +287,51 @@ def test_reviewed_guard_holds_against_a_stale_reader(
         assert (t.domain, t.operation) == ("productivity", "read")
 
 
-def test_auto_classify_bulk_skips_reviewed(
-    db: sessionmaker[Session], seeded: dict[str, str]
-) -> None:
+def _set_auto(db: sessionmaker[Session], tid: str, operation: str, source: str | None) -> None:
     with db() as s:
-        s.execute(
-            MCPToolRecord.__table__.update().values(domain=None, operation="unknown")  # type: ignore[attr-defined]
+        t = s.get(MCPToolRecord, tid)
+        assert t is not None
+        t.operation, t.classification_source = operation, source
+        s.commit()
+
+
+def _apply_op(db: sessionmaker[Session], tid: str, operation: str) -> tuple[str, str | None]:
+    with db() as s:
+        assert apply_auto_classification(
+            s, tid, Classification(operation=operation, domain="ops"), source="rules-v1"
         )
         s.commit()
-    with db() as s:
-        run = auto_classify(s, RuleBasedClassifier())
-        s.commit()
-    assert run.classified == 3
-    with db() as s:
-        by_name = {t.name: t for t in s.scalars(select(MCPToolRecord))}
-    assert by_name["list_issues"].operation == "read"
-    assert by_name["list_issues"].domain == "development"
-    assert by_name["createIssue"].operation == "write"
-    # Reviewed record keeps the human's (here: wiped-by-test) values untouched by auto.
-    assert by_name["search_messages"].operation == "unknown"
-    assert by_name["search_messages"].classification_reviewed is True
+        t = s.get(MCPToolRecord, tid)
+        assert t is not None
+        return t.operation, t.domain
+
+
+def test_auto_reclassification_never_widens_an_earlier_automatic_operation(
+    db: sessionmaker[Session], seeded: dict[str, str]
+) -> None:
+    """The non-widening rule lives in the single automatic writer's UPDATE, so
+    no caller (post-sync hook, a future bulk job) can widen an operation an
+    earlier automatic run set. Domain still updates; operation keeps the
+    stricter class."""
+    tid = seeded["list_issues"]
+    _set_auto(db, tid, "execute", "rules-v1")
+    assert _apply_op(db, tid, "read") == ("execute", "ops")
+    assert _apply_op(db, tid, "write") == ("execute", "ops")
+    assert _apply_op(db, tid, "unknown") == ("unknown", "ops")  # narrowing is allowed
+    assert _apply_op(db, tid, "execute") == ("unknown", "ops")
+
+
+def test_first_auto_classification_takes_any_operation(
+    db: sessionmaker[Session], seeded: dict[str, str]
+) -> None:
+    tid = seeded["list_issues"]
+    _set_auto(db, tid, "unknown", None)
+    assert _apply_op(db, tid, "read") == ("read", "ops")
+
+
+def test_there_is_one_automatic_tool_classification_writer() -> None:
+    # The old bulk `auto_classify` bypassed the non-widening rule; it is gone.
+    assert not hasattr(catalog, "auto_classify")
 
 
 def test_auto_classification_keeps_capabilities_when_classifier_supplies_none(
