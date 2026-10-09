@@ -168,3 +168,35 @@ describe("SetupPage messages", () => {
   });
 });
 
+describe("SetupPage import and finish", () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+    setCredentials({ adminToken: ADMIN });
+  });
+  afterEach(() => clearCredentials());
+
+  it("posts a pasted Claude Desktop config to the import endpoint as-is, and refuses invalid JSON", async () => {
+    routes({ "POST /api/v1/servers/import": (b) => ({ json: { imported: Object.keys((b as { mcpServers: object }).mcpServers) } }) });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    goTo("MCP servers");
+    const box = screen.getByRole("textbox", { name: "mcpServers JSON" });
+    fireEvent.change(box, { target: { value: "{not json" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import servers" }));
+    expect((await screen.findByRole("status")).textContent).toBe("That is not valid JSON.");
+    const cfg = { mcpServers: { files: { command: "uvx", args: ["mcp-files"] } } };
+    fireEvent.change(box, { target: { value: JSON.stringify(cfg) } });
+    fireEvent.click(screen.getByRole("button", { name: "Import servers" }));
+    expect(await screen.findByText("Servers imported.")).toBeTruthy();
+    expect(posts("/servers/import").map((c) => c.body)).toEqual([cfg]);
+  });
+
+  it("Finish setup marks setup complete", async () => {
+    routes({ "POST /api/v1/setup/complete": () => ({ json: { completed: true, completedAt: "2026-10-09T00:00:00Z" } }) });
+    renderWithProviders(<SetupPage />, { route: "/setup" });
+    goTo("Verify");
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    expect(await screen.findByText("Setup complete.")).toBeTruthy();
+    expect(posts("/setup/complete")).toHaveLength(1);
+  });
+});
+

@@ -4,6 +4,7 @@ import { render } from "@testing-library/react";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { MemoryRouter } from "react-router";
 import { NotificationsProvider, NotificationStack } from "../components/Notifications";
+import { OPENAPI, requestProblems } from "./contract";
 
 export function renderWithProviders(ui: ReactElement, opts: { route?: string } = {}) {
   const tree = (
@@ -41,6 +42,15 @@ export function takeUnmockedCalls(): string[] {
   return unmocked.splice(0, unmocked.length);
 }
 
+// Requests that disagree with docs/reference/openapi.json (MT-4): unknown route,
+// undeclared query or body key. setup.ts fails the test that made them, so a client
+// change that drifts from the backend contract cannot pass just because a mock
+// accepted it.
+const contractViolations: string[] = [];
+export function takeContractViolations(): string[] {
+  return contractViolations.splice(0, contractViolations.length);
+}
+
 /**
  * Strict fetch mock answering by "METHOD path" (the query string is recorded on the
  * call, not matched). A request to an unmocked route still gets a 404 so the page
@@ -60,6 +70,7 @@ export function mockFetch(routes: Record<string, MockHandler>) {
     const bodyKeys = body !== null && typeof body === "object" && !Array.isArray(body) ? Object.keys(body) : [];
     const call: FetchCall = { url, method, path: url.split("?")[0], query, body, bodyKeys, headers };
     calls.push(call);
+    if (OPENAPI) contractViolations.push(...requestProblems(OPENAPI, method, call.path, Object.keys(query), body));
     const key = `${method} ${call.path}`;
     const handler = routes[key];
     if (!handler) {

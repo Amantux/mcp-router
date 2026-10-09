@@ -70,5 +70,23 @@ describe("SkillSourcesPage", () => {
     dlg = await screen.findByRole("dialog");
     expect(within(dlg).queryByText("Enter a name.")).toBeNull();
   });
+
+  it("disabling a source asks first and PATCHes {enabled:false}; enabling needs no confirmation", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/skill-sources": () => ({ json: [SRC, { ...SRC, id: "s2", name: "old-skills", enabled: false }] }),
+      "PATCH /api/v1/skill-sources/s1": (b) => ({ json: { ...SRC, ...(b as object) } }),
+      "PATCH /api/v1/skill-sources/s2": (b) => ({ json: { ...SRC, id: "s2", ...(b as object) } }),
+    });
+    renderWithProviders(<SkillSourcesPage />);
+    await user.click(await screen.findByRole("switch", { name: "Disable team-skills" }));
+    const dlg = await screen.findByRole("dialog");
+    expect(within(dlg).getByText("Disable skill source “team-skills”?")).toBeTruthy();
+    expect(calls.some((c) => c.method === "PATCH")).toBe(false);
+    await user.click(within(dlg).getByRole("button", { name: "Disable source" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toEqual([["/api/v1/skill-sources/s1", { enabled: false }]]));
+    await user.click(await screen.findByRole("switch", { name: "Enable old-skills" }));
+    await waitFor(() => expect(calls.filter((c) => c.method === "PATCH").map((c) => [c.path, c.body])).toContainEqual(["/api/v1/skill-sources/s2", { enabled: true }]));
+  });
 });
 

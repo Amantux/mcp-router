@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { hydrateAuth } from "../api/auth";
-import { takeUnmockedCalls } from "./render";
+import { takeContractViolations, takeUnmockedCalls } from "./render";
+import { unnamedControls } from "./a11y";
 
 // One async budget for every findBy*/waitFor, so a starved runner gets the same slack
 // everywhere and nobody sprinkles per-call { timeout } overrides.
@@ -64,6 +65,10 @@ afterEach(() => {
   const problems: string[] = [];
   const missing = [...new Set(takeUnmockedCalls())];
   if (missing.length) problems.push(`request(s) to unmocked route(s): ${missing.join(", ")} (mock them, or mock an explicit 404)`);
+  const drift = [...new Set(takeContractViolations())];
+  if (drift.length) problems.push(`request(s) outside the OpenAPI contract:\n  ${drift.join("\n  ")}`);
+  const unnamed = unnamedControls(document.body);
+  if (unnamed.length) problems.push(`control(s) with no accessible name: ${unnamed.slice(0, 5).join(", ")}`);
   if (hiddenDialogs.length) problems.push(`a dialog was made aria-hidden while mounted: ${hiddenDialogs[0]}`);
   for (const d of document.querySelectorAll(DIALOG)) {
     const focus = document.activeElement;

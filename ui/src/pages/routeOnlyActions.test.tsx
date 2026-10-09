@@ -150,6 +150,18 @@ describe("tool and skill drawers", () => {
     expect(await screen.findByText("Disabled tool “list_issues”: agents no longer see it")).toBeTruthy();
   });
 
+  it("enables a disabled tool from its drawer", async () => {
+    const user = userEvent.setup();
+    const T = { id: "t2", server_id: "s1", name: "drop_table", description: "d", input_schema: {}, schema_hash: "h", tags: [], operation: "execute", required_scopes: [], enabled: false, version: 1 };
+    const { calls } = mockFetch({
+      [`GET ${API}/tools/t2`]: () => ({ json: T }),
+      [`POST ${API}/tools/t2/enable`]: () => ({ json: { ...T, enabled: true } }),
+    });
+    renderWithProviders(<ToolDetailDrawer toolId="t2" onClose={() => {}} onChanged={() => {}} />, { route: "/tools" });
+    await user.click(await screen.findByRole("button", { name: "Enable tool" }));
+    await waitFor(() => expect(sent(calls, "POST")).toEqual([{ path: `${API}/tools/t2/enable`, body: undefined }]));
+  });
+
   it("the Versions tab reads GET /skills/{id}/versions, newest first", async () => {
     const user = userEvent.setup();
     const { calls } = mockFetch({

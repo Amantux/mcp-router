@@ -237,7 +237,7 @@ export async function refreshServer(id: string): Promise<MCPServer> {
   return "server" in raw ? raw.server : raw;
 }
 
-// CONTRACT: enable/disable via PATCH /api/v1/servers/{id} {enabled}.
+// CONTRACT: PATCH /servers/{id} {enabled} verified: ServersPage.test.tsx › disabling asks first (naming the server and the consequence); cancelling sends nothing
 export function setServerEnabled(id: string, enabled: boolean): Promise<MCPServer> {
   return request("PATCH", `${API_BASE}/servers/${encodeURIComponent(id)}`, { body: { enabled } });
 }
@@ -265,7 +265,7 @@ export function normaliseTool<T extends MCPTool>(raw: T & { stats?: BackendToolS
   };
 }
 
-// CONTRACT: query params q, domain, operation, serverId, enabled, available, limit, offset.
+// CONTRACT: query names q, domain, operation, serverId, enabled, available, limit, offset verified: ToolsPage.test.tsx › sends every filter under the backend's query names, debounces search, and clears
 export async function listTools(q: ToolQuery, signal?: AbortSignal): Promise<Page<MCPTool>> {
   const raw = await request<unknown>("GET", `${API_BASE}/tools`, {
     signal,
@@ -361,7 +361,7 @@ export function acceptDedup(id: string, preferredToolId: string): Promise<Duplic
   return request("POST", `${API_BASE}/dedup/suggestions/${encodeURIComponent(id)}/accept`, { body: { preferredToolId } });
 }
 
-// CONTRACT: dismiss body {justification}; backend rejects empty (422).
+// CONTRACT: dismiss body {justification} (the backend 422s an empty one) verified: DuplicatesPage.test.tsx › shows pairs side by side, states nothing is auto-disabled, and sends the justification on dismiss
 export function dismissDedup(id: string, justification: string): Promise<DuplicateSuggestion> {
   return request("POST", `${API_BASE}/dedup/suggestions/${encodeURIComponent(id)}/dismiss`, { body: { justification } });
 }
@@ -657,7 +657,7 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
  * Admin-only: route `query` under a named agent's scope and budgets without
  * publishing exposure (the agent's MCP tools/list is untouched).
  */
-// CONTRACT: POST /api/v1/route/simulate {agentId, query, maxTools?, maxServers?}; see SimulateResponse.
+// CONTRACT: POST /route/simulate {agentId, query, maxTools, maxServers?, maxSkills?} verified: LensPage.test.tsx › simulates for a picked principal, then re-queries (debounced) when a budget slider moves
 export async function simulateAgent(body: SimulateRequest, signal?: AbortSignal): Promise<SimulateResponse> {
   const raw = await request<Loose>("POST", `${API_BASE}/route/simulate`, { body, signal });
   return normaliseSimulation(raw ?? {}, body.agentId);
@@ -721,7 +721,7 @@ export async function deleteSkillSource(id: string): Promise<void> {
 export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
   return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
 }
-// CONTRACT: query params q, domain, operation, sourceId, enabled, available, reviewed, hasScripts, limit, offset.
+// CONTRACT: query names incl. sourceId and hasScripts (D13) verified: SkillsPage.test.tsx › sends the Source and Scripts filters under the backend's query names
 export async function listSkills(q: SkillQuery, signal?: AbortSignal): Promise<Page<Skill>> {
   const raw = await request<unknown>("GET", `${API_BASE}/skills`, {
     signal,
@@ -761,9 +761,9 @@ export async function downloadSkillBundle(agentId: string): Promise<Blob> {
   return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
 }
 
-// CONTRACT: aligned with S3 INTEGRATION_NOTES-wave4-exposure.md (planned, not yet verified):
-// POST /skills/{id}/activate {agentId?, routeRequestId?} -> {body, resources[{path,size,kind}], recordId};
-// 403 denied, 404 not routed, 429 rate_limited. agentId is required for admin-initiated activation.
+// POST /skills/{id}/activate {agentId?, routeRequestId?}; 403 denied, 404 not routed, 429 rate_limited.
+// agentId is required for admin-initiated activation.
+// CONTRACT: response {body, resources[], recordId} verified: meta.test.ts › activate.result
 export async function activateSkill(id: string, opts: { agentId?: string } = {}, signal?: AbortSignal): Promise<SkillActivation> {
   const body: JsonObject = {};
   if (opts.agentId) body.agentId = opts.agentId;
@@ -794,7 +794,7 @@ export function importServers(config: unknown): Promise<unknown> {
   return request("POST", `${API_BASE}/servers/import`, { body: config });
 }
 
-// CONTRACT: POST /api/v1/route/{requestId}/feedback (admin bearer → source=human).
+// CONTRACT: POST /route/{requestId}/feedback {items} (admin bearer → source=human) verified: LensPage.test.tsx › prefills the agent from ?agentId= and rates against ?routeRequestId=
 export async function postRouteFeedback(requestId: string, items: FeedbackItem[]): Promise<FeedbackResult> {
   return request<FeedbackResult>("POST", `${API_BASE}/route/${encodeURIComponent(requestId)}/feedback`, {
     body: { items } as unknown as JsonObject,

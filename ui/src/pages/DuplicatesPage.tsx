@@ -24,7 +24,8 @@ import {
 import { BranchForkRegular } from "@fluentui/react-icons";
 import { acceptDedup, dismissDedup, getSkill, getTool, listDedupSuggestions, runDedupScan } from "../api/client";
 
-// CONTRACT: wave-4 dedup suggestions may reference a skill as "skill:<id>" in toolAId/toolBId (no S2 notes yet).
+// A side may be a skill, referenced as "skill:<id>"; the backend also reports kindA/kindB.
+// CONTRACT: suggestions report each side's kind verified: meta.test.ts › dedup.kinds
 const SKILL_PREFIX = "skill:";
 const isSkillRef = (id: string) => id.startsWith(SKILL_PREFIX);
 function loadSide(id: string, embedded: MCPTool | undefined, sig: AbortSignal): Promise<MCPTool | SkillDetail> {
