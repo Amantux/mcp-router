@@ -24,7 +24,7 @@ const useStyles = makeStyles({
 });
 
 /** Only http(s) endpoints are accepted for network transports. */
-export function validateHttpUrl(raw: string): string | null {
+export function validateHttpUrl(raw: string, httpsOnly = false): string | null {
   const v = raw.trim();
   if (!v) return "Enter the server's URL.";
   let u: URL;
@@ -34,6 +34,7 @@ export function validateHttpUrl(raw: string): string | null {
     return "Enter a full URL, e.g. https://mcp.example.com/mcp.";
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return "Only http:// and https:// URLs are supported.";
+  if (httpsOnly && u.protocol !== "https:") return "Only https:// URLs are accepted here.";
   if (!u.hostname) return "The URL needs a host name.";
   return null;
 }
@@ -44,7 +45,18 @@ interface Errors {
   command?: string;
 }
 
-export function RegisterServerDialog({ open, onClose, onRegistered }: { open: boolean; onClose: () => void; onRegistered: (s: MCPServer) => void }) {
+export function RegisterServerDialog({
+  open,
+  onClose,
+  onRegistered,
+  httpsOnly = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onRegistered: (s: MCPServer) => void;
+  /** Refuse plain http:// client-side (the setup wizard's stricter default). */
+  httpsOnly?: boolean;
+}) {
   const s = useStyles();
   const notify = useNotify();
   const [name, setName] = useState("");
@@ -76,7 +88,7 @@ export function RegisterServerDialog({ open, onClose, onRegistered }: { open: bo
         .filter(Boolean);
       body = { name: name.trim(), transport, stdioCommand: [command.trim(), ...argv] };
     } else {
-      const err = validateHttpUrl(endpoint);
+      const err = validateHttpUrl(endpoint, httpsOnly);
       if (err) e.endpoint = err;
       body = { name: name.trim(), transport, endpoint: endpoint.trim() };
     }
@@ -129,7 +141,7 @@ export function RegisterServerDialog({ open, onClose, onRegistered }: { open: bo
                   </Field>
                 </>
               ) : (
-                <Field label="URL" required validationMessage={errors.endpoint} hint="http:// or https:// only.">
+                <Field label="URL" required validationMessage={errors.endpoint} hint={httpsOnly ? "https:// only." : "http:// or https:// only."}>
                   <Input type="url" value={endpoint} onChange={(_, d) => setEndpoint(d.value)} />
                 </Field>
               )}

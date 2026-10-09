@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import {
   Button,
+  Checkbox,
   Input,
+  Radio,
+  RadioGroup,
   Textarea,
   Tab,
   TabList,
@@ -11,10 +14,13 @@ import {
 import {
   completeSetup,
   createPrincipal,
+  createRule,
   createSkillSource,
   getModelsHealth,
   getSetupStatus,
   importServers,
+  listServers,
+  listSkillSources,
   type SetupStatus,
 } from "../../api/client";
 import {
@@ -25,6 +31,27 @@ import {
   suggestToken,
 } from "./snippets";
 import { STEP_KEY, skipSetup } from "./redirect";
+import { RegisterServerDialog } from "../RegisterServerDialog";
+import type { CreateRuleRequest } from "../../api/types";
+
+type Target = { kind: "tool" | "skill"; id: string; name: string };
+
+/** Starter policy: one read-ceiling rule per selected server (tool) or skill source (skill). */
+export function starterRules(agentId: string, targets: Target[]): CreateRuleRequest[] {
+  return targets.map((t) => ({
+    agentId,
+    resourceKind: t.kind,
+    serverId: t.id,
+    toolName: null,
+    maxOperation: "read",
+    requiresApproval: false,
+  }));
+}
+
+/** Directory skill sources must be absolute paths on the router host. */
+export function isAbsolutePath(p: string): boolean {
+  return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
+}
 
 export const STEPS = [
   "Admin token",
@@ -56,6 +83,12 @@ export function SetupPage() {
   const [apiKey, setApiKey] = useState<string | null>(null); // memory only: shown once
   const [client, setClient] = useState<Client>("Claude Code");
   const [health, setHealth] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
+  const [dirPath, setDirPath] = useState("");
+  const [policy, setPolicy] = useState<"readonly" | "later">("readonly");
+  const [targets, setTargets] = useState<Target[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [ruleCount, setRuleCount] = useState<number | null>(null);
   const url = `${window.location.origin}/mcp`;
 
   const recheck = () =>
@@ -72,6 +105,18 @@ export function SetupPage() {
       /* storage unavailable: progress just isn't remembered */
     }
   }, [step]);
+
+  useEffect(() => {
+    if (apiKey === null) return;
+    void Promise.all([listServers(), listSkillSources()]).then(
+      ([servers, sources]) =>
+        setTargets([
+          ...servers.map((x) => ({ kind: "tool" as const, id: x.id, name: x.name })),
+          ...sources.map((x) => ({ kind: "skill" as const, id: x.id, name: x.name })),
+        ]),
+      () => setMsg("Could not load servers and skill sources."),
+    );
+  }, [apiKey]);
 
   const run = (p: Promise<unknown>, ok: string) =>
     p.then(
@@ -128,7 +173,14 @@ export function SetupPage() {
         }}
       >
         Import servers
-      </Button>
+      </Button>{" "}
+      <Button onClick={() => setAddOpen(true)}>Add one server</Button>
+      <RegisterServerDialog
+        open={addOpen}
+        httpsOnly
+        onClose={() => setAddOpen(false)}
+        onRegistered={(srv) => setMsg(`Server ${srv.name} registered.`)}
+      />
     </div>,
     <div key="d">
       <Input
@@ -152,6 +204,29 @@ export function SetupPage() {
         }}
       >
         Add skill source
+      </Button>
+      <Input
+        aria-label="Directory path"
+        placeholder="/srv/skills"
+        value={dirPath}
+        onChange={(_, d) => setDirPath(d.value)}
+      />
+      <Button
+        onClick={() => {
+          const loc = dirPath.trim();
+          if (!isAbsolutePath(loc))
+            return setMsg("Enter an absolute directory path, e.g. /srv/skills.");
+          void run(
+            createSkillSource({
+              name: loc.split(/[\\/]/).filter(Boolean).pop() || "skills",
+              kind: "directory",
+              location: loc,
+            }),
+            "Directory source added.",
+          );
+        }}
+      >
+        Add directory source
       </Button>
     </div>,
     <div key="e">
@@ -182,6 +257,55 @@ export function SetupPage() {
           </Button>
         </div>
       )}
+      {apiKey !== null && ruleCount === null && (
+        <div aria-label="Starter policy">
+          <RadioGroup
+            value={policy}
+            onChange={(_, d) => setPolicy(d.value as "readonly" | "later")}
+          >
+            <Radio value="readonly" label="Read-only on selected servers/sources" />
+            <Radio value="later" label="I'll configure rules later" />
+          </RadioGroup>
+          {policy === "readonly" &&
+            (targets ?? []).map((t) => {
+              const k = `${t.kind}:${t.id}`;
+              return (
+                <Checkbox
+                  key={k}
+                  label={`${t.kind === "tool" ? "Server" : "Skill source"}: ${t.name}`}
+                  checked={picked.has(k)}
+                  onChange={(_, d) => {
+                    const next = new Set(picked);
+                    if (d.checked) next.add(k);
+                    else next.delete(k);
+                    setPicked(next);
+                  }}
+                />
+              );
+            })}
+          {policy === "readonly" && (
+            <Button
+              disabled={picked.size === 0}
+              onClick={() => {
+                const sel = (targets ?? []).filter((t) => picked.has(`${t.kind}:${t.id}`));
+                let made = 0; // sequential, so a partial failure can say how many landed
+                void starterRules(agentId, sel)
+                  .reduce<Promise<void>>(
+                    (acc, r) => acc.then(() => createRule(r).then(() => void made++)),
+                    Promise.resolve(),
+                  )
+                  .then(
+                    () => setRuleCount(made),
+                    () => setMsg(`Created ${made} of ${sel.length} rules; add the rest on the Policy page.`),
+                  );
+              }}
+            >
+              Create rules
+            </Button>
+          )}
+        </div>
+      )}
+      {ruleCount !== null && <Text block>Created {ruleCount} rule(s).</Text>}
     </div>,
     <div key="f">
       <TabList
