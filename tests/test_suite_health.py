@@ -128,3 +128,35 @@ def test_fixed_port_allowlist_has_no_stale_rows() -> None:
     hits = _fixed_port_hits()
     stale = [k for k in FIXED_PORT_ALLOWLIST if not any(k[0] == f and k[1] in ln for f, ln in hits)]
     assert stale == []
+
+
+# ------------------------------------------------------------------ structure (P-511)
+
+
+def test_support_package_collects_no_tests() -> None:
+    support = ROOT / "tests" / "support"
+    offenders = [
+        p.name
+        for p in support.glob("*.py")
+        if p.name.startswith("test_") or re.search(r"^(async )?def test_", p.read_text(), re.M)
+    ]
+    assert offenders == []
+
+
+def test_no_cross_test_module_imports() -> None:
+    bad = [
+        p.relative_to(ROOT).as_posix()
+        for p in ROOT.glob("tests/**/*.py")
+        if re.search(r"^\s*from (tests)?\.?test_\w+ import", p.read_text(), re.M)
+    ]
+    assert bad == [], "shared helpers live in tests/support/"
+
+
+def test_markers_registered_and_strict() -> None:
+    import tomllib
+
+    ini = tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+    names = {m.split(":", 1)[0] for m in ini["markers"]}
+    assert {"db", "e2e", "slow", "scale"} <= names
+    assert "--strict-markers" in ini["addopts"].split()
+    assert ini["timeout"] == 120
