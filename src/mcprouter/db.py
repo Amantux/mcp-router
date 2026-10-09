@@ -47,6 +47,13 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     " ON execution_records (route_request_id)",
     # Wave-2 integration: structured provenance of admin-impersonated attempts.
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS initiated_by VARCHAR(16)",
+    # Wave-4 (owner decision): these columns may hold "skill:<uuid>" (42 chars).
+    # Widening VARCHAR is metadata-only on Postgres and idempotent (re-running
+    # TYPE VARCHAR(48) on a VARCHAR(48) column is a no-op).
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_a_id TYPE VARCHAR(48)",
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_b_id TYPE VARCHAR(48)",
+    "ALTER TABLE duplicate_suggestions ALTER COLUMN preferred_tool_id TYPE VARCHAR(48)",
+    "ALTER TABLE tool_stats_daily ALTER COLUMN tool_id TYPE VARCHAR(48)",
 )
 
 
