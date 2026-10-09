@@ -43,6 +43,7 @@ from mcprouter.api.routes_models import router as models_router
 from mcprouter.api.routes_policy import router as policy_router
 from mcprouter.api.routes_route import install_routing
 from mcprouter.api.routes_servers import router as servers_router
+from mcprouter.api.routes_setup import router as setup_router
 from mcprouter.api.static import mount_ui
 from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.discovery import DiscoveryService, SyncLoop
@@ -212,6 +213,7 @@ def create_app(
     )
     app.state.skill_exposure = skill_exposure
     app.include_router(routes_skill_sources.router)
+    app.include_router(setup_router)  # wave-5 first-run wizard (admin-gated)
     app.include_router(routes_skills.agent_router)  # BEFORE router: /skills/bundle
     app.include_router(routes_skills.router)
     build_gateway(
