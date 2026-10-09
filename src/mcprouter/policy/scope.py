@@ -54,6 +54,12 @@ class PolicyScope:
         self._principal = principal
         self._rules = list(rules)
 
+    def principal_max_skills(self) -> int | None:
+        """The principal's skills ceiling; None = no ceiling of its own.
+        Non-int (corrupt) values fail closed to 0."""
+        value = self._principal.max_skills
+        return value if value is None or isinstance(value, int) else 0
+
     def server_ids(self) -> list[str] | None:
         if not self._principal.enabled:
             return []

@@ -80,18 +80,11 @@ class UncachedScope:
 def principal_skill_cap(scope: ScopeFilter) -> int | None:
     """The principal's skills ceiling for `scope`; None = no principal ceiling.
 
-    Resolution: a public `principal_max_skills()` → the legacy private
-    `_principal.max_skills` (PolicyScope, which lives outside the routing
-    track) → FAIL CLOSED to 0. A scope that cannot say what its principal may
-    see gets no skills, never the global cap."""
+    Resolution: the scope's public `principal_max_skills()`, else FAIL
+    CLOSED to 0. A scope that cannot say what its principal may see gets no
+    skills, never the global cap."""
     public = getattr(scope, "principal_max_skills", None)
     if callable(public):
         value = public()
         return value if value is None or isinstance(value, int) else 0
-    principal = getattr(scope, "_principal", None)
-    if principal is None:
-        return 0
-    value = getattr(principal, "max_skills", None)
-    # A real principal with an unset (unflushed) column has no ceiling of its
-    # own — same as before S2d review; anything non-int is refused.
-    return value if value is None or isinstance(value, int) else 0
+    return 0
