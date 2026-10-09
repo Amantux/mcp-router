@@ -465,3 +465,94 @@ async def test_notify_failure_prunes_session_and_never_fails_find_tools(
     assert sent == ["healthy"]
     assert list(gw._legacy["alice"]) == ["good"]
     assert gw.exposure.get("alice") is not None
+
+
+# ------------------------------------------------ P-307 reserved names + meta args
+def _variant(world: dict[str, Any], *, routed: bool, skills: Any) -> Any:
+    from mcprouter.gateway.server import GatewayServer
+
+    app = world["app"]
+    return GatewayServer(
+        session_factory=world["db"],
+        security=app.state.security,
+        settings=app.state.settings,
+        manager=world["gw"]._manager,
+        route_fn=world["route"] if routed else None,
+        skills=skills,
+    )
+
+
+class _NoSkills:
+    """Skills stand-in: any use is a side effect the test forbids."""
+
+    def __getattr__(self, attr: str) -> Any:
+        raise AssertionError(f"skills touched: {attr}")
+
+
+@pytest.mark.parametrize("routed", [True, False])
+@pytest.mark.parametrize("with_skills", [True, False])
+async def test_reserved_catalog_names_are_never_listed(
+    world: dict[str, Any], routed: bool, with_skills: bool
+) -> None:
+    from mcprouter.gateway.server import RESERVED_TOOL_NAMES
+
+    db, cat = world["db"], world["cat"]
+    with db() as s:
+        srv = MCPServerRecord(name="router", transport="stdio")
+        s.add(srv)
+        s.flush()
+        for name in sorted(t.split(".", 1)[1] for t in RESERVED_TOOL_NAMES):
+            s.add(
+                MCPToolRecord(
+                    server_id=srv.id, name=name, schema_hash="h", operation="read", call_count=999
+                )
+            )
+        s.commit()
+    add_rule(db, "alice")
+    gw = _variant(world, routed=routed, skills=_NoSkills() if with_skills else None)
+    res = await gw._on_list_tools(_ctx(gw, cat, "alice"), None)
+    names = [t.name for t in res.tools]
+    assert len(names) == len(set(names)), names
+    assert not any(
+        t.name.startswith("router.") for t, _s, _a in gw.visible_tools(cat.principals["alice"])
+    )
+    expected_meta = ({META_TOOL, FEEDBACK_TOOL} if routed else set()) | (
+        {"router.activate_skill", "router.read_skill_resource"} if with_skills else set()
+    )
+    assert {n for n in names if n.startswith("router.")} == expected_meta
+
+
+BAD_META_ARGS = [
+    (META_TOOL, {"query": "x" * 2001}),
+    (META_TOOL, {"query": ""}),
+    (FEEDBACK_TOOL, {"items": []}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True, "kind": "bogus"}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x" * 301, "helpful": True}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True}] * 51}),
+    (FEEDBACK_TOOL, {"requestId": "r" * 37, "items": [{"name": "x", "helpful": True}]}),
+    (FEEDBACK_TOOL, {"items": [{"name": "x", "helpful": True, "extra": 1}]}),
+    ("router.activate_skill", {"name": ""}),
+    ("router.activate_skill", {"name": "a/b", "path": "x"}),
+    ("router.read_skill_resource", {"name": "a/b"}),
+    ("router.read_skill_resource", {"name": "a/b", "path": "p" * 1025}),
+]
+
+
+@pytest.mark.parametrize(("tool", "args"), BAD_META_ARGS, ids=lambda v: str(v)[:24])
+async def test_schema_violating_meta_args_are_refused_without_side_effect(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tool: str, args: dict[str, Any]
+) -> None:
+    from mcprouter.analytics import feedback as fb
+
+    def no_feedback(*_a: Any, **_k: Any) -> int:
+        raise AssertionError("feedback recorded")
+
+    monkeypatch.setattr(fb, "record_feedback", no_feedback)
+    gw = _variant(world, routed=True, skills=_NoSkills())
+    res = await gw._on_call_tool(
+        _ctx(gw, world["cat"], "alice"), types.CallToolRequestParams(name=tool, arguments=args)
+    )
+    assert res.is_error is True
+    assert res.content[0].text.startswith("Refused: invalid arguments")  # type: ignore[union-attr]
+    assert world["route"].requests == []
+    assert "x" * 50 not in res.content[0].text  # type: ignore[union-attr]  # values never echoed

@@ -78,6 +78,7 @@ from mcprouter.api.deps_auth import AuthenticationError, SecurityConfig, hash_ke
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import redact, scrub_log
+from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.gateway.exposure import ExposureStore
 from mcprouter.gateway.skills import (
     Activation,
@@ -207,6 +208,27 @@ _SKILL_TOOL_DEFS = [
         },
     ),
 ]
+
+
+# Every name the gateway answers itself. A catalog tool with one of these
+# stable names is NEVER listed, whatever features are wired (it would shadow or
+# duplicate a meta-tool, or appear only in some deployments).
+RESERVED_TOOL_NAMES = frozenset(
+    {META_TOOL, FEEDBACK_TOOL, ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL}
+)
+_META_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
+    t.name: dict(t.input_schema) for t in (_META_TOOL_DEF, _FEEDBACK_TOOL_DEF, *_SKILL_TOOL_DEFS)
+}
+
+
+def _meta_args_refusal(name: str, arguments: dict[str, Any] | None) -> types.CallToolResult | None:
+    """Validate a meta-tool call against the schema it ADVERTISES, with the
+    manager's validator (curated: location + keyword, never values). None = ok."""
+    try:
+        validate_arguments(_META_TOOL_SCHEMAS[name], arguments or {})
+    except ArgumentValidationError as exc:
+        return _text(f"Refused: invalid arguments ({exc})", is_error=True)
+    return None
 
 
 def _skill_error(exc: SkillAccessError) -> str:
@@ -619,11 +641,8 @@ class GatewayServer:
                     and len(servers_shown) >= server_cap
                 ):
                     continue  # distinct-server budget (routing.budgets)
-                if self._route_fn is not None and stable_tool_id(server.name, tool.name) in (
-                    META_TOOL,
-                    FEEDBACK_TOOL,
-                ):
-                    continue  # never shadow / duplicate the meta tool's name
+                if stable_tool_id(server.name, tool.name) in RESERVED_TOOL_NAMES:
+                    continue  # never shadow / duplicate a meta-tool's name
                 # Defense in depth: route results are NEVER shown unfiltered.
                 decision = evaluate(principal, server, tool, rules)
                 if decision.allow:
@@ -682,14 +701,20 @@ class GatewayServer:
     ) -> types.CallToolResult:
         principal = self._principal(ctx)
         self._track_session(ctx, principal.agent_id)
-        if params.name == META_TOOL and self._route_fn is not None:
-            return await self._find_tools(principal, params.arguments)
-        if params.name == FEEDBACK_TOOL and self._route_fn is not None:
-            return await self._feedback(principal, params.arguments or {})
-        if self._skills is not None and params.name in (
+        routed = self._route_fn is not None and params.name in (META_TOOL, FEEDBACK_TOOL)
+        skill = self._skills is not None and params.name in (
             ACTIVATE_SKILL_TOOL,
             READ_SKILL_RESOURCE_TOOL,
-        ):
+        )
+        if routed or skill:
+            refusal = _meta_args_refusal(params.name, params.arguments)
+            if refusal is not None:
+                return refusal
+        if routed and params.name == META_TOOL:
+            return await self._find_tools(principal, params.arguments)
+        if routed:
+            return await self._feedback(principal, params.arguments or {})
+        if skill:
             return await self._skill_tool(principal, params.name, params.arguments or {})
         tool_id = await anyio.to_thread.run_sync(self._resolve_stable_id, params.name)
         # Analytics seam (wave 2): attribute the call to the route that exposed
