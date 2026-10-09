@@ -128,3 +128,38 @@ activations.
 
 **Metrics:** `mcpr_analytics_tools_{selected,succeeded}` now include skill
 activations, as `surfaced` already did. Their help text still says "Tool".
+
+## S2h — skills economy + overview (wave4/skills-analytics)
+
+Fixes the S2f known gap: `economy._DEC_CTE` now treats `"skill:<id>"` ids of
+skills still in the catalog as known, so decisions surfacing a skill are
+priced, not `staleRefDecisions`. A `skill:` id for a deleted skill is still stale.
+
+**Pricing** (`analytics/economy.py`, `tokens.skill_metadata_tokens`): a surfaced
+skill costs its metadata (chars/4 over compact JSON `{name, description}`); its
+body (`SkillRecord.body_tokens_est`) is exposed ONLY if the skill has an
+attributed activation (`funnel.ATT_CTE`) on that same decision. The catalog
+counterfactual adds the metadata of every skill the agent is CURRENTLY
+authorized for (`evaluate_skill`, enabled+available skills on enabled sources)
+— same current-scope approximation/bias as tools. Skill fields are 0 for
+unscored agents (no rules), like `exposedTokens`.
+
+**Wire additions** (camelCase):
+- `contextEconomy` (overview + per-agent): `skillMetadataTokens`,
+  `skillBodyTokensExposed` (both already inside `exposedTokens`),
+  `skillBodyTokensNotSent` (surfaced-not-activated bodies; NOT in exposed/catalog).
+- `GET /analytics/overview`: `skills: {surfaced, activated, activationRate,
+  bodyTokensNotSent}` — (decision, skill) pairs; `bodyTokensNotSent` ==
+  `contextEconomy.skillBodyTokensNotSent`.
+- Agent profiles: `skillsSurfaced`, `skillsActivated`, `skillActivationRate`
+  (subsets of `surfaced`/`selected`).
+- Wasted-exposure suggestion rows and tool-detail `coSurfaced` rows: `kind:
+  "tool" | "skill"`.
+
+**Metrics:** new `mcpr_analytics_skills_surfaced_total`,
+`mcpr_analytics_skills_activated_total` on the SAME single collector (no new
+registration). Decision: the `tools_*` counters stay kind-blind (tools AND
+skills); their help text now says so; `skills_*` are subsets.
+
+**Deferred:** staleness rows for never-surfaced skills (`kind` on stale rows) —
+not done in S2h (context budget).
