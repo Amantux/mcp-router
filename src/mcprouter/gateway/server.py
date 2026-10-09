@@ -323,7 +323,7 @@ class GatewayServer:
         self._lock = threading.Lock()
         self.server = _RouterMCPServer(
             "mcp-router",
-            version="0.1.0",
+            version="0.4.0",
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."

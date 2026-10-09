@@ -249,7 +249,8 @@ agents. Posture:
     client.
   - *Bundle outcome.* A bundle ships bodies, so it counts as an activation:
     each routed skill is policy-checked, denied ones are audited and left out,
-    and the rest are audited `ok`. A failed bundle (`too_many`, `too_large`,
+    and the rest are audited with outcome `bundle` (counted as an activation in
+    the funnel; never bumps `activation_count`). A failed bundle (`too_many`, `too_large`,
     `invalid_name`, `duplicate_name`) writes **one** `error` row
     (`bundle: <code>`), and a rate-limited bundle writes **one** `rate_limited`
     row. Neither writes a row per skill.
