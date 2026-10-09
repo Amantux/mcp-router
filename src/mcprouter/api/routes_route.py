@@ -67,7 +67,7 @@ from mcprouter.interfaces import RouteRequest, ScopeFilter, ToolCandidate
 from mcprouter.models import AgentPrincipal
 from mcprouter.routing.budgets import effective_budgets
 from mcprouter.routing.pipeline import RoutePipeline
-from mcprouter.routing.retriever import ensure_keyword_index
+from mcprouter.routing.retriever import ensure_keyword_index, ensure_skill_keyword_index
 from mcprouter.routing.scope import AllowAllScope, UncachedScope
 from mcprouter.routing.servers import resolve_server_names
 from mcprouter.routing.trace import RouteTrace
@@ -164,6 +164,7 @@ def install_routing(
     app: FastAPI, pipeline: RoutePipeline, scope_resolver: ScopeResolver | None = None
 ) -> None:
     ensure_keyword_index(app.state.engine)  # keyword-leg GIN index (idempotent)
+    ensure_skill_keyword_index(app.state.engine)  # skills twin (idempotent)
     app.state.route_pipeline = pipeline
     app.state.route_scope_resolver = scope_resolver
     if scope_resolver is None:

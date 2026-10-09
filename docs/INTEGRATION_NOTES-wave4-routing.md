@@ -85,3 +85,27 @@ pass `content_changed` when content_hash/manifest_hash moved.
 decision-row prefix, cache key (max_skills + kinds) and cache-hit skill
 re-filter, `/route` `skills`/`max_skills_applied`, simulate `kind` fields and
 maxSkills clamp. The response shapes for S4b are therefore NOT yet fixed here.
+
+## S2d — item 1: skills routed end-to-end (interim gate removed)
+
+- `RoutePipeline` now retrieves `kinds=("tool","skill")` regardless of settings;
+  `RouteRequest.kinds` (new, optional, default None) may only NARROW. The S2b
+  interim `kind == "tool"` gate is gone. Skill score questions are prefixed `[skill]`.
+- Budgets after ranking, per kind (`pipeline._cap`): tools via maxServers ->
+  maxTools (MCP servers only — skills never consume server budget); skills via
+  `RoutePipeline.skills_budget(request, scope) -> BudgetClamp` =
+  `min(request.max_skills, principal.max_skills, settings.max_exposed_skills)`
+  (`budgets.clamp_budget`, same attribution rules as maxTools). Principal value is
+  read from `scope._principal.max_skills` (PolicyScope) — None for other scopes.
+- `RoutedTool.kind` / `CachedTool.kind` set; decision rows use `skill:<id>` for
+  skills, bare ids for tools (`selected_tool_ids` and `scores` keys).
+- Cache key += `max_skills`, `kinds`. `_revalidate` reloads skills with
+  `skill_eligibility_filters()` and re-runs `scope.permits` on them.
+- Trace: `RouteTrace.skill_budget` (BudgetClamp, `budget="maxSkills"`); new
+  `maxSkills` stage; retrieval stage detail gains `beforeTools/beforeSkills/
+  afterTools/afterSkills`. `maxServers`/`maxTools` stages count tools only.
+  Pruned / policyFiltered entries are `ToolCandidate`s carrying `.kind`.
+- Install hook (`api/routes_route.py`) calls `ensure_skill_keyword_index` next
+  to `ensure_keyword_index`.
+- For item 2: `RouteResult.tools` is mixed and rank-ordered — split on
+  `t.kind`; `max_skills_applied = pipeline.skills_budget(req, scope).applied`.

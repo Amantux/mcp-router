@@ -89,6 +89,7 @@ class Retriever(Protocol):
         limit: int,
         server_ids: list[str] | None = None,
         enabled_only: bool = True,
+        kinds: tuple[str, ...] = ("tool",),
     ) -> list[ToolCandidate]: ...
 
 
@@ -104,6 +105,8 @@ class RouteRequest:
     max_servers: int | None = None
     # Wave 4: cap on routed SKILLS (separate budget: bodies are expensive). None = principal default.
     max_skills: int | None = None
+    # Wave 4 (S2d): optional NARROWING kind filter; None = tools + skills.
+    kinds: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

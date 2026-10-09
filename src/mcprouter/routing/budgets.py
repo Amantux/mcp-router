@@ -63,6 +63,13 @@ def _clamp(
     return BudgetClamp(name, requested, principal, global_cap, applied, clamped_by)
 
 
+def clamp_budget(
+    name: str, requested: int | None, principal: int | None, global_cap: int | None
+) -> BudgetClamp:
+    """Public single-budget clamp (S2d: the pipeline's maxSkills)."""
+    return _clamp(name, requested, principal, global_cap)
+
+
 def effective_budgets(
     principal: AgentPrincipal,
     settings: Settings,

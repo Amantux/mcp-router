@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mcprouter.interfaces import ToolCandidate
+from mcprouter.routing.budgets import BudgetClamp
 
 
 @dataclass
@@ -37,6 +38,8 @@ class RouteTrace:
     candidates: list[ToolCandidate] = field(default_factory=list)
     policy_filtered: list[PolicyFiltered] = field(default_factory=list)
     stages: list[StageTrace] = field(default_factory=list)
+    # S2d: the applied skills budget (simulate's budgetClamps maxSkills row).
+    skill_budget: BudgetClamp | None = None
 
     def stage(
         self,
