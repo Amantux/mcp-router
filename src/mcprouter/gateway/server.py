@@ -10,7 +10,7 @@ request — so each request is answered for the principal that sent it.
 Request flow:
   HTTP -> _AuthASGI (Bearer -> principal via deps_auth.resolve_principal,
           401 otherwise; sets scope["user"] so the SDK binds each MCP session
-          to the credential that created it) -> SDK streamable-HTTP app
+          to the agent AND the credential hash that created it) -> SDK streamable-HTTP app
           (/mcp, DNS-rebinding protection) -> handlers below.
 
 * tools/list  = the agent's last route() result (or a deterministic default:
@@ -357,11 +357,15 @@ class _AuthASGI:
             return
         scope = dict(scope)
         # The SDK's session manager compares (client_id, issuer, subject) of
-        # scope["user"] against the session creator: a session id minted for
-        # agent A answers 404 to agent B. The token field holds a HASH — the
+        # scope["user"] against the session creator and answers 404 on a
+        # mismatch. client_id = the agent (agent A's session id is useless to
+        # agent B); subject = a HASH of the presented credential (D15), so a
+        # session is bound to the KEY that created it: after a key rotation
+        # the old session id answers 404 and the client re-initializes. The
         # raw key never sits in request state.
+        credential = hash_key(authorization or "dev")
         token = AccessToken(
-            token=hash_key(authorization or "dev"), client_id=principal.agent_id, scopes=[]
+            token=credential, client_id=principal.agent_id, scopes=[], subject=credential
         )
         scope["user"] = AuthenticatedUser(token)
         scope["auth"] = AuthCredentials([])

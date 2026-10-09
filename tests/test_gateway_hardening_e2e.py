@@ -13,6 +13,7 @@ from typing import Any
 import anyio
 import mcp_types as types
 import pytest
+from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
 
 from mcprouter.gateway.server import INTERNAL_ERROR_MESSAGE, TOO_MANY_SESSIONS
@@ -136,3 +137,29 @@ async def test_modern_tools_call_runs_no_tools_list(live: dict[str, Any]) -> Non
     wire = live["wire"].calls
     assert len(calls) == wire.count((MODERN, "tools/list", None))
     assert (MODERN, "tools/call", "github.list_issues") in wire
+
+
+# ------------------------------------------------ P-306 credential-bound sessions
+async def test_rotated_key_cannot_reuse_the_old_session(live: dict[str, Any]) -> None:
+    from mcprouter.api.deps_auth import hash_key
+    from mcprouter.models import AgentPrincipal
+
+    url, db = live["url"], live["db"]
+    add_rule(db, "alice")
+    new_key = "key_alice_rotated_" + "r" * 30
+    async with _client("alice") as http:
+        opened = await http.post(url, json=INIT, headers=ACCEPT)
+        assert opened.status_code == 200
+        sid = opened.headers["mcp-session-id"]
+        same = {**ACCEPT, "mcp-session-id": sid, "mcp-protocol-version": "2025-11-25"}
+        ping = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+        assert (await http.post(url, json=ping, headers=same)).status_code == 200  # control
+    with db() as s:
+        p = s.query(AgentPrincipal).filter_by(agent_id="alice").one()
+        p.key_hash = hash_key(new_key)
+        s.commit()
+    async with create_mcp_http_client(headers={"Authorization": f"Bearer {new_key}"}) as http:
+        r = await http.post(url, json=ping, headers=same)
+    assert r.status_code == 404
+    async with _client("alice") as http:  # the old key is gone altogether
+        assert (await http.post(url, json=ping, headers=same)).status_code == 401
