@@ -131,6 +131,11 @@ def test_release_verify_rejects_changelog_drift(tmp_path: Path) -> None:
     (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## 1.2.3rc1\n\n## 1.2.3\n")
     problems, rel = rv.check("v1.2.3rc1", tmp_path)
     assert any("pyproject" in p for p in problems)
+    # Keep a Changelog form; [Unreleased] is skipped, never counted as the release.
+    (tmp_path / "CHANGELOG.md").write_text("## [Unreleased]\n\n## [1.2.3] - 2026-10-09\n")
+    assert rv.check("v1.2.3", tmp_path)[0] == []
+    (tmp_path / "CHANGELOG.md").write_text("## [Unreleased]\n\n## [1.2.2] - 2026-10-01\n")
+    assert any("CHANGELOG" in p for p in rv.check("v1.2.3", tmp_path)[0])
 
 
 def test_release_verify_prerelease_never_latest(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def test_ui_package_version_matches() -> None:
 
 
 def test_top_changelog_heading_is_the_version() -> None:
+    """Top *versioned* heading (`## [X.Y.Z] - date`); `## [Unreleased]` is skipped."""
     lines = (ROOT / "CHANGELOG.md").read_text().splitlines()
-    heading = next(line[3:].strip() for line in lines if line.startswith("## "))
-    assert heading == _pyproject()
+    versioned = (
+        m.group(1)
+        for line in lines
+        if (m := re.match(r"^## \[?([^\]\s]+)\]?", line)) and m.group(1).lower() != "unreleased"
+    )
+    assert next(versioned) == _pyproject()

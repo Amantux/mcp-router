@@ -2,8 +2,10 @@
 
     python .github/scripts/release_verify.py <tag>
 
-Checks: the tag is `v` + the pyproject version, verbatim; the top `## ` heading
-of CHANGELOG.md is that version. Prints `is_release=true|false` for
+Checks: the tag is `v` + the pyproject version, verbatim; the top versioned
+`## ` heading of CHANGELOG.md is that version (Keep a Changelog: `## [X.Y.Z] -
+date` or `## X.Y.Z`; a leading `## [Unreleased]` is skipped, so tagging without
+moving its entries under the new version still fails). Prints `is_release=true|false` for
 $GITHUB_OUTPUT: true only for a plain `vX.Y.Z` tag that is also the highest
 plain tag in the repo (`git tag -l`), so `:latest` never moves backwards.
 The CI-green and ancestor-of-master checks need git/gh and live in the workflow.
@@ -28,10 +30,14 @@ def pyproject_version(root: Path = ROOT) -> str:
     return version
 
 
+_HEADING_RE = re.compile(r"^## \[?([^\]\s]+)\]?(?:\s+-\s+.*)?$")
+
+
 def top_changelog_heading(root: Path = ROOT) -> str | None:
     for line in (root / "CHANGELOG.md").read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            return line[3:].strip()
+        m = _HEADING_RE.match(line.strip())
+        if m and m.group(1).lower() != "unreleased":
+            return m.group(1)
     return None
 
 
