@@ -280,7 +280,10 @@ export interface PolicyRule {
   createdAt: string;
 }
 
-export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt">;
+export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt"> & {
+  /** "skill" re-targets serverId at a skill source id; immutable after create. */
+  resourceKind?: "tool" | "skill";
+};
 
 // -------------------------------------------------------------- execution
 /** execution/manager.py statuses (ExecutionResult.status). */

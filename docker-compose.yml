@@ -26,6 +26,9 @@ services:
       MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-hash}
       MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-deterministic}
       MCPR_DEVICE: ${MCPR_DEVICE:-auto}
+      # Extra Host names /mcp accepts besides localhost (DNS-rebinding tradeoff:
+      # see docs/INSTALL.md §1). The dashboard is served on :8400 at /.
+      MCPR_ALLOWED_HOSTS: ${MCPR_ALLOWED_HOSTS:-}
     ports:
       - "8400:8400"
     depends_on:

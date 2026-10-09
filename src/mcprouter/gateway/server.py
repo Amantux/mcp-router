@@ -769,6 +769,26 @@ class GatewayServer:
                         live.pop(sid, None)
 
 
+LOCALHOST_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+
+
+def gateway_transport_security(extra_hosts: tuple[str, ...] = ()) -> TransportSecuritySettings:
+    """DNS-rebinding protection stays ON; MCPR_ALLOWED_HOSTS widens the Host/Origin
+    allowlist. A bare host admits both its portless form and any port (`host` and
+    `host:*`, with matching http/https origins); `host:port` is exact. Mirrors the
+    SDK's localhost default."""
+    hosts = list(LOCALHOST_HOSTS)
+    for h in extra_hosts:
+        # Bare host: any port AND the portless form (reverse proxy on 80/443;
+        # the SDK only matches `host:*` when the header carries a port).
+        entries = [h] if ":" in h.rsplit("]", 1)[-1] else [f"{h}:*", h]
+        hosts.extend(e for e in entries if e not in hosts)
+    origins = [f"{scheme}://{h}" for h in hosts for scheme in ("http", "https")]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
+    )
+
+
 def build_gateway(
     app: FastAPI,
     *,
@@ -794,4 +814,10 @@ def build_gateway(
     return gw
 
 
-__all__: list[str] = ["MCP_PATH", "META_TOOL", "GatewayServer", "build_gateway"]
+__all__: list[str] = [
+    "MCP_PATH",
+    "META_TOOL",
+    "GatewayServer",
+    "build_gateway",
+    "gateway_transport_security",
+]

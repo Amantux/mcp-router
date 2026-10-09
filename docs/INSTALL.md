@@ -35,9 +35,18 @@ export MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEYS=...
   pass `--workers N`.
 - MCP endpoint: `http://localhost:8400/mcp`. Admin API: `http://localhost:8400/api/v1/*`
   with `Authorization: Bearer $MCPR_ADMIN_TOKEN`.
-- Dashboard: currently the UI dev server, `cd ui && npm ci && npm run dev`
-  (port :5180). Production static serving is still in progress, so check the
-  [README](../README.md) for the current method.
+- Dashboard: served by the API itself at `http://localhost:8400/` (the Docker
+  image builds it in). From source, build it once with
+  `cd ui && npm ci && npm run build`; the server reads `ui/dist` (override with
+  `MCPR_UI_DIST`). `npm run dev` (port :5180, proxies to :8400) is for UI work only.
+  With no principals yet, the dashboard opens the setup wizard (`/setup`).
+- Reaching `/mcp` from another machine: the gateway keeps DNS-rebinding
+  protection on and by default accepts only `localhost`/`127.0.0.1`/`[::1]`
+  Host headers (anything else gets HTTP 421). Set
+  `MCPR_ALLOWED_HOSTS=router.lan,10.0.0.5:8400` (comma list; a bare host means
+  any port) to allow named hosts. Tradeoff: every name you add is one a
+  malicious web page could point at your router via DNS rebinding, so list
+  exact names you control, never a wildcard, and keep agent keys required.
 - Inference backends (embeddings, decision model) are set with `MCPR_*` env
   variables. See [backends.md](backends.md).
 

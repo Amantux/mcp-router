@@ -64,6 +64,10 @@ class Settings:
     decision_model: str = "typesafe/jev"
     decision_api_key: str = field(default="", repr=False)
     decision_max_retries: int = 2
+    # wave-5: built dashboard served at / (MCPR_UI_DIST), and extra Host values
+    # the /mcp gateway accepts beyond the localhost set (MCPR_ALLOWED_HOSTS).
+    ui_dist: str = "./ui/dist"
+    allowed_hosts: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -121,7 +125,24 @@ class Settings:
                 get("MCPR_DECISION_MAX_RETRIES", str(d.decision_max_retries)),
                 "MCPR_DECISION_MAX_RETRIES",
             ),
+            ui_dist=get("MCPR_UI_DIST", d.ui_dist),
+            allowed_hosts=_host_list(get("MCPR_ALLOWED_HOSTS", "")),
         )
+
+
+def _host_list(raw: str) -> tuple[str, ...]:
+    """MCPR_ALLOWED_HOSTS: comma list of host or host:port (``host:*`` = any port).
+    Strict charset so a value can never smuggle header syntax or a wildcard host."""
+    out: list[str] = []
+    for item in (p.strip().lower() for p in raw.split(",")):
+        if not item:
+            continue
+        if not re.fullmatch(
+            r"(\[[0-9a-f:]+\]|[a-z0-9.-]*[a-z0-9][a-z0-9.-]*)(:(\d{1,5}|\*))?", item
+        ):
+            raise ValueError(f"MCPR_ALLOWED_HOSTS: invalid host {item!r}")
+        out.append(item)
+    return tuple(out)
 
 
 _TRUE = frozenset({"1", "true", "yes", "on"})

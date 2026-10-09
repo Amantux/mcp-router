@@ -140,7 +140,7 @@ export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
 export MCPR_AGENT_KEYS="my-agent:$(openssl rand -hex 24)"
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 
-cd ui && npm ci && npm run dev              # dashboard on :5180
+cd ui && npm ci && npm run build            # dashboard served at :8400/
 ```
 
 Register servers via the dashboard or `POST /api/v1/servers` (admin token),
@@ -161,6 +161,14 @@ bulk imports.
 
 Want a synthetic fleet to play with? `python -m testbed.serve --servers 10`
 spins up realistic MCP servers with overlapping tools across five domains.
+
+### First run
+
+1. Open http://localhost:8400.
+2. Click **Connect** and paste your `MCPR_ADMIN_TOKEN` (kept in this browser tab's session only).
+3. On a fresh install you are taken to `/setup` once per session: add servers and skill
+   sources, create an agent (its key is shown once), optionally grant it read-only starter
+   rules, then copy the client snippet. **Skip setup** returns to the dashboard.
 
 ## Status — honest ledger
 

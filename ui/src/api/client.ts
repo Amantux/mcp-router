@@ -712,3 +712,26 @@ export async function activateSkill(id: string, opts: { agentId?: string } = {},
   const raw = await request<Partial<SkillActivation>>("POST", `${API_BASE}/skills/${encodeURIComponent(id)}/activate`, { body, signal, as: "agent" });
   return { body: typeof raw?.body === "string" ? raw.body : "", resources: raw?.resources ?? [], recordId: raw?.recordId ?? null };
 }
+
+// ---- wave-5 setup wizard ----
+export interface SetupStatus {
+  needsSetup: boolean;
+  completedAt: string | null;
+  hasAdminToken: boolean;
+  devMode: boolean;
+  backend: string;
+  counts: { principals: number; servers: number; tools: number; skillSources: number };
+}
+
+export function getSetupStatus(signal?: AbortSignal): Promise<SetupStatus> {
+  return request("GET", `${API_BASE}/setup/status`, { signal });
+}
+
+export function completeSetup(): Promise<{ completed: boolean; completedAt: string }> {
+  return request("POST", `${API_BASE}/setup/complete`);
+}
+
+/** Claude-Desktop `{"mcpServers": {...}}` JSON, posted as-is to the import endpoint. */
+export function importServers(config: unknown): Promise<unknown> {
+  return request("POST", `${API_BASE}/servers/import`, { body: config });
+}

@@ -1,5 +1,7 @@
-import { useState } from "react";
-import { NavLink, Outlet } from "react-router";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { getSetupStatus } from "../api/client";
+import { claimRedirect, redirectClaimed } from "../pages/setup/redirect";
 import { Button, makeStyles, mergeClasses, Text, tokens } from "@fluentui/react-components";
 import {
   ServerRegular,
@@ -72,6 +74,26 @@ export function Layout() {
   const s = useStyles();
   const auth = useAuth();
   const [connectOpen, setConnectOpen] = useState(false);
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  // First-run: an admin on a fresh install lands in /setup once per session.
+  // The claim is taken only once the status answers, so a failed probe (wrong
+  // token) retries after reconnecting, and a claimed session never redirects again.
+  useEffect(() => {
+    if (!auth.hasAdminToken || redirectClaimed()) return;
+    let live = true;
+    getSetupStatus().then(
+      (st) => {
+        if (!live || !claimRedirect()) return;
+        if (st.needsSetup && pathname !== "/setup") navigate("/setup");
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- probe per credential change, not per navigation
+  }, [auth.hasAdminToken, auth.epoch]);
   return (
     <div className={s.shell}>
       <nav className={s.nav} aria-label="Primary">

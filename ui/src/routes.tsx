@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { createBrowserRouter, Navigate } from "react-router";
 import { Layout, NAV } from "./components/Layout";
+import { SetupPage } from "./pages/setup/SetupPage";
 import { ServersPage } from "./pages/ServersPage";
 import { ToolsPage } from "./pages/ToolsPage";
 import { DuplicatesPage } from "./pages/DuplicatesPage";
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/servers" replace /> },
       // The free-text-identity simulator was replaced by the agent lens.
+      { path: "setup", element: <SetupPage /> },
       { path: "simulator", element: <Navigate to="/lens" replace /> },
       ...NAV.map((n) => ({ path: n.to.slice(1), element: PAGES[n.to] })),
       { path: "*", element: <Navigate to="/servers" replace /> },
