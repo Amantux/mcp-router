@@ -199,3 +199,34 @@ camelCase `bodyTokensEst` as specified):
   pipeline returned before its budget stage. Stage `detail` contents are as in item 1.
 - Simulate `tools` entries keep exactly `{toolId, server, tool, score}` (no `kind`).
 - Gateway `apply_route` consumer is untouched (S3 owns it; it still receives the mixed list).
+
+## S2d — review follow-ups
+
+- **Principal skills budget is fail-closed.** `routing.scope.principal_skill_cap`
+  resolves a scope's ceiling as: public `principal_max_skills()` → legacy private
+  `_principal.max_skills` (PolicyScope) → **0**. `UncachedScope` (the /route/evaluate
+  wrapper) now delegates, so a wrapped principal keeps its budget instead of
+  silently getting the global cap. `AllowAllScope`/`StaticScope` declare "no principal
+  ceiling" (`None`) explicitly. Any other ScopeFilter that declares nothing gets no
+  skills. **Follow-up (policy lane):** add a public `principal_max_skills()` to
+  `PolicyScope` so the private-attr fallback can be deleted. A real principal whose
+  `max_skills` is unset (e.g. the in-memory `dev_principal`, which never sets it) is
+  treated as "no principal ceiling" — the global cap applies, as before.
+- A zero applied skills budget removes `"skill"` from the retrieval kinds (no
+  candidate slots or model questions spent on unroutable items).
+- Trace `scores` (score + fallback stages) and the operation-stage `downweighted` list
+  are keyed like decision rows: tool id, or `skill:<id>`.
+- **NOUL over the mixed list (documented, not changed):** the no-useful-option
+  question sees tools and skills together, so a fitting skill can suppress `no_match`
+  for a tools-only consumer, and a NOUL "no" drops skills too.
+- `allowed_servers` narrowing does not apply to skills (by design: skills have
+  sources, not servers).
+- **CROSS-LANE (S3 / eval / analytics must act):**
+  - `gateway/server.py:457` and `eval/runner.py:63` build `RouteRequest` without
+    `kinds`, so the default now routes skills too: skills crowd out tool candidates;
+    `exposure.set` receives skill ids, which `visible_tools` silently drops (possible
+    empty tool list, spurious `list_changed`); eval precision shifts. S3 and eval
+    must pass `kinds=("tool",)` and/or filter on `RoutedTool.kind == "tool"`.
+  - Analytics (`economy.py:63` `bool_and(tool_id = ANY(known))`, staleness, funnel)
+    treat `skill:<id>` decision ids as stale/unknown tools — the analytics lane must
+    handle the prefix.
