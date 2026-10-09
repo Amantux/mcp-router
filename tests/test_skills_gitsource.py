@@ -60,3 +60,24 @@ def test_fetch_and_size_cap(tmp_path: Path) -> None:
     with pytest.raises(GitSourceError, match="size cap"):
         fetch(SID, "https://example.com/r.git", "v1", tmp_path, runner=_fake(500), max_bytes=100)
     assert (tmp_path / SID / "blob").stat().st_size == 10  # previous checkout kept
+
+
+@pytest.mark.parametrize("failure", ["runner-raises", "not-a-repo", "too-large"])
+def test_failed_fetch_leaves_no_tmp_dir(tmp_path: Path, failure: str) -> None:
+    """P-110: a failed clone never leaves .<id>.tmp behind."""
+    from mcprouter.skills.gitsource import GitCloneFailedError
+
+    def runner(argv: Sequence[str]) -> None:
+        dest = Path(argv[-1])
+        dest.mkdir(parents=True)
+        (dest / "partial.bin").write_bytes(b"x" * 64)
+        if failure == "runner-raises":
+            raise GitCloneFailedError("git clone failed")
+        if failure == "too-large":
+            (dest / ".git").mkdir()
+
+    with pytest.raises(GitSourceError):
+        cap = 8 if failure == "too-large" else 10**6
+        fetch("abc123", "https://git.example/r.git", "main", tmp_path, runner=runner, max_bytes=cap)
+    assert not (tmp_path / ".abc123.tmp").exists()
+    assert not (tmp_path / "abc123").exists()
