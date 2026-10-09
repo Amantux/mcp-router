@@ -81,21 +81,12 @@ def assert_disposable(url: str) -> None:
 
 
 def all_tables() -> list[Table]:
-    """Every table the app owns, from its four MetaData objects, children
-    before parents (a safe order for row deletion).
+    """Every table the app owns (``models.ALL_METADATA``, the one list that
+    migrations and init_db also use), children before parents (a safe order
+    for row deletion)."""
+    from mcprouter.models import ALL_METADATA
 
-    TODO(integrator): replace the tuple with ``mcprouter.models.ALL_METADATA``
-    once E6 P-608 lands (same four objects)."""
-    from mcprouter.api.routes_setup import AppSetting
-    from mcprouter.eval.store import eval_metadata
-    from mcprouter.execution.models import SecurityBase
-    from mcprouter.models import Base
-
-    tables = [
-        t
-        for md in (Base.metadata, SecurityBase.metadata, eval_metadata, AppSetting.metadata)
-        for t in md.tables.values()
-    ]
+    tables = [t for md in ALL_METADATA for t in md.tables.values()]
     return list(reversed(sort_tables(tables)))
 
 
