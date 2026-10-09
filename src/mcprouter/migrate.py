@@ -15,8 +15,10 @@
 DDL runs with `lock_timeout` so a migration queued behind a long transaction
 fails loudly instead of stalling every query behind its lock request.
 
-CLI: `python -m mcprouter.migrate [upgrade|downgrade REV|current|heads]`
-(reads MCPR_DATABASE_URL like the app).
+CLI: `python -m mcprouter.migrate {upgrade|downgrade REV|current|heads}`
+(reads MCPR_DATABASE_URL like the app). The subcommand is required: a bare
+invocation prints usage and exits 2 instead of writing to whatever database
+MCPR_DATABASE_URL happens to name.
 """
 
 from __future__ import annotations
@@ -266,7 +268,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("current", help="print the database revision")
     sub.add_parser("heads", help="print the newest revision this build ships")
     args = parser.parse_args(argv)
-    cmd = args.cmd or "upgrade"
+    if args.cmd is None:
+        # Never default to a write: `upgrade` must be asked for explicitly.
+        parser.print_usage(sys.stderr)
+        print(
+            "error: a subcommand is required (upgrade, downgrade, current, heads)", file=sys.stderr
+        )
+        return 2
+    cmd = args.cmd
     if cmd == "heads":
         print(head_revision())
         return 0

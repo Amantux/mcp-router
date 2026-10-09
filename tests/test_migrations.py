@@ -321,7 +321,14 @@ def test_cli_upgrade_current_heads(
     monkeypatch.setenv("MCPR_DATABASE_URL", scratch_url)
     assert migrate.main(["current"]) == 0
     assert capsys.readouterr().out.strip() == "(none)"
-    assert migrate.main([]) == 0  # default command = upgrade
+    assert migrate.main([]) == 2  # no default command: a bare call never writes
+    bare = capsys.readouterr()
+    assert bare.out == ""
+    assert "usage: python -m mcprouter.migrate" in bare.err
+    assert "a subcommand is required" in bare.err
+    assert migrate.main(["current"]) == 0  # ...so the bare call left the schema alone
+    assert capsys.readouterr().out.strip() == "(none)"
+    assert migrate.main(["upgrade"]) == 0
     assert capsys.readouterr().out.strip() == "0002"
     assert migrate.main(["heads"]) == 0
     assert capsys.readouterr().out.strip() == "0002"

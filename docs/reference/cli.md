@@ -14,9 +14,20 @@ Run **one** worker. The process owns the sync and rollup loops, the in-process
 model, rate limits and MCP sessions. Configuration comes from the environment:
 [configuration.md](configuration.md).
 
-Schema migrations (from v0.6) run automatically at startup. To run them by hand
-(for example before switching traffic to a new image), use
-`python -m mcprouter.migrate`. See [upgrade.md](../upgrade.md).
+Schema migrations run automatically at startup. To run them by hand (for
+example before switching traffic to a new image), name the subcommand:
+
+```bash
+.venv/bin/python -m mcprouter.migrate upgrade        # to head (writes)
+.venv/bin/python -m mcprouter.migrate current        # print the database revision
+.venv/bin/python -m mcprouter.migrate heads          # newest revision this build ships
+.venv/bin/python -m mcprouter.migrate downgrade -1   # one step back (writes)
+```
+
+The target is `MCPR_DATABASE_URL`, which defaults to the dev database on
+`localhost:5434` (see [configuration.md](configuration.md)); set it first.
+A bare `python -m mcprouter.migrate` prints usage and exits 2: it never
+upgrades by default. See [upgrade.md](../upgrade.md).
 
 ## Synthetic fleet (`testbed`)
 

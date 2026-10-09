@@ -65,8 +65,10 @@ From 0.6.0 the schema is versioned with Alembic.
   Both take a Postgres advisory lock, so several starting containers never
   race. A database that is already at `head` gets no DDL at all.
 - **Manual.** To migrate before switching traffic, run the same step by hand:
-  `docker compose run --rm api python -m mcprouter.migrate` (source install:
-  `.venv/bin/python -m mcprouter.migrate`).
+  `docker compose run --rm api python -m mcprouter.migrate upgrade` (source
+  install: `.venv/bin/python -m mcprouter.migrate upgrade`, against
+  `MCPR_DATABASE_URL`). The subcommand is required; a bare call prints usage
+  and exits 2.
 - **From 0.5.x or older.** The first 0.6 start recognises the pre-Alembic
   schema, applies the old additive column fixes once, and stamps the database
   at revision `0001`. Later revisions then apply normally. No manual step.
