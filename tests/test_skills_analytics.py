@@ -217,7 +217,8 @@ def test_economy_prices_skills_and_never_counts_unactivated_bodies(
     assert e.skill_body_tokens_exposed == 100  # only a's body, only on r1
     assert e.skill_body_tokens_not_sent == 200  # b on r1 + a on the 2nd decision
     assert e.exposed_tokens == 2 * meta + meta_b + 100
-    assert e.catalog_tokens == 2 * (meta + meta_b)  # authorized skills' metadata
+    assert e.catalog_tokens == 2 * (meta + meta_b) + 100  # + activated body (symmetric)
+    assert e.tokens_not_sent >= 0
 
 
 def test_economy_unknown_skill_id_is_still_stale(db: sessionmaker[Session]) -> None:

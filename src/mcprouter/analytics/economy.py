@@ -112,7 +112,7 @@ _SKILL_BODY_SQL = text(
     + ","
     + ATT_CTE
     + """
-SELECT s.agent_id, s.tool_id, (att.decision_id IS NOT NULL) AS activated, count(*) AS n
+SELECT s.agent_id, s.tool_id, COALESCE(att.any_ok, false) AS activated, count(*) AS n
 FROM surf s
 JOIN dec ON dec.decision_id = s.decision_id
 LEFT JOIN att ON att.decision_id = s.decision_id AND att.tool_id = s.tool_id
@@ -266,7 +266,8 @@ def economy_by_agent(
             stale_ref_decisions=stale_n,
             no_match_decisions=n - served,
             exposed_tokens=(exposed[agent] + meta_x[agent] + body_x[agent]) if scored else 0,
-            catalog_tokens=priced * per if scored else 0,
+            # Activated bodies are paid in the counterfactual too (symmetric).
+            catalog_tokens=(priced * per + body_x[agent]) if scored else 0,
             catalog_tokens_per_decision=per,
             skill_metadata_tokens=meta_x[agent] if scored else 0,
             skill_body_tokens_exposed=body_x[agent] if scored else 0,
