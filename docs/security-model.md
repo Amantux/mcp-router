@@ -144,12 +144,12 @@ metadata because `models.py` is frozen.
   Non-HTTP scopes are rejected.
 - The wrapper sets `scope["user"]`, so the SDK **binds each MCP session to
   the credential that created it**. Another agent presenting that
-  `Mcp-Session-Id` gets 404. *(From v0.6)* the binding is to the credential,
+  `Mcp-Session-Id` gets 404. The binding is to the credential,
   not just the agent: after a key rotation the old key's sessions and
   `subscriptions/listen` streams are closed, never notified. Rotating a key,
   disabling a principal (`PATCH … enabled=false`) or deleting it closes them
   at once; the next re-route re-checks as well.
-- *(From v0.6)* Session caps: `MCPR_MCP_MAX_SESSIONS` (1000) in total and
+- Session caps: `MCPR_MCP_MAX_SESSIONS` (1000) in total and
   `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent **credential**, so a
   rotated-away key's sessions never use up the new key's budget. The next
   `initialize` over the cap gets 429. `/mcp` bodies are capped at 1 MiB like
@@ -169,7 +169,7 @@ metadata because `models.py` is frozen.
   **redacted before it reaches the routing model**. The meta tool is
   rate-limited per agent, router failures are curated, and the previous
   exposure is kept on failure. A discovered tool cannot shadow its name.
-- *(From v0.6)* Meta-tool arguments (`router.find_tools`, `router.feedback`
+- Meta-tool arguments (`router.find_tools`, `router.feedback`
   and the skill tools) are validated against the schema each tool
   advertises, with the execution pipeline's validator. A bad call gets an
   `isError` result `Refused: invalid arguments (…)` that names the location
@@ -177,7 +177,7 @@ metadata because `models.py` is frozen.
 - `tools/list_changed` is sent only to the agent whose exposure changed:
   - Handshake-era sessions get it on their standalone stream.
   - 2026-07-28-era clients get it via `subscriptions/listen` on a
-    bus **per agent and credential** *(from v0.6)*.
+    bus **per agent and credential**.
 
 ## 5. Redaction (`execution/redaction`)
 
@@ -206,23 +206,23 @@ legitimately return a credential the agent asked for.
 
 ## 6. Deployment posture and known limitations
 
-Reviewed for 0.6. Items marked *(from v0.6)* describe the 0.6.0 behaviour.
+Reviewed for 0.6.0.
 
 **Posture**
 
-- **Fail-closed bind** *(from v0.6)*: without `MCPR_ADMIN_TOKEN` the container
+- **Fail-closed bind**: without `MCPR_ADMIN_TOKEN` the container
   listens on `127.0.0.1` only and logs a warning; `MCPR_ALLOW_OPEN_DEV=1`
   overrides it for development. Compose publishes on
   `${MCPR_BIND:-127.0.0.1}`.
-- **Host allowlist** *(from v0.6)*: one app-wide check, outermost, admits
+- **Host allowlist**: one app-wide check, outermost, admits
   `localhost`, `127.0.0.1`, `[::1]` and `MCPR_ALLOWED_HOSTS` (any port) and
   answers anything else with **421**, on every path. The MCP SDK's own check
   on `/mcp` stays as defence in depth. Before 0.6 only `/mcp` was checked.
 - **Open surfaces**: `/docs` and `/openapi.json` are unauthenticated (the
-  schema is not secret); `/healthz` and `/readyz` *(from v0.6)* are
+  schema is not secret); `/healthz` and `/readyz` are
   unauthenticated and return no data beyond status. `/metrics` requires the
-  admin token when one is configured *(from v0.6)*.
-- **First principal** *(from v0.6)*: in dev mode with no admin token,
+  admin token when one is configured.
+- **First principal**: in dev mode with no admin token,
   `POST /api/v1/principals` answers 409, because creating an agent would end
   dev mode and leave no admin credential.
 - **Secrets at rest**: agent keys are hashed; the `env` of stdio servers is

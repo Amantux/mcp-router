@@ -12,14 +12,14 @@ pgvector is the only other service.
 
 Run **exactly one uvicorn worker**. Rate limits, MCP sessions, exposure sets,
 the route cache and the loaded model are all in-process; a second worker would
-split them and run every background loop twice. From v0.6 a Postgres advisory
+split them and run every background loop twice. A Postgres advisory
 lock (`src/mcprouter/singleton.py`) makes sure only one process runs the
 background loops even if several are started by mistake.
 
 ## Request lifecycle
 
 ```
-agent ──HTTP──▶ Host check (421, from v0.6) ─▶ body cap (1 MiB) ─▶ auth
+agent ──HTTP──▶ Host check (421) ─▶ body cap (1 MiB) ─▶ auth
        │                                                         │
        ├─ POST /api/v1/route ──▶ policy scope ─▶ hybrid retrieval ─▶ decision model
        │                          (what may this     (pgvector + FTS,    (choice/score/noul,
@@ -55,7 +55,7 @@ All state is in Postgres.
 | Skills | `skill_sources`, `skills`, `skill_versions` |
 | Settings | `app_settings` (setup wizard state) |
 
-From v0.6 the schema is managed by Alembic migrations, applied at startup
+The schema is managed by Alembic migrations, applied at startup
 under a lock; see [upgrade.md](upgrade.md).
 
 ## Module boundaries
@@ -75,7 +75,7 @@ under a lock; see [upgrade.md](upgrade.md).
 | `skills/` | Skill sources, ingest and validation, safe file serving, bundles. |
 | `api/` | FastAPI routers. Thin: parse, authorize, call a service, shape the response. |
 
-**Layering rule (from v0.6):** nothing outside `api/` imports `mcprouter.api`.
+**Layering rule:** nothing outside `api/` imports `mcprouter.api`.
 Authentication primitives live in `mcprouter/auth/`; `api/deps_auth.py` only
 adapts them to FastAPI. `tests/test_layering.py` enforces it.
 
@@ -97,7 +97,7 @@ Adding a backend means implementing the protocol and registering it in
 
 - Catalog target: 100 servers and 1,000 tools (synthetic fleet; full refresh
   measured at 6.1 s on CPU).
-- Dedup compares every embedding pair. From v0.6 one scan stores at most
+- Dedup compares every embedding pair. One scan stores at most
   `MCPR_DEDUP_MAX_PAIRS` pairs and reports `truncated`.
 - One process is the ceiling for request concurrency. Inference runs 1 to 4
   concurrent model calls depending on `MCPR_OPERATING_MODE`.

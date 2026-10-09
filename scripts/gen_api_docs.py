@@ -24,7 +24,9 @@ HEADER = """# REST API reference
 Every route of the MCP Router REST API, generated from the app's route table
 (machine-readable schema: [`openapi.json`](openapi.json); interactive docs at
 `/docs` on a running router). The MCP endpoint `/mcp` and `/metrics` are not
-REST routes and are not listed.
+REST routes and are not listed. `/metrics` (Prometheus) needs
+`Authorization: Bearer $MCPR_ADMIN_TOKEN` whenever an admin token is configured
+(missing or wrong -> 401) and is open when none is (dev / loopback-only).
 
 Auth classes (enforced by `tests/test_auth_matrix.py`):
 

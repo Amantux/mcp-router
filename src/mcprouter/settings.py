@@ -19,7 +19,10 @@ class Settings:
         default="postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter", repr=False
     )
     # Gateway auth: comma-separated "agent_id:key" pairs for v1 local API keys.
-    # Empty = auth disabled with a loud startup warning (dev only).
+    # Empty = no static agent keys. With no admin token and no principals in the DB
+    # that is dev mode (synthetic `dev` principal, still deny-by-default policy, loud
+    # warning); without MCPR_ADMIN_TOKEN the container binds loopback only
+    # (entrypoint_plan).
     agent_keys: str = field(default="", repr=False)
     # Inference
     embedding_backend: str = "hash"  # hash | bge | aoai  (bge needs the [inference] extra)

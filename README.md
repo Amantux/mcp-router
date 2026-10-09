@@ -76,7 +76,8 @@ fallback. Runs entirely offline; no external inference services are needed.
 The decision model is pluggable via `MCPR_DECISION_BACKEND` (default `deterministic`):
 
 - `deterministic` (default) — no model; also the automatic fallback on any backend error.
-- `laya` — local model, GPU if available. Needs the `[inference]` extra or the inference image.
+- `laya` — local model, GPU if available. Needs the `[inference]` extra or the inference image
+  (`docker-compose.inference.yml`, plus `docker-compose.gpu.yml` for NVIDIA: [deploy.md § Flavors](docs/deploy.md#flavors)).
 - `remote` — hosted Jev (AIML API) or **another MCP Router's** `POST /api/v1/decision/systemone` edge endpoint.
 - `aoai` — Azure OpenAI v1 (decision), plus `MCPR_EMBEDDING_BACKEND=aoai` for embeddings.
 
@@ -144,10 +145,15 @@ Prerequisites: Docker with Compose v2. Run every command from the repository roo
 3. `docker compose up -d --build --wait`
    (if the build stalls at `npm ci`, see [Troubleshooting](docs/deploy.md#troubleshooting))
 4. `curl -fsS http://localhost:8400/healthz`
+   (connection refused while the container shows healthy means
+   `MCPR_ADMIN_TOKEN` is not set: see [Troubleshooting](docs/deploy.md#troubleshooting))
 5. Browse to http://localhost:8400/ and follow [First run](#first-run).
 
-The API listens on `127.0.0.1:8400` only. From v0.6 the container refuses to
-listen beyond loopback without `MCPR_ADMIN_TOKEN`, and other hosts need
+The API is published on `127.0.0.1:8400` only. Without `MCPR_ADMIN_TOKEN` the
+container still starts, but uvicorn binds `127.0.0.1` *inside* the container and
+logs a WARNING, so the published port is unreachable from the host until the
+token is set (the in-container healthcheck stays green). `MCPR_ALLOW_OPEN_DEV=1`
+overrides this for local dev only (open admin API). Other hosts also need
 `MCPR_ALLOWED_HOSTS` and `MCPR_BIND` ([deploy.md](docs/deploy.md)). Every
 setting: [configuration reference](docs/reference/configuration.md).
 
@@ -176,7 +182,7 @@ BASE=http://127.0.0.1:8400 COMPOSE="docker compose" \
    GitHub Copilot CLI, Codex CLI, Cursor, VS Code and Gemini CLI.
 
 Imported `mcpServers` entries that start with `npx` run inside the container
-(Node 22 is in the image from v0.6); `uvx` entries need an extended image
+(Node 22 is in the image); `uvx` entries need an extended image
 ([stdio servers in Docker](docs/deploy.md#stdio-servers-in-docker)).
 
 ## Run from source
@@ -186,14 +192,27 @@ Prerequisites: Python 3.12, [uv](https://docs.astral.sh/uv/), Node 22
 
 ```bash
 POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db  # dev-only: pgvector on 127.0.0.1:5434
-uv venv --python 3.12 .venv
-uv pip install -e '.[dev]'                  # zero-ML core
-uv pip install -e '.[inference]'            # optional: real embeddings + Laya
+uv sync --locked --extra dev --python 3.12  # zero-ML core, from uv.lock (= make setup)
+uv sync --locked --extra dev --extra inference  # optional: real embeddings + Laya
 (cd ui && npm ci && npm run build)          # dashboard; build it before starting the server
 
 export MCPR_ADMIN_TOKEN=$(openssl rand -hex 32)
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 ```
+
+Compose needs `POSTGRES_PASSWORD` for every command, even the dev database.
+Without it the first line fails with
+
+```
+error while interpolating services.api.environment.MCPR_DATABASE_URL: required variable POSTGRES_PASSWORD is missing a value: set POSTGRES_PASSWORD in .env
+```
+
+(the service named varies: the base file alone reports
+`services.db.environment.POSTGRES_PASSWORD`; an empty `POSTGRES_PASSWORD=` in
+`.env` fails the same way). Despite the message, the dev database does not need
+a `.env`: keep the `POSTGRES_PASSWORD=mcprouter` prefix shown above (or run
+`make db-up`). For the full stack, set it in `.env` as in
+[Run it (Docker)](#run-it-docker).
 
 The server serves `ui/dist` relative to the working directory, so start it
 from the repository root. Contributor setup, gates and tests:
@@ -220,11 +239,20 @@ bulk imports.
 
 ## Status — honest ledger
 
-Stamped 2026-10-09 on branch `wave6/e7` (code at `cd551f5`, plus the docs meta-test); re-stamp after each full run.
+Test counts stamped 2026-10-09 from `main` at `6058a3e` (0.6.0) with:
+
+```bash
+MCPR_DATABASE_URL=postgresql+psycopg://mcprouter:mcprouter@localhost:5434/mcprouter .venv/bin/pytest -q -n 8
+cd ui && npx vitest run
+```
+
+Re-stamp both after each full run; CI runs the backend suite in lanes (unit, e2e) and the UI suite on every push.
+The other rows were measured earlier in the 0.6 cycle and are not re-run by
+these commands.
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| 1363 backend tests passed (9 skipped: slow, live-model and `[inference]`-only) + 131 UI tests (static count); e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| Backend: `1 failed, 2045 passed, 6 skipped` (2052 collected; skips are slow, live-model and `[inference]`-only). The one failure, `test_semaphore_caps_concurrent_inference[performance]`, is timing-sensitive and failed only with the host at load average ~250; it passes on its own. UI: `Tests 241 passed (241)` in 30 files. e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 — **at risk**: CPU measurements put it out of reach; see [hardware-validation.md](docs/hardware-validation.md) |
 | 100 servers / 1,000 tools full refresh in 6.0s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |
@@ -245,8 +273,9 @@ redacted before logs, audit rows and model inputs. Details:
 
 > ⚠️ Registering a **stdio** server means the platform will run that command.
 > Server registration is therefore admin-only, and the admin API fails closed
-> when agents exist but no `MCPR_ADMIN_TOKEN` is configured. From v0.6 the
-> container listens on loopback only until a token is set. Don't expose the
+> when agents exist but no `MCPR_ADMIN_TOKEN` is configured. Without a token
+> the container binds loopback inside the container, so its published port is
+> unreachable. Don't expose the
 > API beyond localhost without auth configured.
 
 ## Documentation

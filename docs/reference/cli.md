@@ -70,7 +70,7 @@ The GPU runbook is [hardware-validation.md](../hardware-validation.md).
 | Script | What it does |
 |---|---|
 | `scripts/docker-entrypoint.sh` | Container entrypoint: validates the environment, checks the writable directories, waits for Postgres, then starts one uvicorn worker. Arguments, if given, run instead of uvicorn. |
-| `scripts/smoke.sh` | End-to-end check of a running compose stack. Needs `MCPR_ADMIN_TOKEN` and `MCPR_AGENT_KEY`; `BASE` and `COMPOSE` default to the CI project (`http://127.0.0.1:8450`, `docker compose -p mcprsmoke`). |
+| `scripts/smoke.sh` | End-to-end check of a running compose stack. Needs `MCPR_ADMIN_TOKEN` and `MCPR_AGENT_KEY`. `BASE` defaults to `http://127.0.0.1:<port>`, where the port is `MCPR_HOST_PORT` from the environment, else from `.env`, else 8400 (`make smoke` uses 8450); `COMPOSE` defaults to `docker compose -p mcprsmoke`. |
 | `scripts/gen_config_docs.py` | Regenerates [configuration.md](configuration.md); `--check` exits 1 when it is stale. |
 
 Against the README stack (default port, default project name):
@@ -83,5 +83,5 @@ BASE=http://127.0.0.1:8400 COMPOSE="docker compose" \
 ## Make targets
 
 The `Makefile` wraps the commands above: `setup`, `db-up`, `check`,
-`test-fast`, `test-full`, `ui`, `smoke`, `docs-gen`. See
+`test-fast`, `test-full`, `ui`, `smoke`, `docs-gen`, `docs-check`. See
 [CONTRIBUTING.md](../../CONTRIBUTING.md).

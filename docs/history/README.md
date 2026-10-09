@@ -9,3 +9,7 @@ They are **not** maintained and may describe behaviour that has since changed.
 For running, configuring or operating the router, use the docs one level up
 (`docs/INSTALL.md`, `docs/deploy.md`, `docs/security-model.md`, …) and the
 top-level `README.md`.
+
+Point-in-time review outputs (audits, sweeps, the punch list) live in
+[`docs/audit/`](../audit/README.md) under the same rule: archival, not
+operator docs.

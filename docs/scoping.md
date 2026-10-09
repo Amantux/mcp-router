@@ -46,12 +46,12 @@ silently:
 
 - **#1 Deployment.** The router ships as a container image with compose
   files (0.5.0), a zero-ML base and an inference flavor; see deploy.md.
-- **#3 Monolith, one worker.** Unchanged, and from v0.6 enforced: only the
+- **#3 Monolith, one worker.** Unchanged, and enforced: only the
   process holding a Postgres advisory lock runs the background loops.
 - **#4 Sync SQLAlchemy.** Still true for the REST API and the services; the
   MCP gateway is async (MCP SDK 2.x) and calls the sync services in threads.
 - **#6 Auth.** Dev mode needs no keys, no admin token and zero principals.
-  From v0.6 the container binds to loopback when no admin token is set, and a
+  The container binds to loopback when no admin token is set, and a
   `Host` allowlist (421) guards every path.
 - **#9 UI.** The dashboard is served by the API itself at `/` (0.5.0).
 - **Schema.** `create_all` plus additive column fixes until 0.5; Alembic

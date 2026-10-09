@@ -6,6 +6,7 @@
 cp .env.example .env
 # edit .env: set MCPR_ADMIN_TOKEN and POSTGRES_PASSWORD (openssl rand -hex 32 for each)
 docker compose up -d --build --wait
+# no MCPR_ADMIN_TOKEN => healthy container, but the host port refuses connections
 # then browse to http://localhost:8400/  (API at /api/v1, MCP at /mcp)
 ```
 
@@ -22,8 +23,8 @@ The ones a deployment usually sets:
 |---|---|---|
 | `MCPR_ADMIN_TOKEN` | unset | Admin API bearer. Set it for every deployment. |
 | `MCPR_AGENT_KEYS` | unset | `id:key[,id:key]`; seeds agent principals at start (then the setup wizard is skipped). |
-| `POSTGRES_PASSWORD` | unset | Required from v0.6: compose refuses to start without it. |
-| `MCPR_BIND` | `127.0.0.1` | From v0.6: host address the API port is published on. |
+| `POSTGRES_PASSWORD` | unset | Required: compose refuses to start without it (see [Troubleshooting](#troubleshooting) for the exact error). |
+| `MCPR_BIND` | `127.0.0.1` | Host address the API port is published on. |
 | `MCPR_HOST_PORT` | `8400` | Host port for the API. |
 | `MCPR_ALLOWED_HOSTS` | unset | Extra `Host` names accepted (reverse proxy, LAN name). |
 | `MCPR_DB_WAIT_TRIES` | `30` | Entrypoint database wait (2 s apart), then fail. |
@@ -31,7 +32,7 @@ The ones a deployment usually sets:
 Exported shell variables work too (compose reads the shell environment before
 `.env`), but `.env` is the documented way.
 
-## Security posture (from v0.6)
+## Security posture
 
 - **Fail-closed bind.** With no `MCPR_ADMIN_TOKEN` the entrypoint starts
   uvicorn on `127.0.0.1` inside the container and logs
@@ -67,8 +68,8 @@ Exported shell variables work too (compose reads the shell environment before
 | `/mcp` | agent key | MCP gateway |
 | `/docs`, `/openapi.json` | **none** | API schema. The schema is not secret; it holds no data. |
 | `/healthz` | none | Liveness |
-| `/readyz` | none | Readiness (from v0.6) |
-| `/metrics` | admin token when one is configured (from v0.6) | Prometheus |
+| `/readyz` | none | Readiness |
+| `/metrics` | admin token when one is configured | Prometheus |
 
 Prometheus scrape config with the token:
 
@@ -82,9 +83,9 @@ scrape_configs:
 ### Health semantics
 
 - `/healthz` is **liveness**: `200 {"status":"ok"}` when the process can reach
-  the database. From v0.6 a database failure returns a curated `503` instead
+  the database. A database failure returns a curated `503` instead
   of a bare 500. The image `HEALTHCHECK` uses it.
-- `/readyz` (from v0.6) is **readiness**: database, inference engine and a
+- `/readyz` is **readiness**: database, inference engine and a
   `degraded` flag (for example `laya` requested but the model is unavailable,
   so routing runs on the deterministic fallback). Point load balancers here.
 
@@ -93,7 +94,7 @@ scrape_configs:
 An imported `mcpServers` config usually starts servers with `npx …` or
 `uvx …`. These run **inside the api container**.
 
-- **`npx`**: from v0.6 the image ships Node 22 (`node`, `npm`, `npx`), so
+- **`npx`**: the image ships Node 22 (`node`, `npm`, `npx`), so
   `npx -y <package>` servers work. Packages download into the app user's npm
   cache on first start, which needs outbound network access.
 - **`uvx`**: not in the image. Either run that server over HTTP elsewhere and
@@ -106,9 +107,14 @@ An imported `mcpServers` config usually starts servers with `npx …` or
   USER app
   ```
 
-  Build it (`docker build -t mcp-router:uvx -f Dockerfile.uvx .`) and set
-  `MCPR_IMAGE=mcp-router:uvx` in `.env`. Verified 2026-10-09: `uvx` runs as
-  uid 1000 and fetches packages into the app user's cache.
+  Build it (`docker build -t mcp-router:uvx -f Dockerfile.uvx .`), set
+  `MCPR_IMAGE=mcp-router:uvx` in `.env`, and start with
+  `docker compose up -d --wait`, **without `--build`**: the api service also
+  has `build: .`, so `--build` rebuilds the plain Dockerfile under the
+  `mcp-router:uvx` tag and drops `uv`. To upgrade, rebuild both images in
+  order (`docker build -t mcp-router:local .` then the `Dockerfile.uvx` build)
+  and `up -d` again. Verified 2026-10-09: `uvx` runs as uid 1000 and fetches
+  packages into the app user's cache.
 - **Anything else** (a binary on your host, a Python script): bind-mount it
   read-only into the container and register the in-container path, or run it
   as an HTTP server.
@@ -122,7 +128,7 @@ table. It is never returned by the API or logged, but anyone with database
 access or a backup can read it. Protect `mcpr-pgdata` and your dumps
 accordingly.
 
-## Logging (from v0.6)
+## Logging
 
 Logs go to stdout. `MCPR_LOG_LEVEL` (default `INFO`) and `MCPR_LOG_FORMAT`
 (`console` or `json`; compose sets `json`) control them. Control characters
@@ -140,8 +146,8 @@ docker compose logs -f api
 |---|---|---|
 | Request body | 1 MiB (413 above it) | every API and MCP route |
 | Tool executions and skill activations | `MCPR_RATE_LIMIT_PER_AGENT_PER_MIN` (120) per agent | execution manager |
-| Decision edge | `MCPR_DECISION_RATE_LIMIT_PER_MIN` (120) per principal (from v0.6) | `POST /api/v1/decision/systemone` |
-| MCP sessions | `MCPR_MCP_MAX_SESSIONS` (1000) total, `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent credential (from v0.6) | `/mcp` |
+| Decision edge | `MCPR_DECISION_RATE_LIMIT_PER_MIN` (120) per principal | `POST /api/v1/decision/systemone` |
+| MCP sessions | `MCPR_MCP_MAX_SESSIONS` (1000) total, `MCPR_MCP_MAX_SESSIONS_PER_AGENT` (32) per agent credential | `/mcp` |
 | `router.find_tools` re-routes | `MCPR_RATE_LIMIT_PER_AGENT_PER_MIN` (120) per agent | `/mcp` |
 | Route feedback | 30 per minute per principal, REST and MCP together | `POST /api/v1/route/{request_id}/feedback`, `router.feedback` |
 | Tool call deadline | `MCPR_DEFAULT_TOOL_TIMEOUT_S` (30 s) | execution manager |
@@ -195,9 +201,9 @@ matter, schema migrations and downgrades.
 
 ## Releases
 
-Tag `vX.Y.Z` on a green `master` commit: `.github/workflows/release.yml` pushes
-`ghcr.io/amantux/mcp-router:<tag>`, `:latest`, and `-inference` variants. From
-v0.6 a `verify` job checks the tag against `pyproject.toml`, the CHANGELOG and a
+Tag `vX.Y.Z` on a green commit on the default branch (`main`):
+`.github/workflows/release.yml` pushes `ghcr.io/amantux/mcp-router:<tag>`,
+`:latest`, and `-inference` variants. A `verify` job checks the tag against `pyproject.toml`, the CHANGELOG and a
 green CI run before any image is pushed.
 
 ## Troubleshooting
@@ -205,15 +211,21 @@ green CI run before any image is pushed.
 | Symptom | Cause / fix |
 |---|---|
 | `docker compose up --build` hangs at `npm ci` | BuildKit's bridge network stalls on some hosts. Build the image with the host network first: `docker build --network=host -t mcp-router:local .`, then `docker compose up -d --wait`. |
-| Connection refused on `:8400` from the host, container healthy | No `MCPR_ADMIN_TOKEN`, so the API listens on loopback inside the container (from v0.6). Set the token. |
+| Connection refused on `:8400` from the host, container healthy | No `MCPR_ADMIN_TOKEN`: the container starts, uvicorn binds `127.0.0.1` inside it and logs `WARNING: admin API … listening on loopback only; set MCPR_ADMIN_TOKEN`. The healthcheck runs inside the container, so it stays green. Set the token (`openssl rand -hex 32`) and `docker compose up -d`. Dev only: `MCPR_ALLOW_OPEN_DEV=1` binds all interfaces with an open admin API. |
+| `required variable POSTGRES_PASSWORD is missing a value: set POSTGRES_PASSWORD in .env` (named under `services.api.environment.MCPR_DATABASE_URL` or `services.db.environment.POSTGRES_PASSWORD`) | Compose interpolates every file before it starts anything, and an empty value counts as missing. Full stack: set `POSTGRES_PASSWORD=$(openssl rand -hex 32)` in `.env`. Dev database only (`-f docker-compose.dev.yml`): prefix the command, `POSTGRES_PASSWORD=mcprouter docker compose …`, or use `make db-up`. |
 | `421` on every request | The `Host` you use is not localhost or in `MCPR_ALLOWED_HOSTS`. |
 | `FATAL: MCPR_DATABASE_URL is required` | Running the image outside compose without a database URL. |
 | `FATAL: Postgres not reachable after N attempts` | Database down or wrong credentials. Check `docker compose logs db` and `POSTGRES_*`. |
 | `FATAL: /data is not writable by uid 1000` | A bind mount or read-only volume replaced the image's directory. `chown -R 1000:1000` the host path. |
 | Imported server stays `unhealthy` | Its stdio command does not exist in the container. See [Stdio servers in Docker](#stdio-servers-in-docker). |
-| `/metrics` returns 401 | From v0.6 it needs the admin token. Configure the scrape as above. |
+| `/metrics` returns 401 | It needs the admin token. Configure the scrape as above. |
 
-## Verified (2026-10-09, Docker 29, clean `git clone` of wave5/container)
+## Verified transcript (0.5-era)
+
+This transcript is from 2026-10-09 (Docker 29, a clean `git clone` of the
+0.5-era `wave5/container` branch). It is kept as an example of the output; the
+same `scripts/smoke.sh` is re-verified against the current tree by the
+`compose-smoke` job of [CI](../.github/workflows/ci.yml) on every push.
 
 CI builds with plain `up --build`. On the verification host the image was built
 with `docker build --network=host -t mcp-router:local .` before

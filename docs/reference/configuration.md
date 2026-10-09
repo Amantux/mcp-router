@@ -3,8 +3,7 @@
 # Configuration reference
 
 Every `MCPR_*` variable the router reads, with its default. An empty value counts
-as unset. Variables marked *secret* are never logged. Behaviour marked
-"from v0.6" ships in 0.6.0.
+as unset. Variables marked *secret* are never logged.
 
 For a deployment, put these in `.env` next to `docker-compose.yml`
 (template: `.env.example`). See [deploy.md](../deploy.md).
@@ -17,12 +16,12 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_DATABASE_URL_FILE` | unset | path, secret | File holding `MCPR_DATABASE_URL` (Docker secret); wins over `MCPR_DATABASE_URL`. |
 | `MCPR_AGENT_KEYS` | unset | comma list of `agentId:key`, secret | Comma list of `agentId:key` pairs. Each pair seeds (or re-keys) an agent principal at startup; only the key hash is stored. |
 | `MCPR_AGENT_KEYS_FILE` | unset | path, secret | File holding `MCPR_AGENT_KEYS` (Docker secret); wins over `MCPR_AGENT_KEYS`. |
-| `MCPR_ADMIN_TOKEN` | unset | string, secret | Admin API bearer token. Unset: dev mode while no agents exist, otherwise the admin API fails closed. From v0.6 the container binds to loopback when it is unset. |
+| `MCPR_ADMIN_TOKEN` | unset | string, secret | Admin API bearer token. Unset: dev mode while no agents exist, otherwise the admin API fails closed. When it is unset the container binds to loopback, so the published port is unreachable from the host. |
 | `MCPR_ADMIN_TOKEN_FILE` | unset | path, secret | File holding `MCPR_ADMIN_TOKEN` (Docker secret); wins over `MCPR_ADMIN_TOKEN`. |
 | `MCPR_ALLOWED_HOSTS` | unset | comma list | Extra `Host` values accepted besides localhost, `127.0.0.1` and `[::1]` (comma list, `host` or `host:port`). Anything else gets 421. |
-| `MCPR_ALLOW_OPEN_DEV` | `false` | `true` \| `false` | From v0.6: with no admin token, bind `0.0.0.0` anyway (dev only). |
-| `MCPR_LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` \| `CRITICAL` | Log level (from v0.6). |
-| `MCPR_LOG_FORMAT` | `console` | `console` \| `json` | Log format (from v0.6; compose sets `json`). |
+| `MCPR_ALLOW_OPEN_DEV` | `false` | `true` \| `false` | With no admin token, bind `0.0.0.0` anyway (dev only). |
+| `MCPR_LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` \| `CRITICAL` | Log level. |
+| `MCPR_LOG_FORMAT` | `console` | `console` \| `json` | Log format (compose sets `json`). |
 | `MCPR_EMBEDDING_BACKEND` | `hash` | `hash` \| `bge` \| `aoai` | Embedding backend. `bge` needs the `[inference]` extra; `aoai` needs the `MCPR_AOAI_*` variables. |
 | `MCPR_EMBEDDING_MODEL_ID` | `BAAI/bge-small-en-v1.5` | string | Hugging Face model id for `bge` embeddings. |
 | `MCPR_DECISION_BACKEND` | `deterministic` | `deterministic` \| `laya` \| `remote` \| `aoai` | Decision backend. `laya` needs the `[inference]` extra; any backend error falls back to `deterministic`. |
@@ -48,8 +47,8 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_CURRENCY` | `USD` | string | Currency code shown next to price estimates. |
 | `MCPR_DEFAULT_TOOL_TIMEOUT_S` | `30.0` | number | Deadline for one downstream tool call. |
 | `MCPR_RATE_LIMIT_PER_AGENT_PER_MIN` | `120` | integer | Per-agent tool execution and skill activation budget. |
-| `MCPR_MCP_MAX_SESSIONS` | `1000` | integer | From v0.6: global cap on live MCP sessions. |
-| `MCPR_MCP_MAX_SESSIONS_PER_AGENT` | `32` | integer | From v0.6: live MCP sessions per agent; the next `initialize` gets 429. |
+| `MCPR_MCP_MAX_SESSIONS` | `1000` | integer | Global cap on live MCP sessions. |
+| `MCPR_MCP_MAX_SESSIONS_PER_AGENT` | `32` | integer | Live MCP sessions per agent; the next `initialize` gets 429. |
 | `MCPR_MAX_EXPOSED_SKILLS` | `3` | integer | Global cap on routed skills per request. |
 | `MCPR_SKILL_BODY_MAX_BYTES` | `65536` | integer | SKILL.md body cap; longer bodies are flagged `body_truncated`. |
 | `MCPR_SKILL_RESOURCE_MAX_BYTES` | `5242880` | integer | Per-resource serve cap for skill files. |
@@ -59,7 +58,7 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_DECISION_API_KEY` | unset | string, secret | `remote` backend API key. |
 | `MCPR_DECISION_API_KEY_FILE` | unset | path, secret | File holding the `remote` API key; wins over `MCPR_DECISION_API_KEY`. |
 | `MCPR_DECISION_MAX_RETRIES` | `2` | integer | `remote` backend retries (0 to 10). |
-| `MCPR_DECISION_RATE_LIMIT_PER_MIN` | `120` | integer | From v0.6: per-principal budget on `POST /api/v1/decision/systemone`. |
+| `MCPR_DECISION_RATE_LIMIT_PER_MIN` | `120` | integer | Per-principal budget on `POST /api/v1/decision/systemone`. |
 | `MCPR_AOAI_ENDPOINT` | unset | string | Azure OpenAI resource URL (`https://<resource>.openai.azure.com`). |
 | `MCPR_AOAI_API_KEY` | unset | string, secret | Azure OpenAI API key. |
 | `MCPR_AOAI_API_KEY_FILE` | unset | path, secret | File holding the Azure OpenAI key; wins over `MCPR_AOAI_API_KEY`. |
@@ -67,7 +66,7 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_AOAI_EMBEDDING_DEPLOYMENT` | unset | string | Deployment used by `MCPR_EMBEDDING_BACKEND=aoai`. |
 | `MCPR_AOAI_MAX_RETRIES` | `2` | integer | Azure OpenAI retries (0 to 10). |
 | `MCPR_UI_DIST` | `./ui/dist` | string | Directory of the built dashboard served at `/`. |
-| `MCPR_DEDUP_MAX_PAIRS` | `5000` | integer | From v0.6: cap on duplicate pairs one dedup scan stores (the run reports `truncated`). |
+| `MCPR_DEDUP_MAX_PAIRS` | `5000` | integer | Cap on duplicate pairs one dedup scan stores (the run reports `truncated`). |
 
 ## Compose, image and entrypoint
 
@@ -77,10 +76,10 @@ not by the router process.
 | Variable | Default | Description |
 |---|---|---|
 | `POSTGRES_USER` | `mcprouter` | Database user created by the `db` service. |
-| `POSTGRES_PASSWORD` | unset | Database password. Required from v0.6: compose refuses to start without it. |
+| `POSTGRES_PASSWORD` | unset | Database password. Required: compose refuses to start without it. |
 | `POSTGRES_DB` | `mcprouter` | Database name. |
 | `MCPR_HOST_PORT` | `8400` | Host port compose publishes the API on. |
-| `MCPR_BIND` | `127.0.0.1` | From v0.6: host address compose publishes the API on. |
+| `MCPR_BIND` | `127.0.0.1` | Host address compose publishes the API on. |
 | `MCPR_PORT` | `8400` | Port uvicorn listens on inside the container (entrypoint, healthcheck). |
 | `MCPR_DB_WAIT_TRIES` | `30` | Entrypoint database wait attempts, 2 s apart. |
 | `MCPR_DATA_DIR` | `/data` | Entrypoint: directory probed for writability at start. |
@@ -95,8 +94,8 @@ not by the router process.
 | Variable | Description |
 |---|---|
 | `MCPR_RUN_SLOW` | Run the slow and live-model tests (`1`). |
-| `MCPR_REQUIRE_DB` | From v0.6: fail instead of skip when the test database is down. |
-| `MCPR_ALLOW_ANY_DB` | From v0.6: let the suite wipe a database whose name has no `_test` word (`1`). |
-| `MCPR_ENFORCE_ROUTE_COVERAGE` | From v0.6: fail unless every API route was requested and returned a 2xx (`1`). |
+| `MCPR_REQUIRE_DB` | Fail instead of skip when the test database is down. |
+| `MCPR_ALLOW_ANY_DB` | Let the suite wipe a database whose name has no `_test` word (`1`). |
+| `MCPR_ENFORCE_ROUTE_COVERAGE` | Fail unless every API route was requested and returned a 2xx (`1`). |
 | `MCPR_TEST_BASE_DATABASE_URL` | Set by the suite itself: the operator's URL handed to pytest-xdist workers. |
 | `MCPR_AGENT_KEY` | `scripts/smoke.sh`: the key half of one `MCPR_AGENT_KEYS` pair. |

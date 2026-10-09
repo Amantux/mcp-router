@@ -151,7 +151,7 @@ the routing path.
 ## Deviations from shipped behaviour
 
 - **Metrics path.** Prometheus metrics are served at `/metrics`, outside
-  `/api/v1`, and from v0.6 need the admin token when one is configured.
+  `/api/v1`, and need the admin token when one is configured.
 - **`agent_id` in `/route`.** Ignored. The agent is always the authenticated
   principal (security-model.md §1).
 - **LLM fallback (§5).** Out of scope (scoping.md #2): low confidence falls

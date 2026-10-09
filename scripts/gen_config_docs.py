@@ -92,17 +92,17 @@ DOCS: dict[str, str] = {
     "MCPR_ALLOWED_HOSTS": "Extra `Host` values accepted besides localhost, `127.0.0.1` and "
     "`[::1]` (comma list, `host` or `host:port`). Anything else gets 421.",
     "MCPR_ADMIN_TOKEN": "Admin API bearer token. Unset: dev mode while no agents exist, "
-    "otherwise the admin API fails closed. From v0.6 the container binds to loopback "
-    "when it is unset.",
-    "MCPR_LOG_LEVEL": "Log level (from v0.6).",
-    "MCPR_LOG_FORMAT": "Log format (from v0.6; compose sets `json`).",
-    "MCPR_ALLOW_OPEN_DEV": "From v0.6: with no admin token, bind `0.0.0.0` anyway (dev only).",
-    "MCPR_MCP_MAX_SESSIONS": "From v0.6: global cap on live MCP sessions.",
-    "MCPR_MCP_MAX_SESSIONS_PER_AGENT": "From v0.6: live MCP sessions per agent; the next "
+    "otherwise the admin API fails closed. When it is unset the container binds to "
+    "loopback, so the published port is unreachable from the host.",
+    "MCPR_LOG_LEVEL": "Log level.",
+    "MCPR_LOG_FORMAT": "Log format (compose sets `json`).",
+    "MCPR_ALLOW_OPEN_DEV": "With no admin token, bind `0.0.0.0` anyway (dev only).",
+    "MCPR_MCP_MAX_SESSIONS": "Global cap on live MCP sessions.",
+    "MCPR_MCP_MAX_SESSIONS_PER_AGENT": "Live MCP sessions per agent; the next "
     "`initialize` gets 429.",
-    "MCPR_DECISION_RATE_LIMIT_PER_MIN": "From v0.6: per-principal budget on "
+    "MCPR_DECISION_RATE_LIMIT_PER_MIN": "Per-principal budget on "
     "`POST /api/v1/decision/systemone`.",
-    "MCPR_DEDUP_MAX_PAIRS": "From v0.6: cap on duplicate pairs one dedup scan stores "
+    "MCPR_DEDUP_MAX_PAIRS": "Cap on duplicate pairs one dedup scan stores "
     "(the run reports `truncated`).",
     "MCPR_AOAI_ENDPOINT": "Azure OpenAI resource URL (`https://<resource>.openai.azure.com`).",
     "MCPR_AOAI_API_KEY": "Azure OpenAI API key.",
@@ -118,11 +118,11 @@ DEPLOY_ONLY: tuple[tuple[str, str, str], ...] = (
     (
         "POSTGRES_PASSWORD",
         "",
-        "Database password. Required from v0.6: compose refuses to start without it.",
+        "Database password. Required: compose refuses to start without it.",
     ),
     ("POSTGRES_DB", "mcprouter", "Database name."),
     ("MCPR_HOST_PORT", "8400", "Host port compose publishes the API on."),
-    ("MCPR_BIND", "127.0.0.1", "From v0.6: host address compose publishes the API on."),
+    ("MCPR_BIND", "127.0.0.1", "Host address compose publishes the API on."),
     (
         "MCPR_PORT",
         "8400",
@@ -143,14 +143,14 @@ DEPLOY_ONLY: tuple[tuple[str, str, str], ...] = (
 
 TOOLING: tuple[tuple[str, str], ...] = (
     ("MCPR_RUN_SLOW", "Run the slow and live-model tests (`1`)."),
-    ("MCPR_REQUIRE_DB", "From v0.6: fail instead of skip when the test database is down."),
+    ("MCPR_REQUIRE_DB", "Fail instead of skip when the test database is down."),
     (
         "MCPR_ALLOW_ANY_DB",
-        "From v0.6: let the suite wipe a database whose name has no `_test` word (`1`).",
+        "Let the suite wipe a database whose name has no `_test` word (`1`).",
     ),
     (
         "MCPR_ENFORCE_ROUTE_COVERAGE",
-        "From v0.6: fail unless every API route was requested and returned a 2xx (`1`).",
+        "Fail unless every API route was requested and returned a 2xx (`1`).",
     ),
     (
         "MCPR_TEST_BASE_DATABASE_URL",
@@ -231,8 +231,7 @@ def render(app_vars: list[Var]) -> str:
         "# Configuration reference",
         "",
         "Every `MCPR_*` variable the router reads, with its default. An empty value counts",
-        "as unset. Variables marked *secret* are never logged. Behaviour marked",
-        '"from v0.6" ships in 0.6.0.',
+        "as unset. Variables marked *secret* are never logged.",
         "",
         "For a deployment, put these in `.env` next to `docker-compose.yml`",
         "(template: `.env.example`). See [deploy.md](../deploy.md).",

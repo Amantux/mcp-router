@@ -55,7 +55,7 @@ docker compose -f docker-compose.yml -f docker-compose.inference.yml up -d --bui
 For an offline host, pre-load the models into `mcpr-models-cache` and set
 `HF_HUB_OFFLINE=1` so the model loader never reaches the network.
 
-## 3. Schema migrations (from v0.6)
+## 3. Schema migrations
 
 From 0.6.0 the schema is versioned with Alembic.
 
@@ -103,8 +103,8 @@ These need action when you upgrade from 0.5.x:
 
 ```bash
 git pull
-uv pip install -e '.[dev]'           # picks up dependency changes
+uv sync --locked --extra dev        # picks up dependency changes (uv.lock)
 cd ui && npm ci && npm run build && cd ..
 ```
 
-Then restart the server. From v0.6 the restart applies migrations as above.
+Then restart the server. The restart applies migrations as above.

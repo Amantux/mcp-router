@@ -31,9 +31,10 @@ reverse proxy, troubleshooting): [deploy.md](deploy.md).
 
 ```bash
 POSTGRES_PASSWORD=mcprouter docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --wait db   # dev only: 127.0.0.1:5434
-uv venv --python 3.12 .venv && uv pip install -e '.[dev]'   # add '.[inference]' for real embeddings
+uv sync --locked --extra dev --python 3.12                   # add --extra inference for real embeddings
 (cd ui && npm ci && npm run build)                           # dashboard, before the server starts
-export MCPR_ADMIN_TOKEN=... MCPR_AGENT_KEYS=...
+export MCPR_ADMIN_TOKEN=$(openssl rand -hex 32)              # >= 32 chars, or startup is FATAL
+export MCPR_AGENT_KEYS="claude:$(openssl rand -hex 32)"      # optional; each key >= 32 chars
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 ```
 
@@ -53,8 +54,8 @@ expects by default (`MCPR_DATABASE_URL`, see
   With no principals yet, the dashboard opens the setup wizard (`/setup`).
 - Reaching the router from another machine: it keeps DNS-rebinding
   protection on and by default accepts only `localhost`/`127.0.0.1`/`[::1]`
-  Host headers (anything else gets HTTP 421; on `/mcp` only before v0.6, on
-  every path from v0.6). Set
+  Host headers (anything else gets HTTP 421, on
+  every path). Set
   `MCPR_ALLOWED_HOSTS=router.lan,10.0.0.5:8400` (comma list; a bare host means
   any port) to allow named hosts. Tradeoff: every name you add is one a
   malicious web page could point at your router via DNS rebinding, so list
@@ -122,7 +123,7 @@ curl -s -X POST localhost:8400/api/v1/servers/import -H "$ADMIN" \
 ```
 
 > **Stdio servers in Docker.** Imported entries usually run `npx …` or
-> `uvx …`, and with Docker they run *inside the api container*. From v0.6 the
+> `uvx …`, and with Docker they run *inside the api container*. The
 > image has Node 22, so `npx` servers work; `uvx` servers do not unless you
 > extend the image. See [Stdio servers in Docker](deploy.md#stdio-servers-in-docker).
 > A server whose command is missing shows as `unhealthy` after the import.
@@ -357,7 +358,7 @@ curl -s localhost:8400/api/v1/models/health -H "$ADMIN"     # admin-only; infere
 | `401` on `/mcp` | Missing or wrong `Authorization: Bearer <agent key>`. An invalid key is never downgraded to dev mode. Rotate the key and update the client. |
 | `401` on `/api/v1/*` | No bearer, a wrong admin token, or an agent key on an admin route (an agent key is never an admin credential). |
 | `403 admin token not configured` | `MCPR_ADMIN_TOKEN` is unset and the router is not in dev mode (agent keys or principals exist), so the admin API fails closed. Set the token and restart. |
-| `409` on the first `POST /api/v1/principals` | From v0.6: in dev mode with no admin token, creating the first agent would lock you out of the admin API. Set `MCPR_ADMIN_TOKEN` first. |
+| `409` on the first `POST /api/v1/principals` | In dev mode with no admin token, creating the first agent would lock you out of the admin API. Set `MCPR_ADMIN_TOKEN` first. |
 | `421` (Invalid Host header) | The `Host` you used is not `localhost`, `127.0.0.1`, `[::1]` or in `MCPR_ALLOWED_HOSTS`. Add the exact name you use, or tunnel (`ssh -L 8400:localhost:8400`) and use `localhost`. |
 | Empty tool list, or only `router.find_tools` | The agent has no policy rules yet (deny-by-default), no servers are registered, or no route has run yet. Add rules (section 2), then call `router.find_tools`. |
 | Tools never change after `find_tools` | The client caches its tool list. Refresh it as described for that client in section 4. Calling an authorized tool by name still works. |
