@@ -253,7 +253,11 @@ export function ToolsPage() {
                   key={rowId}
                   style={{ cursor: "pointer" }}
                   onClick={() => setOpenId(item.id)}
-                  onKeyDown={(e: KeyboardEvent) => e.key === "Enter" && setOpenId(item.id)}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                    e.preventDefault(); // Space would scroll the page
+                    setOpenId(item.id);
+                  }}
                 >
                   {({ renderCell, columnId }) => (
                     <DataGridCell className={NUMERIC_COLS.has(String(columnId)) ? c.num : undefined}>{renderCell(item)}</DataGridCell>

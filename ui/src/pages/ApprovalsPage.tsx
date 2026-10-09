@@ -91,7 +91,7 @@ export function ApprovalsPage() {
               <TableHeaderCell>Arguments (redacted)</TableHeaderCell>
               <TableHeaderCell>Requested</TableHeaderCell>
               <TableHeaderCell>Expires</TableHeaderCell>
-              <TableHeaderCell />
+              <TableHeaderCell aria-label="Actions" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -115,10 +115,10 @@ export function ApprovalsPage() {
                 <TableCell>
                   {a.status === "pending" && (
                     <span style={{ display: "flex", gap: 4 }}>
-                      <Button size="small" onClick={() => setConfirm({ approval: a, action: "approve" })}>
+                      <Button size="small" aria-label={`Approve ${a.summary.tool ?? a.toolId} for ${a.agentId}`} onClick={() => setConfirm({ approval: a, action: "approve" })}>
                         Approve
                       </Button>
-                      <Button size="small" onClick={() => setConfirm({ approval: a, action: "deny" })}>
+                      <Button size="small" aria-label={`Deny ${a.summary.tool ?? a.toolId} for ${a.agentId}`} onClick={() => setConfirm({ approval: a, action: "deny" })}>
                         Deny
                       </Button>
                     </span>

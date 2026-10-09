@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expectQuery, mockFetch, renderWithProviders } from "../test/render";
 import { SkillsPage } from "./SkillsPage";
 
@@ -66,4 +67,22 @@ describe("SkillsPage", () => {
     // D13: the backend honours `sourceId` and `hasScripts` (GET /skills, P-202).
     await waitFor(() => expectQuery(calls, "GET", "/api/v1/skills", { sourceId: "s1", hasScripts: "true", limit: "50", offset: "0" }));
   });
+
+  it("opens a skill row from the keyboard with Enter and with Space", async () => {
+    const user = userEvent.setup();
+    routes();
+    renderWithProviders(<SkillsPage />, { route: "/skills" });
+    const row = (await screen.findByText("pdf-fill")).closest("tr")!;
+    row.focus();
+    expect(document.activeElement).toBe(row);
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("tab", { name: "Body" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "Body" })).toBeNull());
+    const again = (await screen.findByText("pdf-fill")).closest("tr")!;
+    again.focus();
+    await user.keyboard(" ");
+    expect(await screen.findByRole("tab", { name: "Body" })).toBeTruthy();
+  });
 });
+

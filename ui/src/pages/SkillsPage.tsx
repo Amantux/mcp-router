@@ -57,7 +57,7 @@ export function SkillBodyText({ body }: { body: string }) {
 type Tri = "" | "true" | "false";
 const tri = (v: Tri) => (v === "" ? undefined : v === "true");
 
-function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: () => void }) {
+export function SkillDrawer({ skillId, onClose }: { skillId: string | null; onClose: () => void }) {
   const c = useCommonStyles();
   const [tab, setTab] = useState("overview");
   const detail = useLoader<SkillDetail | null>("Load skill", (sig) => (skillId ? getSkill(skillId, sig) : Promise.resolve(null)), [skillId]);
@@ -257,7 +257,17 @@ export function SkillsPage() {
             </TableHeader>
             <TableBody>
               {(page?.items ?? []).map((s: Skill) => (
-                <TableRow key={s.id} onClick={() => setOpen(s.id)} style={{ cursor: "pointer" }}>
+                <TableRow
+                  key={s.id}
+                  tabIndex={0}
+                  onClick={() => setOpen(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+                    e.preventDefault(); // Space would scroll the page
+                    setOpen(s.id);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <TableCell>
                     <strong>{s.name}</strong>
                     {s.hasScripts && <Badge size="small" appearance="outline" style={{ marginLeft: 4 }}>scripts</Badge>}
