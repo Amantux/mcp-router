@@ -163,4 +163,7 @@ def rollup(
 
 def install_analytics(app: FastAPI) -> None:
     app.include_router(router)
+    from mcprouter.api.routes_feedback import router as feedback_router  # local: optional
+
+    app.include_router(feedback_router)
     install_metrics(app.state.session_factory)
