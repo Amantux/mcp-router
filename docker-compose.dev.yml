@@ -1,0 +1,9 @@
+# Dev/test-only override: publish the db on the loopback port the test suite
+# expects (tests/conftest.py defaults to localhost:5434). Never use in prod —
+# the base compose file deliberately keeps the database off the host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+services:
+  db:
+    ports:
+      - "127.0.0.1:5434:5432"

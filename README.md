@@ -139,7 +139,7 @@ Non-root image, internal-only Postgres, `scripts/smoke.sh` end-to-end check; fla
 ## Quickstart
 
 ```bash
-docker compose up -d db                     # pgvector on :5434
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db  # dev-only: pgvector on 127.0.0.1:5434
 uv venv --python 3.12 .venv
 uv pip install -e '.[dev]'                  # zero-ML core
 # optional, for real embeddings + Laya:

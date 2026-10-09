@@ -14,7 +14,8 @@
   py.sdk.modelcontextprotocol.io/v2/migration). Server apps:
   `streamable_http_app()`; client: `mcp.client.stdio.stdio_client`,
   `mcp.client.streamable_http`, `ClientSession.initialize/list_tools/call_tool`.
-- Postgres+pgvector via `docker compose up -d db` (host port 5434). Tests use
+- Postgres+pgvector via `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db`
+  (dev override publishes 127.0.0.1:5434; base compose has no host port). Tests use
   MCPR_DATABASE_URL; integration tests REQUIRE the db container.
 - No GPU on this dev box. CUDA/FP16 paths are written device-agnostic and
   validated on the target laptop later (bench/ harness). Never skip writing

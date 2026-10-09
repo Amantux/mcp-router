@@ -27,6 +27,17 @@ if `MCPR_DATABASE_URL` is missing, if `/data`, `/srv/skills-cache` or
 `/srv/models-cache` is not writable (chown bind mounts to 1000:1000), or if
 Postgres is unreachable after the bounded wait.
 
+## Development database (dev only)
+
+The base `docker-compose.yml` publishes no database port. For the test suite
+(which expects `localhost:5434`), add the dev override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+```
+
+Never include `docker-compose.dev.yml` in a production deployment.
+
 ## Flavors
 - **Inference (CPU):** `docker build -t mcp-router:local .` then
   `docker compose -f docker-compose.yml -f docker-compose.inference.yml up -d --build`

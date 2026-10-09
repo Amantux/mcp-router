@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcprouter}
       POSTGRES_DB: ${POSTGRES_DB:-mcprouter}
     # No host port: the database is reachable only on the compose network.
-    # The test suite's DB on :5434 is a separate, dev-only container.
+    # Tests: add docker-compose.dev.yml to publish 127.0.0.1:5434 (dev only).
     volumes:
       - mcpr-pgdata:/var/lib/postgresql/data
     healthcheck:

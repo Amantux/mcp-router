@@ -1,6 +1,6 @@
 """Shared fixtures. Integration tests need the compose db:
 
-    docker compose up -d db
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
 
 Unit tests that don't touch the DB must not require it.
 """
