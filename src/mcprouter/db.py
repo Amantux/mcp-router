@@ -37,6 +37,12 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
     "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_servers INTEGER",
     # Wave-2 analytics: execution -> routing-decision attribution.
     "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS route_request_id VARCHAR(36)",
+    # Wave 4 (skills): kind-awareness on shared tables.
+    "ALTER TABLE agent_principals ADD COLUMN IF NOT EXISTS max_skills INTEGER DEFAULT 3",
+    "ALTER TABLE policy_rules ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS resource_kind VARCHAR(8) DEFAULT 'tool'",
+    "ALTER TABLE execution_records ADD COLUMN IF NOT EXISTS skill_id VARCHAR(36)",
+    "CREATE INDEX IF NOT EXISTS ix_execution_records_skill_id ON execution_records (skill_id)",
     "CREATE INDEX IF NOT EXISTS ix_execution_records_route_request_id"
     " ON execution_records (route_request_id)",
     # Wave-2 integration: structured provenance of admin-impersonated attempts.
