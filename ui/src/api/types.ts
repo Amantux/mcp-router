@@ -565,3 +565,88 @@ export interface AnalyticsSuggestions {
   staleTools: StaleTool[];
   neverRoutedServers: NeverRoutedServer[];
 }
+
+// ------------------------------------------------------------ wave 4: skills
+// CONTRACT: shapes guessed from docs/skills-plan.md; backend notes for wave 4 were not yet
+// published when this was written. Every field the UI does not strictly need is optional.
+export type SkillSourceKind = "directory" | "git";
+export interface SkillSource {
+  id: string;
+  name: string;
+  kind: SkillSourceKind;
+  location: string;
+  gitRef?: string | null;
+  enabled: boolean;
+  status?: string | null;
+  lastSyncedAt?: string | null;
+  lastCommit?: string | null;
+  skillCount?: number | null;
+}
+export interface CreateSkillSourceRequest {
+  name: string;
+  kind: SkillSourceKind;
+  location: string;
+  gitRef?: string;
+}
+export interface SyncSkipped {
+  path: string;
+  reason: string;
+}
+export interface SyncReport {
+  added: number;
+  changed: number;
+  removed: number;
+  skipped: SyncSkipped[];
+}
+/** Ingest flags the backend attaches; unknown strings are rendered verbatim. */
+export type SkillIngestFlag = "secret_like" | "body_truncated" | "oversize" | (string & {});
+export interface Skill {
+  id: string;
+  sourceId: string;
+  sourceName?: string | null;
+  name: string;
+  description: string;
+  operation: Operation;
+  domain?: string | null;
+  tags?: string[];
+  hasScripts?: boolean;
+  bodyTokensEst?: number | null;
+  version?: string | null;
+  enabled: boolean;
+  available?: boolean;
+  classificationReviewed?: boolean;
+  ingestFlags?: SkillIngestFlag[];
+  activationCount?: number | null;
+}
+export interface SkillResource {
+  path: string;
+  size: number;
+  sha256?: string;
+  kind: string;
+  oversize?: boolean;
+}
+export interface SkillVersion {
+  version?: string | null;
+  contentHash?: string | null;
+  createdAt?: string | null;
+}
+export interface SkillDetail extends Skill {
+  license?: string | null;
+  compatibility?: string | null;
+  metadata?: Record<string, unknown> | null;
+  allowedTools?: string[] | null;
+  resourceManifest?: SkillResource[];
+  versions?: SkillVersion[];
+}
+export interface SkillQuery {
+  q?: string;
+  domain?: string;
+  operation?: Operation | "";
+  sourceId?: string;
+  enabled?: boolean;
+  available?: boolean;
+  reviewed?: boolean;
+  hasScripts?: boolean;
+  limit: number;
+  offset: number;
+}

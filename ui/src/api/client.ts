@@ -12,6 +12,7 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
+  CreateSkillSourceRequest, Skill, SkillDetail, SkillQuery, SkillSource, SyncReport,
   Approval,
   ApprovalDecision,
   ApprovalStatus,
@@ -610,4 +611,57 @@ export async function listAgentProfiles(window: AnalyticsWindow, signal?: AbortS
 /** Wasted exposure + staleness; thresholds left at the backend defaults. */
 export function getAnalyticsSuggestions(window: AnalyticsWindow, signal?: AbortSignal): Promise<AnalyticsSuggestions> {
   return request("GET", `${ANALYTICS}/suggestions`, { signal, query: { window } });
+}
+
+// ------------------------------------------------------------ wave 4: skills
+// CONTRACT: REST surface per docs/skills-plan.md (no backend integration notes yet).
+
+export async function listSkillSources(signal?: AbortSignal): Promise<SkillSource[]> {
+  return toList<SkillSource>(await request("GET", `${API_BASE}/skill-sources`, { signal }));
+}
+export function createSkillSource(body: CreateSkillSourceRequest): Promise<SkillSource> {
+  return request("POST", `${API_BASE}/skill-sources`, { body });
+}
+// CONTRACT: POST /skill-sources/{id}/sync -> {added, changed, removed, skipped[{path, reason}]}.
+export async function syncSkillSource(id: string): Promise<SyncReport> {
+  const r = (await request<Partial<SyncReport>>("POST", `${API_BASE}/skill-sources/${encodeURIComponent(id)}/sync`)) ?? {};
+  return { added: r.added ?? 0, changed: r.changed ?? 0, removed: r.removed ?? 0, skipped: r.skipped ?? [] };
+}
+// CONTRACT: PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
+export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
+  return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
+}
+// CONTRACT: query params q, domain, operation, sourceId, enabled, available, reviewed, hasScripts, limit, offset.
+export async function listSkills(q: SkillQuery, signal?: AbortSignal): Promise<Page<Skill>> {
+  const raw = await request<unknown>("GET", `${API_BASE}/skills`, {
+    signal,
+    query: { q: q.q, domain: q.domain, operation: q.operation, sourceId: q.sourceId, enabled: q.enabled, available: q.available, reviewed: q.reviewed, hasScripts: q.hasScripts, limit: q.limit, offset: q.offset },
+  });
+  return toPage<Skill>(raw, q.limit, q.offset);
+}
+export function getSkill(id: string, signal?: AbortSignal): Promise<SkillDetail> {
+  return request("GET", `${API_BASE}/skills/${encodeURIComponent(id)}`, { signal });
+}
+
+/** Non-JSON GET (text body, zip bundle): same credential/headers/error rules as request(). */
+async function requestRaw(path: string, query?: Record<string, QueryValue>, signal?: AbortSignal): Promise<Response> {
+  const presented: Identity = "admin";
+  let res: Response;
+  try {
+    res = await fetch(buildUrl(path, query), { method: "GET", headers: buildHeaders(false, "admin"), credentials: "omit", signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ApiError(0, path, presented);
+  }
+  noteResponse(presented, res.status);
+  if (!res.ok) throw new ApiError(res.status, path, presented);
+  return res;
+}
+// CONTRACT: GET /skills/{id}/body -> text/plain (or text/markdown). Rendered as plain text only.
+export async function getSkillBody(id: string, signal?: AbortSignal): Promise<string> {
+  return (await requestRaw(`${API_BASE}/skills/${encodeURIComponent(id)}/body`, undefined, signal)).text();
+}
+// CONTRACT: GET /skills/bundle?agentId= -> application/zip.
+export async function downloadSkillBundle(agentId: string): Promise<Blob> {
+  return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
 }
