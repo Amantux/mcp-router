@@ -66,6 +66,40 @@ def test_synthetic_v1_baseline(db: sessionmaker[Session], settings: object, back
     assert all(o.no_match and not o.returned for o in outcomes if o.case.kinds == ("skill",))
 
 
+@pytest.mark.parametrize("backend", ["fallback", "flat-scripted"])
+def test_synthetic_v1_baseline_with_skills(
+    db: sessionmaker[Session], settings: object, backend: str
+) -> None:
+    """Same deterministic pipeline, tools AND skills seeded: skills/mixed
+    quality is REPORTED; skill exposure past policy is asserted zero."""
+    from mcprouter.eval.synthetic_catalog import seed_synthetic_skills
+
+    emb = FakeHashEmbedder()
+    with db() as s:
+        seed_synthetic_catalog(s, emb)
+        seed_synthetic_skills(s, emb)
+        s.commit()
+    model = ExplodingDecisionModel() if backend == "fallback" else ScriptedDecisionModel()
+    pipeline = RoutePipeline(db, HybridRetriever(db, emb), model, settings)  # type: ignore[arg-type]
+    outcomes = run_cases(
+        pipeline,
+        load_named("synthetic_v1"),
+        session_factory=db,
+        scope_resolver=synthetic_scope_resolver(db),
+    )
+    m = compute_metrics(outcomes)
+    print(
+        f"\n[synthetic_v1+skills / {backend}] "
+        + json.dumps({k: m[k] for k in ("skills", "mixed")}, indent=1, sort_keys=True)
+        + f" tools.top1_accuracy={m['top1_accuracy']}"
+    )
+    assert m["errored_cases"] == []
+    assert m["case_count"] >= 60
+    assert m["unauthorized_exposures"] == 0
+    assert m["unavailable_exposures"] == 0
+    assert m["skills"]["unauthorized_skill_exposures"] == 0
+
+
 def test_synthetic_skills_fixture_seeds_ground_truth(db: sessionmaker[Session]) -> None:
     """Wave-4 skills fixture: deterministic ids, reviewed ground-truth
     classification that the rule classifier agrees with, required hazards."""
