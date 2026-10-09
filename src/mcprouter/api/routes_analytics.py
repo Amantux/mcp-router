@@ -24,7 +24,7 @@ from mcprouter.analytics import service
 from mcprouter.analytics.economy import SavingsBasis
 from mcprouter.analytics.metrics import install_metrics
 from mcprouter.analytics.rollup import RollupNotAllowed
-from mcprouter.analytics.staleness import DEFAULT_STALE_DAYS
+from mcprouter.analytics.staleness import DEFAULT_STALE_DAYS, StalenessTimeout
 from mcprouter.analytics.window import (
     DEFAULT_WINDOW,
     WINDOW_PATTERN,
@@ -134,13 +134,16 @@ def suggestions(
     max_selection_rate: Annotated[float, Query(alias="maxSelectionRate", ge=0.0, le=1.0)] = 0.05,
     stale_days: Annotated[int, Query(alias="staleDays", ge=1, le=365)] = DEFAULT_STALE_DAYS,
 ) -> SuggestionsOut:
-    return service.suggestions(
-        session,
-        window,
-        min_surfaced=min_surfaced,
-        max_selection_rate=max_selection_rate,
-        stale_days=stale_days,
-    )
+    try:
+        return service.suggestions(
+            session,
+            window,
+            min_surfaced=min_surfaced,
+            max_selection_rate=max_selection_rate,
+            stale_days=stale_days,
+        )
+    except StalenessTimeout as exc:  # typed + curated (no SQL/DSN in the text)
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @router.post("/rollup", response_model=RollupOut)

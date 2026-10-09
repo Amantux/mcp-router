@@ -230,6 +230,22 @@ def test_suggestions_shape(env: tuple[TestClient, World]) -> None:
     }
 
 
+def test_suggestions_staleness_timeout_is_a_curated_503(
+    env: tuple[TestClient, World], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcprouter.analytics import service
+    from mcprouter.analytics.staleness import StalenessTimeout
+
+    def timed_out(*_a: object, **_kw: object) -> None:
+        raise StalenessTimeout()
+
+    monkeypatch.setattr(service, "stale_report", timed_out)
+    c, _ = env
+    r = c.get("/api/v1/analytics/suggestions", headers=H_ADMIN)
+    assert r.status_code == 503
+    assert r.json()["detail"] == str(StalenessTimeout())
+
+
 @pytest.mark.parametrize(
     "query", ["window=0d", "window=7w", "window=366d", "window=x", "sort=bogus", "limit=0"]
 )
