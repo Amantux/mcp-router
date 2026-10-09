@@ -142,6 +142,7 @@ def test_tools_table_sort_and_zero_rows(env: tuple[TestClient, World]) -> None:
     assert ids[:3] == [w.A, w.B, w.C] and ids[3] == w.D
     assert set(body["items"][0]) == {
         "toolId",
+        "kind",
         "toolName",
         "serverName",
         "enabled",

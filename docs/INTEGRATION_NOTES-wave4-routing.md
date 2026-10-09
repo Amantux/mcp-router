@@ -76,3 +76,55 @@ add a `kind` column and keep ids bare (bigger, touches every reader).
 Not done: dedup skill pairs/cross-kind + review kindA/kindB; analytics funnel/
 economy/profiles/`kind` filter/overview `skills`; 20 skill + 10 mixed synthetic
 cases + skills fixture in eval/synthetic_catalog.py.
+
+## S2f — skills in analytics (wave4/skills-analytics)
+
+Funnel ids are **kind-keyed**: a tool is its bare tool id, a skill is
+`"skill:<SkillRecord.id>"` — exactly the string the router writes into
+`RoutingDecisionRecord.selected_tool_ids`, so rank = 1-based position in that
+array for both kinds. `service.kind_of(id)` / `service.SKILL_PREFIX` are the
+one place the prefix is interpreted.
+
+- **Activation** (`funnel.ATT_CTE`, shared by funnel, position curve,
+  co-surfacing, pair evidence, profiles, rollups): an `ExecutionRecord` with
+  `resource_kind="skill"` contributes key `"skill:" || skill_id`; any other row
+  contributes its bare `tool_id`, *unless* that tool_id starts with `skill:`
+  (dropped — a tool-kind row can never forge a skill activation, and a skill
+  row never credits a bare id). The existing same-agent ownership join and
+  `outcome <> 'started'` apply unchanged; NULL `route_request_id` never counts.
+  `simulated/` decisions stay excluded via `SURF_CTE`.
+- **Rollups**: `tool_stats_daily.tool_id` (48 wide) stores `"skill:<id>"`
+  rows; rollup/live merge treats both kinds alike (tested: merged == live on a
+  mixed day; recompute is idempotent).
+- **Wire** (`ToolFunnelOut`, used by `/analytics/tools` items, `/tools/{id}`
+  `.tool`): new field `kind: "tool" | "skill"`. For skills, `toolName` = skill
+  name, `serverName` = skill **source** name, `enabled` = source `enabled`;
+  `tokens` is `null` (skill token economy not yet wired — see below).
+- **`GET /analytics/tools?kind=tool|skill|all`** (default `all`; anything else
+  422). `all` lists catalog tools + catalog skills (zero rows included) + any
+  removed id with funnel data.
+- **`GET /analytics/tools/{id}`** accepts `skill:<id>` (path max_length 42);
+  unknown skill → 404 like tools. Position curve + co-surfacing are kind-blind,
+  so skills appear in tools' co-surfaced lists (with `toolName`/`serverName`
+  resolved) and vice versa.
+- **Profiles**: per-agent `attributed`/selection counts include skill
+  activations via the shared ATT_CTE (no separate skill columns yet).
+
+**Not done in S2f (deferred):** economy (`skillMetadataTokens`,
+`skillBodyTokensExposed`, overview `skills{...}`), per-agent skill
+activationRate, skill staleness, `kind` on wasted-exposure suggestions,
+`mcpr_analytics_skills_{surfaced,activated}_total` counters.
+
+**Known gap (pre-existing, not introduced by S2f; reviewer finding):**
+`economy._DEC_CTE` counts a decision as complete only when every surfaced id
+is in `tool_token_map`. Skill ids never are, so any decision that surfaces a
+skill drops out of the context economy and is counted in
+`staleRefDecisions`. On mixed traffic the economy undercounts and shows false
+drift until the economy item treats `skill:` ids as known.
+
+**Rollup backfill:** days rolled up before this change keep skill
+`selected=0`. Recompute them (`POST /analytics/rollup`) to pick up skill
+activations.
+
+**Metrics:** `mcpr_analytics_tools_{selected,succeeded}` now include skill
+activations, as `surfaced` already did. Their help text still says "Tool".

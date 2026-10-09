@@ -37,7 +37,7 @@ from mcprouter.analytics.wire import (
     WastedOut,
     WindowOut,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, SkillRecord, SkillSourceRecord
 
 SortKey = Literal[
     "surfaced",
@@ -89,8 +89,20 @@ def _curve_out(points: list[fn.RankPoint]) -> list[RankPointOut]:
     ]
 
 
+SKILL_PREFIX = "skill:"
+Kind = Literal["tool", "skill", "all"]
+
+
+def kind_of(tid: str) -> Literal["tool", "skill"]:
+    """Funnel ids are kind-keyed: "skill:<skill id>" vs a bare tool id."""
+    return "skill" if tid.startswith(SKILL_PREFIX) else "tool"
+
+
 def _meta(session: Session) -> dict[str, _Meta]:
-    return {
+    """Catalog metadata keyed by funnel id. Skills resolve name from
+    SkillRecord and "server" from their SkillSourceRecord; enabled is the
+    source's enabled flag (skills have no per-skill toggle)."""
+    out = {
         tid: _Meta(name, srv, enabled)
         for tid, name, srv, enabled in session.execute(
             select(
@@ -98,6 +110,13 @@ def _meta(session: Session) -> dict[str, _Meta]:
             ).join(MCPServerRecord, MCPServerRecord.id == MCPToolRecord.server_id)
         ).all()
     }
+    for sid, name, src, enabled in session.execute(
+        select(
+            SkillRecord.id, SkillRecord.name, SkillSourceRecord.name, SkillSourceRecord.enabled
+        ).join(SkillSourceRecord, SkillSourceRecord.id == SkillRecord.source_id)
+    ).all():
+        out[SKILL_PREFIX + sid] = _Meta(name, src, enabled)
+    return out
 
 
 def _tool_out(
@@ -106,6 +125,7 @@ def _tool_out(
     m = meta.get(tid)
     return ToolFunnelOut(
         tool_id=tid,
+        kind=kind_of(tid),
         tool_name=m.name if m else None,
         server_name=m.server if m else None,
         enabled=m.enabled if m else None,
@@ -183,6 +203,7 @@ def tool_table(
     descending: bool,
     limit: int,
     offset: int,
+    kind: Kind = "all",
 ) -> ToolFunnelPageOut:
     """Every catalog tool (zero rows included) plus removed tools that still
     have funnel data. None values sort LAST in either direction; ties break
@@ -193,6 +214,7 @@ def tool_table(
     rows = [
         _tool_out(tid, funnel.get(tid, fn.ToolCounts()), meta, tokens)
         for tid in sorted(set(meta) | set(funnel))
+        if kind == "all" or kind_of(tid) == kind
     ]
     present = [r for r in rows if _sort_value(r, sort) is not None]
     missing = [r for r in rows if _sort_value(r, sort) is None]

@@ -4,6 +4,7 @@ docs/INTEGRATION_NOTES-wave2-analytics.md for the UI track)."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
@@ -79,7 +80,8 @@ class OverviewOut(Wire):
 
 
 class ToolFunnelOut(Wire):
-    tool_id: str
+    tool_id: str  # tool id, or "skill:<skill id>" for a skill
+    kind: Literal["tool", "skill"]  # from the id prefix; skills: name=skill, server=source
     tool_name: str | None  # None: tool no longer in the catalog
     server_name: str | None
     enabled: bool | None
