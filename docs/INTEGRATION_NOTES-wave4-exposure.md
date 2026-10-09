@@ -95,9 +95,28 @@ Also: `routed_ids` must be derived server-side from the agent's own route, never
   TOCTOU on the FINAL component only. **Open:** an intermediate directory
   swapped to a symlink after realpath() still escapes unless the entry has a
   `sha256` (reviewer proved it). Fix: require sha256, or walk with dir fds.
-- `.html/.htm/.xhtml/.svg/.svgz/.xml` are never served as text: always an
-  `application/octet-stream` blob (mime-XSS posture).
-- If the manifest entry carries `sha256`, the bytes read must still match, else
-  `stale` ("Resource changed since the skill was indexed."). Entries without a
-  `sha256` are served unchecked (legacy/test manifests) — integrator: ingest
-  should always write it; consider requiring it once all sources re-index.
+- Active content (`.html/.htm/.xhtml/.svg/.svgz/.xml/.js/.mjs/.cjs/.jsx`) is
+  never served as text: always an `application/octet-stream` blob (mime-XSS
+  posture). `.ts/.tsx` stay `text/plain`: no browser executes TypeScript.
+- `sha256` is REQUIRED on every manifest entry: the bytes read must match it,
+  and an entry WITHOUT one is refused as `stale`. This content check is what
+  closes the directory-swap race. **Integrator: ingest MUST always write
+  `sha256`** (and re-index existing sources), or their resources are unservable.
+
+## S3c step 2 — reviewer should-fixes (closed)
+
+- A malformed manifest entry is logged and skipped (`serve.manifest_entries`),
+  not fatal for the whole skill (read, list and bundle all use it).
+- MIME: `serve.resource_mime(path, is_text)` is the ONE decision used by
+  resources/read and resources/list.
+- "escapes the skill directory" wording only for ELOOP; other open errors are
+  `unreadable`.
+- Audit outcomes: body activation = `ok` (bumps `activation_count`); resource
+  read = `read` (no bump); bundle = `ok`/detail `bundle` per included skill
+  (a bundle ships the body, so it counts as an activation).
+- `load_routed` is one joined query (skill + source) per call.
+- `bundle._build_bundle` is private (no gating). Routes MUST use
+  `SkillExposure.bundle(agent_id, routed_ids, route_request_id=None,
+  initiated_by=None) -> tuple[bytes, list[str]]` (visibility -> limiter (one
+  token per bundle) -> policy per skill, denied ones audited and omitted ->
+  audit -> bytes).

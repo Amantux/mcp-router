@@ -194,3 +194,44 @@ def test_load_routed_is_batched(db: sessionmaker[Session], tmp_path: Path) -> No
         event.remove(engine, "before_cursor_execute", on_exec)
     assert [sk.id for sk, _ in got] == [b, a]
     assert len([q for q in stmts if q.lstrip().upper().startswith("SELECT")]) <= 2
+
+
+def _zip_names(data: bytes) -> set[str]:
+    import io
+    import zipfile
+
+    return set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+
+
+def test_bundle_is_gated_and_audited(db: sessionmaker[Session], tmp_path: Path) -> None:
+    a, b = _seed(db, tmp_path)
+    data, skipped = _exp(db, FakePolicy()).bundle("agent-a", [a])
+    names = _zip_names(data)
+    assert "pdf-tools/SKILL.md" in names and "pdf-tools/guide.md" in names
+    assert not any(n.startswith("other-skill/") for n in names)  # visibility
+    assert skipped == []
+    assert [(r.skill_id, r.outcome, r.detail) for r in _rows(db)] == [(a, "ok", "bundle")]
+
+
+def test_bundle_unrouted_is_not_found(db: sessionmaker[Session], tmp_path: Path) -> None:
+    _seed(db, tmp_path)
+    with pytest.raises(SkillAccessError) as ei:
+        _exp(db, FakePolicy()).bundle("agent-a", [])
+    assert ei.value.code == "not_found"
+
+
+def test_bundle_policy_denied(db: sessionmaker[Session], tmp_path: Path) -> None:
+    a, _ = _seed(db, tmp_path)
+    with pytest.raises(SkillAccessError) as ei:
+        _exp(db, FakePolicy(allow=False)).bundle("agent-a", [a])
+    assert ei.value.code == "denied"
+    assert [r.outcome for r in _rows(db)] == ["denied"]
+
+
+def test_bundle_rate_limited(db: sessionmaker[Session], tmp_path: Path) -> None:
+    a, _ = _seed(db, tmp_path)
+    exp = _exp(db, FakePolicy(), limit=1)
+    exp.bundle("agent-a", [a])
+    with pytest.raises(SkillAccessError) as ei:
+        exp.bundle("agent-a", [a])
+    assert ei.value.code == "rate_limited"

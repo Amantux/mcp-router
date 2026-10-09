@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, joinedload, sessionmaker
 from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.models import SkillRecord, SkillSourceRecord
+from mcprouter.skills.bundle import BundleError, _build_bundle
 from mcprouter.skills.serve import (
     ResourceContent,
     SkillFiles,
@@ -237,3 +238,58 @@ class SkillExposure:
             agent_id, sk.id, "read", f"resource: {content.path}", route_request_id, initiated_by
         )
         return content
+
+    def bundle(
+        self,
+        agent_id: str,
+        routed_ids: Iterable[str],
+        route_request_id: str | None = None,
+        initiated_by: str | None = None,
+    ) -> tuple[bytes, list[str]]:
+        """Zip of the caller's routed skills: visibility -> limiter (one token per
+        bundle) -> policy per skill (denied ones are audited and left out) ->
+        one audit row (outcome "ok", detail "bundle") per included skill ->
+        bytes. Returns (zip bytes, skipped resource paths)."""
+        routed = self.load_routed(routed_ids)  # 1. visibility
+        if not routed:
+            raise SkillAccessError("not_found", "No skills are routed to this agent.")
+        if not self._limiter.try_acquire(f"skill:{agent_id}"):  # 2. rate limit
+            for sk, _ in routed:
+                self._manager.record_skill_activation(
+                    agent_id,
+                    sk.id,
+                    "rate_limited",
+                    "bundle: rate limited",
+                    route_request_id,
+                    initiated_by,
+                )
+            raise SkillAccessError("rate_limited", "Too many skill activations; retry later.")
+        allowed = []
+        for sk, src in routed:  # 3. policy re-check
+            ok, reason = self._policy.check(agent_id, sk, src)
+            if ok:
+                allowed.append((sk, SkillFiles(source_root(src, self._cache_dir), self._res_max)))
+            else:
+                self._manager.record_skill_activation(
+                    agent_id,
+                    sk.id,
+                    "denied",
+                    f"bundle policy: {reason}",
+                    route_request_id,
+                    initiated_by,
+                )
+        if not allowed:
+            raise SkillAccessError("denied", "Skill activation denied by policy.")
+        try:
+            data, skipped = _build_bundle(allowed)
+        except BundleError as exc:
+            raise SkillAccessError(exc.code, exc.message) from None
+        except Exception as exc:  # noqa: BLE001 -- curated: class name only
+            raise self._internal(
+                agent_id, allowed[0][0].id, exc, route_request_id, initiated_by
+            ) from None
+        for sk, _ in allowed:  # 4. audit before the bytes leave
+            self._manager.record_skill_activation(
+                agent_id, sk.id, "ok", "bundle", route_request_id, initiated_by
+            )
+        return data, skipped

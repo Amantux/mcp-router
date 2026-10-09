@@ -1,7 +1,11 @@
 """Bundle export (wave-4 S3): a zip of an agent's routed skills in spec layout
 (`<name>/SKILL.md` + manifest files) for clients that only read
 `~/.claude/skills`. All entry names are normalized relative paths (no zip-slip);
-hard caps on skill count, per-file size and total size."""
+hard caps on skill count, per-file size and total size.
+
+``_build_bundle`` is PRIVATE: it performs no visibility, rate-limit, policy or
+audit step. Routes must call ``SkillExposure.bundle`` (gateway/skills.py), which
+wraps it behind visibility -> limiter -> policy -> audit."""
 
 from __future__ import annotations
 
@@ -11,7 +15,12 @@ import zipfile
 from collections.abc import Sequence
 
 from mcprouter.models import SkillRecord
-from mcprouter.skills.serve import SkillFiles, SkillServeError, normalize_relpath
+from mcprouter.skills.serve import (
+    SkillFiles,
+    SkillServeError,
+    manifest_entries,
+    normalize_relpath,
+)
 
 MAX_BUNDLE_SKILLS = 50
 MAX_BUNDLE_BYTES = 50 * 1024 * 1024
@@ -43,7 +52,7 @@ def render_skill_md(skill: SkillRecord) -> str:
     return f"---\n{head}\n---\n{skill.body or ''}"
 
 
-def build_bundle(
+def _build_bundle(
     items: Sequence[tuple[SkillRecord, SkillFiles]],
     *,
     max_skills: int = MAX_BUNDLE_SKILLS,
@@ -79,8 +88,7 @@ def build_bundle(
                 raise BundleError("invalid_name", "Skill names must be unique single segments.")
             names.append(top)
             add(zf, f"{top}/SKILL.md", render_skill_md(skill).encode("utf-8"))
-            for entry in skill.resource_manifest or []:
-                path = str(entry.get("path", ""))
+            for path in manifest_entries(skill):  # malformed entries skipped
                 try:
                     rc = files.read_resource(skill, path)
                 except SkillServeError:
