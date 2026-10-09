@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import replace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -66,7 +67,7 @@ def _url(path: str) -> str:
 def _call(c: TestClient, r: RouteInfo, token: str | None) -> int:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     body = VALID_BODY.get((r.method, r.path), {})
-    kwargs = {"json": body} if r.method in {"POST", "PUT", "PATCH"} else {}
+    kwargs: dict[str, Any] = {"json": body} if r.method in {"POST", "PUT", "PATCH"} else {}
     return c.request(r.method, _url(r.path), headers=headers, **kwargs).status_code
 
 

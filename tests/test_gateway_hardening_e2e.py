@@ -69,7 +69,7 @@ async def test_uncaught_handler_error_is_curated_on_the_wire(
 
 
 # ------------------------------------------------ P-304 per-agent session cap
-INIT = {
+INIT: dict[str, Any] = {
     "jsonrpc": "2.0",
     "id": 1,
     "method": "initialize",

@@ -58,7 +58,10 @@ def test_malformed_hop_over_real_http_is_never_500(backend: dict[str, str], expe
             app.state.decision_model = _Spy()
         got = {
             hop[:8]: http.post(
-                PATH, json=BODY, headers={**AUTH, "X-MCPR-Decision-Hop": hop}
+                PATH,
+                json=BODY,
+                headers=[(k.encode(), v.encode()) for k, v in AUTH.items()]
+                + [(b"X-MCPR-Decision-Hop", hop)],
             ).status_code
             for hop in MALFORMED_HOPS
         }

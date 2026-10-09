@@ -73,7 +73,8 @@ def _diff(eng: Engine) -> list[object]:
                 "include_object": migrate.include_object,
             },
         )
-        return list(compare_metadata(ctx, list(ALL_METADATA)))
+        # alembic accepts a sequence of MetaData at runtime; its stub says one.
+        return list(compare_metadata(ctx, list(ALL_METADATA)))  # type: ignore[arg-type]
 
 
 def _revision(eng: Engine) -> str | None:

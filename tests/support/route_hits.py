@@ -57,7 +57,11 @@ def _templates(app: FastAPI) -> list[tuple[re.Pattern[str], frozenset[str], str]
     if cached is None:
         cached = []
         for ctx in iter_route_contexts(app.routes):
-            if isinstance(ctx.original_route, APIRoute) and ctx.path_regex is not None:
+            if (
+                isinstance(ctx.original_route, APIRoute)
+                and ctx.path_regex is not None
+                and ctx.path is not None
+            ):
                 path = _CONVERTOR.sub(r"{\1}", ctx.path)
                 cached.append((ctx.path_regex, frozenset(ctx.methods or ()), path))
         _TEMPLATES[app] = cached

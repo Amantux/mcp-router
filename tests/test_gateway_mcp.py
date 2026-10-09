@@ -204,7 +204,7 @@ async def test_pending_approval_is_reported_not_executed(world: dict[str, Any]) 
         _ctx(gw, cat, "alice"),
         types.CallToolRequestParams(name="github.list_issues", arguments={"repo": "a/b"}),
     )
-    assert res.is_error is True and "Approval required" in res.content[0].text  # type: ignore[union-attr]
+    assert res.is_error is True and "Approval required" in res.content[0].text
     assert inv.calls == []
 
 
@@ -220,7 +220,7 @@ async def test_find_tools_redacts_query_and_updates_exposure(world: dict[str, An
     assert res.is_error is False
     assert secret not in route.requests[-1].query
     assert route.requests[-1].agent_id == "alice"
-    text = res.content[0].text  # type: ignore[union-attr]
+    text = res.content[0].text
     assert "github.create_issue" in text and "shell.run_command" not in text
 
 
@@ -232,7 +232,7 @@ async def test_find_tools_router_failure_is_curated(world: dict[str, Any]) -> No
         types.CallToolRequestParams(name=META_TOOL, arguments={"query": "x"}),
     )
     assert res.is_error is True
-    assert "leakme" not in res.content[0].text  # type: ignore[union-attr]
+    assert "leakme" not in res.content[0].text
     assert gw.exposure.get("alice") is None
 
 
@@ -541,6 +541,6 @@ async def test_schema_violating_meta_args_are_refused_without_side_effect(
         _ctx(gw, world["cat"], "alice"), types.CallToolRequestParams(name=tool, arguments=args)
     )
     assert res.is_error is True
-    assert res.content[0].text.startswith("Refused: invalid arguments")  # type: ignore[union-attr]
+    assert res.content[0].text.startswith("Refused: invalid arguments")
     assert world["route"].requests == []
-    assert "x" * 50 not in res.content[0].text  # type: ignore[union-attr]  # values never echoed
+    assert "x" * 50 not in res.content[0].text  # values never echoed

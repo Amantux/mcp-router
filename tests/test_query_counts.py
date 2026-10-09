@@ -222,7 +222,12 @@ def test_skill_ingest_refreshes_planner_statistics(
 
     calls: list[object] = []
     real = ingest.analyze_skills
-    monkeypatch.setattr(ingest, "analyze_skills", lambda s: (calls.append(s), real(s)))
+
+    def counting(s: Any) -> Any:
+        calls.append(s)
+        return real(s)
+
+    monkeypatch.setattr(ingest, "analyze_skills", counting)
     d = tmp_path / "alpha"
     d.mkdir()
     (d / "SKILL.md").write_text("---\nname: alpha\ndescription: Alpha skill\n---\nbody\n")

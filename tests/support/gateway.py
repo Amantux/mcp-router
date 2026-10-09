@@ -160,7 +160,8 @@ class WireRecorder:
         except ValueError:
             return
         if isinstance(msg, dict) and isinstance(msg.get("method"), str):
-            params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+            got = msg.get("params")
+            params: dict[str, Any] = got if isinstance(got, dict) else {}
             name = params.get("name") if msg["method"] == "tools/call" else None
             self.calls.append((era, msg["method"], name if isinstance(name, str) else None))
 

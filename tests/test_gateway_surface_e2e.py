@@ -319,7 +319,7 @@ def _notify(kind: str) -> Row:
                 with anyio.fail_after(5):
                     await got.wait()
             return
-        flags = {f"{kind}_list_changed": True}
+        flags: dict[str, Any] = {f"{kind}_list_changed": True}
         async with opened(live, era) as s, listen(s, **flags) as sub:
             await live.reroute()
             with anyio.fail_after(5):

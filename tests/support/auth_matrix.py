@@ -77,6 +77,7 @@ def api_routes(app: FastAPI) -> list[RouteInfo]:
     for ctx in iter_route_contexts(app.routes):
         if not isinstance(ctx.original_route, APIRoute) or not ctx.include_in_schema:
             continue
+        assert ctx.path is not None and ctx.endpoint is not None  # APIRoute always has both
         doc = (ctx.endpoint.__doc__ or "").strip().splitlines()
         summary = ctx.summary or (doc[0] if doc else "")
         for method in sorted((ctx.methods or set()) & _METHODS):

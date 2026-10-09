@@ -66,7 +66,8 @@ def test_extra_hosts_seam_is_empty_in_production() -> None:
         and isinstance(n.target, ast.Name)
         and n.target.id == "_EXTRA_HOSTS"
     ]
-    assert len(seam) == 1 and ast.unparse(seam[0].value) == "frozenset()"
+    assert len(seam) == 1 and seam[0].value is not None
+    assert ast.unparse(seam[0].value) == "frozenset()"
 
 
 def test_websocket_with_foreign_host_closed(client: TestClient) -> None:
@@ -103,7 +104,7 @@ def test_missing_host_header_refused() -> None:
     async def receive() -> dict[str, object]:  # pragma: no cover
         return {"type": "http.request"}
 
-    guard = hardening.HostGuard(app, hardening.LOOPBACK_HOSTNAMES)  # type: ignore[arg-type]
+    guard = hardening.HostGuard(app, hardening.LOOPBACK_HOSTNAMES)
     scope = {"type": "http", "path": "/healthz", "headers": []}
     anyio.run(guard, scope, receive, send)  # type: ignore[arg-type]
     assert sent[0]["status"] == 421

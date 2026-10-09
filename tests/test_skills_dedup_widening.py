@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from mcprouter import models
-from mcprouter.db import _ADDITIVE_COLUMNS
+from mcprouter.migrations.legacy_bridge import _ADDITIVE_COLUMNS
 
 SKILL_REF_LEN = len("skill:") + 36
 
