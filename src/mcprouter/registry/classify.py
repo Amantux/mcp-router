@@ -189,3 +189,94 @@ class RuleBasedClassifier:
             return None
         evidence.append(f"domain keywords -> {ranked[0][0]} ({ranked[0][1]} hits)")
         return ranked[0][0]
+
+
+# ------------------------------------------------------------------ skills
+# Agent Skills risk class on the same read < write < execute scale
+# (docs/skills-plan.md "Risk class"). Conservative like the tool classifier.
+SKILL_BODY_PREFIX_CHARS = 2048
+_SKILL_EXEC_TOOL = re.compile(r"(?i)\b(bash|sh|zsh|shell|exec\w*|run\w*|terminal|command)\b")
+_SKILL_WRITE_VERBS = _inflect({"send", "write", "create", "delete", "deploy"})
+# Execute-shaped prose without scripts/allowed-tools to back it: the body tells
+# the agent to run things we cannot see -> refuse to guess (unknown).
+_SKILL_EXEC_PROSE = _inflect({"run", "execute", "exec", "bash", "shell", "terminal"})
+
+
+def classify_skill(
+    name: str,
+    description: str,
+    body: str,
+    *,
+    has_scripts: bool,
+    allowed_tools: list[str],
+) -> Classification:
+    """Risk class + domain for one skill. Pure function of its fields.
+
+    1. ships `scripts/` OR `allowed-tools` pre-approves a Bash/exec/run/shell
+       shaped tool -> execute (strictest signal wins outright);
+    2. body prefix tells the agent to run/execute commands but nothing above
+       backs it -> unknown (conflicting/undeterminable; policy treats as execute);
+    3. a write verb (send/write/create/delete/deploy) in description or body
+       prefix -> write;
+    4. otherwise -> read (guidance-only).
+    Domain reuses the tool keyword tables over name + description + body prefix.
+    """
+    evidence: list[str] = []
+    prefix = body[:SKILL_BODY_PREFIX_CHARS]
+    exec_tools = sorted(t for t in allowed_tools if _SKILL_EXEC_TOOL.search(t))
+    if has_scripts or exec_tools:
+        why = "ships scripts/" if has_scripts else f"allowed-tools {exec_tools[0]!r}"
+        evidence.append(f"{why} -> execute")
+        operation = "execute"
+    else:
+        words = set(_words(description)) | set(_words(prefix))
+        prose_exec = sorted(words & _SKILL_EXEC_PROSE)
+        writes = sorted(words & _SKILL_WRITE_VERBS)
+        if prose_exec:
+            evidence.append(f"body mentions {prose_exec[0]!r} without scripts/tools -> unknown")
+            operation = "unknown"
+        elif writes:
+            evidence.append(f"verb {writes[0]!r} -> write")
+            operation = "write"
+        else:
+            evidence.append("guidance-only -> read")
+            operation = "read"
+    domain = RuleBasedClassifier._domain(name, f"{description} {prefix}", evidence)
+    return Classification(operation=operation, domain=domain, evidence=evidence)
+
+
+SKILL_CLASSIFIER_NAME = "skill-rules-v1"
+# unknown is the MOST restricted for the non-widening comparison.
+_SKILL_WIDENING_RANK = {"read": 0, "write": 1, "execute": 2, "unknown": 3}
+
+
+def apply_skill_classification(session: Any, skill_id: str, c: Classification) -> bool:
+    """Write an AUTOMATIC skill classification. Returns False (no change) when
+    a human reviewed the skill, or when the write would WIDEN a previously
+    auto-classified risk class (re-classification may only move toward
+    execute/unknown). A skill never auto-classified (`classification_source`
+    NULL) takes any value. Both guards live in the UPDATE's WHERE clause so a
+    concurrent human review still wins.
+    """
+    from sqlalchemy import or_, update
+
+    from mcprouter.models import SkillRecord
+
+    if c.operation not in OPERATIONS:
+        raise ValueError("operation must be one of read, write, execute, unknown.")
+    rank = _SKILL_WIDENING_RANK[c.operation]
+    not_wider = [op for op, r in _SKILL_WIDENING_RANK.items() if r <= rank]
+    stmt = (
+        update(SkillRecord)
+        .where(
+            SkillRecord.id == skill_id,
+            SkillRecord.classification_reviewed.is_(False),
+            or_(
+                SkillRecord.classification_source.is_(None),
+                SkillRecord.operation.in_(not_wider),
+            ),
+        )
+        .values(operation=c.operation, domain=c.domain, classification_source=SKILL_CLASSIFIER_NAME)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(session.execute(stmt).rowcount == 1)
