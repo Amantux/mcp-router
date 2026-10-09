@@ -11,7 +11,7 @@ Prints `is_release=true|false` and `version=<pyproject version>` (the image's
 APP_VERSION build arg) for $GITHUB_OUTPUT. is_release is true only for a plain
 `vX.Y.Z` tag that is also the highest plain tag in the repo (`git tag -l`), so
 `:latest` never moves backwards.
-The CI-green and ancestor-of-master checks need git/gh and live in the workflow.
+The CI-green and ancestor-of-default-branch checks need git/gh and live in the workflow.
 """
 
 from __future__ import annotations

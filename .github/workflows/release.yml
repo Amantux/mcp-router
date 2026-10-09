@@ -41,19 +41,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: SHA is an ancestor of origin/master
+      - name: SHA is an ancestor of the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/master \
-            || { echo "::error::$GITHUB_SHA is not on origin/master"; exit 1; }
-      # Waits (bounded, 30 min) when master and the tag were pushed together and
+          git merge-base --is-ancestor "$GITHUB_SHA" "origin/$DEFAULT_BRANCH" \
+            || { echo "::error::$GITHUB_SHA is not on origin/$DEFAULT_BRANCH"; exit 1; }
+      # Waits (bounded, 30 min) when the default branch and the tag were pushed together and
       # CI is still running; fails as soon as every CI run for the SHA is done
       # and none succeeded.
-      - name: A green CI push run exists for this SHA on master
+      - name: A green CI push run exists for this SHA on the default branch
         env:
           GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           for _ in $(seq 1 60); do
-            runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&branch=master" \
+            runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&branch=${DEFAULT_BRANCH}" \
               --jq '[.workflow_runs[] | {s: .status, c: .conclusion}]')
             green=$(jq '[.[] | select(.s == "completed" and .c == "success")] | length' <<<"$runs")
             total=$(jq 'length' <<<"$runs")
@@ -61,11 +64,11 @@ jobs:
             echo "CI runs for $GITHUB_SHA: total=$total green=$green pending=$pending"
             if [ "$green" -ge 1 ]; then exit 0; fi
             if [ "$total" -ge 1 ] && [ "$pending" -eq 0 ]; then
-              echo "::error::every CI run on master for $GITHUB_SHA finished and none succeeded"; exit 1
+              echo "::error::every CI run on $DEFAULT_BRANCH for $GITHUB_SHA finished and none succeeded"; exit 1
             fi
             sleep 30
           done
-          echo "::error::no green CI run on master for $GITHUB_SHA within 30 min"; exit 1
+          echo "::error::no green CI run on $DEFAULT_BRANCH for $GITHUB_SHA within 30 min"; exit 1
       - name: Tag matches pyproject version and CHANGELOG; newest plain tag moves latest
         id: local
         env:
