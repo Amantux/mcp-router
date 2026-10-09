@@ -83,7 +83,10 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "positionCurve",
         "catalogDrift",
         "skills",
+        "measured",
+        "feedback",
     }
+    assert set(body["feedback"]) == {"items", "helpfulRate", "coverage"}
     assert set(body["window"]) == {"label", "start", "end"} and body["window"]["label"] == "7d"
     assert set(body["contextEconomy"]) == {
         "servedDecisions",
@@ -100,6 +103,10 @@ def test_overview_wire_shape(env: tuple[TestClient, World]) -> None:
         "skillBodyTokensNotSent",
         "estimator",
         "catalogBasis",
+        "estimatedTimeSavedMs",
+        "estimatedCostSaved",
+        "currency",
+        "assumptions",
     }
     assert body["contextEconomy"]["catalogTokensPerDecision"] is None  # per-agent only
     assert body["funnel"] == {
@@ -160,8 +167,12 @@ def test_tools_table_sort_and_zero_rows(env: tuple[TestClient, World]) -> None:
         "successRate",
         "avgRank",
         "exposedTokens",
+        "feedbackHelpful",
+        "feedbackUnhelpful",
+        "helpfulRate",
     }
     d = body["items"][3]
+    assert d["feedbackHelpful"] == 0 and d["helpfulRate"] is None
     assert d["surfaced"] == 0 and d["selectionRate"] is None and d["avgRank"] is None
     # None sorts last in BOTH directions
     asc = c.get("/api/v1/analytics/tools?sort=selectionRate&order=asc", headers=H_ADMIN).json()
@@ -197,6 +208,7 @@ def test_agents_shape(env: tuple[TestClient, World]) -> None:
     assert [i["agentId"] for i in items] == ["alice", "bob"]
     alice = items[0]
     assert alice["budgetTools"] is None and alice["budgetUtilization"] is None
+    assert alice["feedbackItems"] == 0 and alice["helpfulRate"] is None
     assert alice["contextEconomy"]["catalogTokensPerDecision"] > 0
     assert set(alice) >= {
         "noMatchRate",
@@ -218,6 +230,7 @@ def test_suggestions_shape(env: tuple[TestClient, World]) -> None:
     assert r.status_code == 200
     body = r.json()
     assert [x["toolId"] for x in body["wastedExposure"]] == [w.A]
+    assert body["wastedExposure"][0]["unhelpful"] == 0
     assert set(body) == {
         "window",
         "minSurfaced",

@@ -9,9 +9,21 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from mcprouter.analytics import feedback_stats as fbs
 from mcprouter.analytics import funnel as fn
-from mcprouter.analytics.economy import CATALOG_BASIS, Economy, economy_by_agent, overall
-from mcprouter.analytics.profiles import catalog_drift, off_funnel_selections, profiles
+from mcprouter.analytics.economy import (
+    CATALOG_BASIS,
+    Economy,
+    SavingsBasis,
+    economy_by_agent,
+    overall,
+)
+from mcprouter.analytics.profiles import (
+    catalog_drift,
+    execution_latency,
+    off_funnel_selections,
+    profiles,
+)
 from mcprouter.analytics.rollup import default_last_day, recompute_range
 from mcprouter.analytics.staleness import stale_report
 from mcprouter.analytics.tokens import ESTIMATOR, tool_token_map
@@ -19,10 +31,13 @@ from mcprouter.analytics.window import Window, live_horizon
 from mcprouter.analytics.wire import (
     AgentPageOut,
     AgentProfileOut,
+    AssumptionsOut,
     CoSurfacedOut,
     EconomyOut,
     ExecutionsOut,
+    FeedbackOverviewOut,
     FunnelTotalsOut,
+    MeasuredOut,
     NeverRoutedServerOut,
     OverviewOut,
     RankPointOut,
@@ -68,8 +83,18 @@ def _window_out(w: Window) -> WindowOut:
     return WindowOut(label=w.label, start=w.start, end=w.end)
 
 
-def _economy_out(e: Economy, *, per_agent: bool = False) -> EconomyOut:
+def _economy_out(e: Economy, basis: SavingsBasis, *, per_agent: bool = False) -> EconomyOut:
+    configured_time = basis.prefill_ms_per_1k_tokens > 0
+    configured_cost = basis.price_per_1k_input_tokens > 0
     return EconomyOut(
+        estimated_time_saved_ms=basis.time_saved_ms(e.tokens_not_sent),
+        estimated_cost_saved=basis.cost_saved(e.tokens_not_sent),
+        currency=basis.currency if configured_cost else None,
+        assumptions=AssumptionsOut(
+            prefill_ms_per_1k_tokens=basis.prefill_ms_per_1k_tokens if configured_time else None,
+            price_per_1k_input_tokens=basis.price_per_1k_input_tokens if configured_cost else None,
+            estimator=ESTIMATOR,
+        ),
         served_decisions=e.served_decisions,
         unscored_decisions=e.unscored_decisions,
         stale_ref_decisions=e.stale_ref_decisions,
@@ -124,9 +149,14 @@ def _meta(session: Session) -> dict[str, _Meta]:
 
 
 def _tool_out(
-    tid: str, c: fn.ToolCounts, meta: dict[str, _Meta], tokens: dict[str, int]
+    tid: str,
+    c: fn.ToolCounts,
+    meta: dict[str, _Meta],
+    tokens: dict[str, int],
+    fb: fbs.FeedbackCounts | None = None,
 ) -> ToolFunnelOut:
     m = meta.get(tid)
+    fb = fb or fbs.FeedbackCounts()
     return ToolFunnelOut(
         tool_id=tid,
         kind=kind_of(tid),
@@ -142,18 +172,25 @@ def _tool_out(
         success_rate=c.success_rate,
         avg_rank=c.avg_rank,
         exposed_tokens=c.exposed_tokens,
+        feedback_helpful=fb.helpful,
+        feedback_unhelpful=fb.unhelpful,
+        helpful_rate=fb.helpful_rate,
     )
 
 
 # ------------------------------------------------------------------ overview
-def overview(session: Session, window: Window) -> OverviewOut:
+def overview(session: Session, window: Window, basis: SavingsBasis | None = None) -> OverviewOut:
+    basis = basis or SavingsBasis()
     tokens = tool_token_map(session)
     t = fn.totals(fn.merged_funnel(session, window, tokens))
     total, _ = profiles(session, window)
     econ = overall(economy_by_agent(session, window, tokens))
+    x50, x95 = execution_latency(session, window)
+    fb_by = fbs.feedback_by_target(session, window).values()
+    fb_total = fbs.FeedbackCounts(sum(f.helpful for f in fb_by), sum(f.unhelpful for f in fb_by))
     return OverviewOut(
         window=_window_out(window),
-        context_economy=_economy_out(econ),
+        context_economy=_economy_out(econ, basis),
         funnel=FunnelTotalsOut(
             surfaced=t.surfaced,
             selected=t.selected,
@@ -187,6 +224,17 @@ def overview(session: Session, window: Window) -> OverviewOut:
             body_tokens_not_sent=econ.skill_body_tokens_not_sent,
         ),
         catalog_drift=catalog_drift(session, window),
+        measured=MeasuredOut(
+            route_latency_p50_ms=total.latency_p50_ms,
+            route_latency_p95_ms=total.latency_p95_ms,
+            execution_latency_p50_ms=x50,
+            execution_latency_p95_ms=x95,
+        ),
+        feedback=FeedbackOverviewOut(
+            items=fb_total.items,
+            helpful_rate=fb_total.helpful_rate,
+            coverage=fbs.feedback_coverage(session, window),
+        ),
     )
 
 
@@ -221,8 +269,9 @@ def tool_table(
     tokens = tool_token_map(session)
     funnel = fn.merged_funnel(session, window, tokens)
     meta = _meta(session)
+    fb = fbs.feedback_by_target(session, window)
     rows = [
-        _tool_out(tid, funnel.get(tid, fn.ToolCounts()), meta, tokens)
+        _tool_out(tid, funnel.get(tid, fn.ToolCounts()), meta, tokens, fb.get(tid))
         for tid in sorted(set(meta) | set(funnel))
         if kind == "all" or kind_of(tid) == kind
     ]
@@ -252,7 +301,9 @@ def tool_detail(session: Session, window: Window, tool_id: str) -> ToolDetailOut
     co = fn.co_surfaced(session, window, tool_id)
     return ToolDetailOut(
         window=_window_out(window),
-        tool=_tool_out(tool_id, counts, meta, tokens),
+        tool=_tool_out(
+            tool_id, counts, meta, tokens, fbs.feedback_by_target(session, window).get(tool_id)
+        ),
         position_curve=_curve_out(fn.position_curve(session, window, tool_id)),
         co_surfaced=[
             CoSurfacedOut(
@@ -270,10 +321,14 @@ def tool_detail(session: Session, window: Window, tool_id: str) -> ToolDetailOut
 
 
 # -------------------------------------------------------------------- agents
-def agent_profiles(session: Session, window: Window) -> AgentPageOut:
+def agent_profiles(
+    session: Session, window: Window, basis: SavingsBasis | None = None
+) -> AgentPageOut:
+    basis = basis or SavingsBasis()
     tokens = tool_token_map(session)
     _, per_agent = profiles(session, window)
     econ = economy_by_agent(session, window, tokens)
+    fb_agent = fbs.feedback_by_agent(session, window)
     items = []
     for agent in sorted(set(per_agent) | set(econ)):
         p = per_agent.get(agent)
@@ -301,7 +356,9 @@ def agent_profiles(session: Session, window: Window) -> AgentPageOut:
                 selected=p.selected,
                 selection_rate=p.selection_rate,
                 avg_surfaced_per_decision=p.avg_surfaced_per_decision,
-                context_economy=_economy_out(econ.get(agent, Economy()), per_agent=True),
+                context_economy=_economy_out(econ.get(agent, Economy()), basis, per_agent=True),
+                feedback_items=fb_agent.get(agent, fbs.FeedbackCounts()).items,
+                helpful_rate=fb_agent.get(agent, fbs.FeedbackCounts()).helpful_rate,
             )
         )
     return AgentPageOut(window=_window_out(window), items=items)
@@ -323,6 +380,7 @@ def suggestions(
         fn.merged_funnel(session, window, tokens),
         min_surfaced=min_surfaced,
         max_selection_rate=max_selection_rate,
+        unhelpful={t: f.unhelpful for t, f in fbs.feedback_by_target(session, window).items()},
     )[:limit]
     stale, never = stale_report(session, window.end, stale_days)
     return SuggestionsOut(
@@ -340,6 +398,7 @@ def suggestions(
                 selected=w.counts.selected,
                 selection_rate=w.counts.selection_rate,
                 exposed_tokens=w.counts.exposed_tokens,
+                unhelpful=w.unhelpful,
             )
             for w in wasted
         ],

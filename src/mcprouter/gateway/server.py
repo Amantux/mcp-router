@@ -71,6 +71,7 @@ from starlette.datastructures import Headers
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from mcprouter.analytics import feedback as _fb
 from mcprouter.api.deps_auth import AuthenticationError, SecurityConfig, hash_key, resolve_principal
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
@@ -124,6 +125,43 @@ _META_TOOL_DEF = types.Tool(
         "type": "object",
         "properties": {"query": {"type": "string", "minLength": 1, "maxLength": MAX_QUERY_LEN}},
         "required": ["query"],
+        "additionalProperties": False,
+    },
+)
+
+# router.feedback: the agent tells us which surfaced tools helped. Thin wrapper
+# over analytics.feedback.record_feedback (the ONLY implementation, shared with
+# POST /api/v1/route/{id}/feedback). Listed whenever router.find_tools is, and
+# like it is appended AFTER the max_tools cap (never counts against it).
+FEEDBACK_TOOL = "router.feedback"
+_FEEDBACK_TOOL_DEF = types.Tool(
+    name=FEEDBACK_TOOL,
+    description=(
+        "Report whether tools surfaced for you were helpful. requestId defaults to your "
+        "latest routing decision. Each item names a surfaced tool or skill."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "requestId": {"type": "string", "maxLength": 36},
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 50,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "maxLength": 300},
+                        "kind": {"type": "string", "enum": ["tool", "skill"]},
+                        "helpful": {"type": "boolean"},
+                        "note": {"type": "string", "maxLength": _fb.NOTE_MAX},
+                    },
+                    "required": ["name", "helpful"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["items"],
         "additionalProperties": False,
     },
 )
@@ -323,7 +361,7 @@ class GatewayServer:
         self._lock = threading.Lock()
         self.server = _RouterMCPServer(
             "mcp-router",
-            version="0.4.0",
+            version="0.5.0",
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."
@@ -448,9 +486,9 @@ class GatewayServer:
                     and len(servers_shown) >= server_cap
                 ):
                     continue  # distinct-server budget (routing.budgets)
-                if (
-                    self._route_fn is not None
-                    and stable_tool_id(server.name, tool.name) == META_TOOL
+                if self._route_fn is not None and stable_tool_id(server.name, tool.name) in (
+                    META_TOOL,
+                    FEEDBACK_TOOL,
                 ):
                     continue  # never shadow / duplicate the meta tool's name
                 # Defense in depth: route results are NEVER shown unfiltered.
@@ -480,7 +518,7 @@ class GatewayServer:
                 )
             )
         if self._route_fn is not None:
-            tools.append(_META_TOOL_DEF)
+            tools += [_META_TOOL_DEF, _FEEDBACK_TOOL_DEF]
         return tools
 
     def _resolve_stable_id(self, name: str) -> str | None:
@@ -513,6 +551,8 @@ class GatewayServer:
         self._track_session(ctx, principal.agent_id)
         if params.name == META_TOOL and self._route_fn is not None:
             return await self._find_tools(principal, params.arguments)
+        if params.name == FEEDBACK_TOOL and self._route_fn is not None:
+            return await self._feedback(principal, params.arguments or {})
         if self._skills is not None and params.name in (
             ACTIVATE_SKILL_TOOL,
             READ_SKILL_RESOURCE_TOOL,
@@ -577,6 +617,62 @@ class GatewayServer:
         return _text("Tool list updated: " + ", ".join(names), is_error=False)
 
     # ------------------------------------------------------------ skills
+    async def _feedback(
+        self, principal: AgentPrincipal, args: dict[str, Any]
+    ) -> types.CallToolResult:
+        """requestId defaults to the agent's current exposure request id (exposure
+        is per agent, shared by its sessions). Errors are curated tool errors."""
+        rid = args.get("requestId")
+        if rid is None:
+            exposure = self.exposure.get(principal.agent_id)
+            rid = exposure.request_id if exposure is not None else None
+        raw = args.get("items")
+        if not isinstance(rid, str) or not rid:
+            return _text("No routing decision to give feedback on; pass requestId.", is_error=True)
+        if not isinstance(raw, list) or not all(
+            isinstance(i, dict) and isinstance(i.get("helpful"), bool) for i in raw
+        ):
+            return _text("items must be a list of {name, helpful, note?}.", is_error=True)
+        # Agents see tools by their stable `server.tool` name; resolve that to the
+        # tool id the decision recorded. Anything else (skills, bare names) goes
+        # through record_feedback's own name resolution.
+        ids = [
+            await anyio.to_thread.run_sync(self._resolve_stable_id, str(i.get("name", "")))
+            if i.get("kind") != "skill"
+            else None
+            for i in raw
+        ]
+        try:
+            items = [
+                _fb.FeedbackItem(
+                    id=tid,
+                    helpful=i["helpful"],
+                    kind=i.get("kind") if i.get("kind") in ("tool", "skill") else None,
+                    name=None if tid else str(i["name"])[:300],
+                    note=str(i["note"]) if isinstance(i.get("note"), str) else None,
+                )
+                for i, tid in zip(raw, ids, strict=True)
+            ]
+        except KeyError:
+            return _text("each item needs name and helpful.", is_error=True)
+
+        def write() -> int:
+            with self._factory() as s:
+                return _fb.record_feedback(
+                    s,
+                    request_id=rid,
+                    items=items,
+                    source="agent",
+                    agent_id=principal.agent_id,
+                    principal=f"agent:{principal.agent_id}",
+                )
+
+        try:
+            n = await anyio.to_thread.run_sync(write)
+        except _fb.FeedbackError as exc:  # typed, curated messages only
+            return _text(f"Feedback not recorded: {exc}", is_error=True)
+        return _text(f"Recorded feedback for {n} item(s).", is_error=False)
+
     def _routed_skills(self, agent_id: str) -> tuple[tuple[str, ...], str | None]:
         exposure = self.exposure.get(agent_id)
         with self._lock:
@@ -769,6 +865,26 @@ class GatewayServer:
                         live.pop(sid, None)
 
 
+LOCALHOST_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+
+
+def gateway_transport_security(extra_hosts: tuple[str, ...] = ()) -> TransportSecuritySettings:
+    """DNS-rebinding protection stays ON; MCPR_ALLOWED_HOSTS widens the Host/Origin
+    allowlist. A bare host admits both its portless form and any port (`host` and
+    `host:*`, with matching http/https origins); `host:port` is exact. Mirrors the
+    SDK's localhost default."""
+    hosts = list(LOCALHOST_HOSTS)
+    for h in extra_hosts:
+        # Bare host: any port AND the portless form (reverse proxy on 80/443;
+        # the SDK only matches `host:*` when the header carries a port).
+        entries = [h] if ":" in h.rsplit("]", 1)[-1] else [f"{h}:*", h]
+        hosts.extend(e for e in entries if e not in hosts)
+    origins = [f"{scheme}://{h}" for h in hosts for scheme in ("http", "https")]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
+    )
+
+
 def build_gateway(
     app: FastAPI,
     *,
@@ -794,4 +910,11 @@ def build_gateway(
     return gw
 
 
-__all__: list[str] = ["MCP_PATH", "META_TOOL", "GatewayServer", "build_gateway"]
+__all__: list[str] = [
+    "FEEDBACK_TOOL",
+    "MCP_PATH",
+    "META_TOOL",
+    "GatewayServer",
+    "build_gateway",
+    "gateway_transport_security",
+]

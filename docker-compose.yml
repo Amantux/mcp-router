@@ -1,24 +1,32 @@
+# MCP Router — zero-ML stack (hash embeddings + deterministic decisions).
+# Configure via a .env file next to this file (cp .env.example .env); every
+# ${VAR} below is read from it. See docs/deploy.md for the full table.
+# Flavors (overrides): docker-compose.inference.yml (bge + laya on CPU),
+# docker-compose.gpu.yml (NVIDIA device reservation; stack on top of inference).
 services:
   db:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: mcprouter
-      POSTGRES_PASSWORD: mcprouter
-      POSTGRES_DB: mcprouter
-    ports:
-      - "5434:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-mcprouter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mcprouter}
+      POSTGRES_DB: ${POSTGRES_DB:-mcprouter}
+    # No host port: the database is reachable only on the compose network.
+    # Tests: add docker-compose.dev.yml to publish 127.0.0.1:5434 (dev only).
     volumes:
       - mcpr-pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mcprouter"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcprouter} -d ${POSTGRES_DB:-mcprouter}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
   api:
     build: .
+    image: ${MCPR_IMAGE:-mcp-router:local}
+    restart: unless-stopped
     environment:
-      MCPR_DATABASE_URL: postgresql+psycopg://mcprouter:mcprouter@db:5432/mcprouter
+      MCPR_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mcprouter}:${POSTGRES_PASSWORD:-mcprouter}@db:5432/${POSTGRES_DB:-mcprouter}
       MCPR_AGENT_KEYS: ${MCPR_AGENT_KEYS:-}
       # Admin API credential. Unset + agent keys set => management API is
       # locked (403, fail closed); unset + no keys => dev mode (open).
@@ -26,20 +34,21 @@ services:
       MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-hash}
       MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-deterministic}
       MCPR_DEVICE: ${MCPR_DEVICE:-auto}
+      # Extra Host names /mcp accepts besides localhost (DNS-rebinding tradeoff:
+      # see docs/INSTALL.md §1). The dashboard is served at / on the same port.
+      MCPR_ALLOWED_HOSTS: ${MCPR_ALLOWED_HOSTS:-}
     ports:
-      - "8400:8400"
+      - "${MCPR_HOST_PORT:-8400}:8400"
+    volumes:
+      - mcpr-data:/data
+      - mcpr-skills-cache:/srv/skills-cache
+      - mcpr-models-cache:/srv/models-cache
     depends_on:
       db:
         condition: service_healthy
-    # GPU passthrough on the target laptop (WSL2/Docker with the NVIDIA
-    # runtime). Commented so CPU-only hosts run unchanged:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
 volumes:
   mcpr-pgdata:
+  mcpr-data:
+  mcpr-skills-cache:
+  mcpr-models-cache:

@@ -14,7 +14,9 @@ import {
   TableRow,
 } from "@fluentui/react-components";
 import { FilterDismissRegular, HistoryRegular } from "@fluentui/react-icons";
+import { Link as RouterLink } from "react-router";
 import { listExecutions } from "../api/client";
+import { FeedbackThumbs, kindOfId } from "../components/FeedbackThumbs";
 import type { ExecutionOutcome } from "../api/types";
 import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, OutcomeBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useDebounced } from "../hooks/useDebounced";
@@ -102,6 +104,7 @@ export function ExecutionsPage() {
                 <TableHeaderCell>Outcome</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Latency</TableHeaderCell>
                 <TableHeaderCell>Detail</TableHeaderCell>
+                <TableHeaderCell>Feedback</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -122,6 +125,18 @@ export function ExecutionsPage() {
                   <TableCell className={c.num}>{fmtMs(x.latencyMs)}</TableCell>
                   <TableCell>
                     <Caption1>{x.detail || "—"}</Caption1>
+                  </TableCell>
+                  <TableCell>
+                    <FeedbackThumbs
+                      routeRequestId={x.routeRequestId}
+                      target={{ kind: x.toolId ? kindOfId(x.toolId) : "tool", id: x.toolId, name: x.toolName }}
+                      label={x.toolName ?? x.toolId ?? "this execution"}
+                    />
+                    {x.routeRequestId && (
+                      <RouterLink to={`/lens?routeRequestId=${encodeURIComponent(x.routeRequestId)}&agentId=${encodeURIComponent(x.agentId)}`}>
+                        Open in lens
+                      </RouterLink>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

@@ -27,6 +27,7 @@ import { isAbort, listPrincipals, simulateAgent } from "../api/client";
 import type { BudgetClamp, SimulateRequest, SimulateResponse } from "../api/types";
 import { EmptyState, fmtMs, fmtScore, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
+import { FeedbackThumbs } from "../components/FeedbackThumbs";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 
@@ -97,7 +98,12 @@ export function ClampView({ clamp }: { clamp: BudgetClamp }) {
   );
 }
 
-export function LensResult({ result, showFiltered }: { result: SimulateResponse; showFiltered: boolean }) {
+/**
+ * `routeRequestId` (from `?routeRequestId=`, set by an Executions row's "Open in lens"
+ * link) is the REAL routing decision being rated. Thumbs render only when it is
+ * present: a plain lens run is a simulation with no decision to attach feedback to.
+ */
+export function LensResult({ result, showFiltered, routeRequestId }: { result: SimulateResponse; showFiltered: boolean; routeRequestId?: string | null }) {
   const s = useStyles();
   const c = useCommonStyles();
   const ranked = [...result.tools].sort((a, b) => b.score - a.score);
@@ -170,6 +176,7 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
                 <TableHeaderCell>Tool</TableHeaderCell>
                 <TableHeaderCell>Server</TableHeaderCell>
                 <TableHeaderCell>Score</TableHeaderCell>
+                {routeRequestId && <TableHeaderCell>Feedback</TableHeaderCell>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -188,6 +195,11 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
                       </span>
                     </div>
                   </TableCell>
+                  {routeRequestId && (
+                    <TableCell>
+                      <FeedbackThumbs routeRequestId={routeRequestId} target={{ kind: "tool", name: t.toolName }} label={t.toolName} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -211,6 +223,7 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
                 <TableHeaderCell>Source</TableHeaderCell>
                 <TableHeaderCell className={c.num}>Body tokens</TableHeaderCell>
                 <TableHeaderCell>Score</TableHeaderCell>
+                {routeRequestId && <TableHeaderCell>Feedback</TableHeaderCell>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -230,6 +243,11 @@ export function LensResult({ result, showFiltered }: { result: SimulateResponse;
                       </span>
                     </div>
                   </TableCell>
+                  {routeRequestId && (
+                    <TableCell>
+                      <FeedbackThumbs routeRequestId={routeRequestId} target={{ kind: "skill", id: k.skillId, name: k.skill }} label={k.skill} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -280,7 +298,10 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
   const s = useStyles();
   const notify = useNotify();
   const principals = useLoader("Load agents", (sig) => listPrincipals(sig), []);
-  const [agentId, setAgentId] = useState("");
+  // read once on mount; tests render the lens without a router
+  const [params] = useState(() => new URLSearchParams(window.location.search));
+  const routeRequestId = params.get("routeRequestId");
+  const [agentId, setAgentId] = useState(params.get("agentId") ?? "");
   const [query, setQuery] = useState("");
   const [maxTools, setMaxTools] = useState(8);
   const [maxServers, setMaxServers] = useState(0); // 0 = don't request a server cap
@@ -381,7 +402,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
         </form>
         <div>
           {result ? (
-            <LensResult result={result} showFiltered={showFiltered} />
+            <LensResult result={result} showFiltered={showFiltered} routeRequestId={routeRequestId} />
           ) : pending ? (
             <LoadingRow label="Simulating…" />
           ) : principals.data && list.length === 0 ? (

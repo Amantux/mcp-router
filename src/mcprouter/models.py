@@ -28,6 +28,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -383,3 +384,33 @@ class SkillVersionRecord(Base):
         String(16)
     )  # added|content|resources|metadata|removed|restored
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RouteFeedback(Base):
+    """Was a surfaced tool/skill helpful for a routing decision? FK-less like
+    attribution: route_request_id is validated as owned (agent) at write time.
+    One row per (decision, agent, target, source); a re-post upserts."""
+
+    __tablename__ = "route_feedback"
+    __table_args__ = (
+        UniqueConstraint(
+            "route_request_id",
+            "agent_id",
+            "target_kind",
+            "target_id",
+            "source",
+            name="uq_route_feedback_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    route_request_id: Mapped[str] = mapped_column(String(36), index=True)
+    agent_id: Mapped[str] = mapped_column(String(120), index=True)
+    target_kind: Mapped[str] = mapped_column(String(10))  # tool | skill
+    target_id: Mapped[str] = mapped_column(String(400))
+    helpful: Mapped[bool] = mapped_column(Boolean)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(10))  # agent | human
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )

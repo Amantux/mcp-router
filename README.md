@@ -127,10 +127,19 @@ Any model exception or deadline overrun falls back to deterministic retrieval
 ranking; a sub-threshold "does anything fit?" probability returns an honest
 `no_match` instead of garbage.
 
+## Run it (Docker)
+
+```bash
+cp .env.example .env    # add MCPR_ADMIN_TOKEN=... and MCPR_AGENT_KEYS=agent:key
+docker compose up -d --build --wait
+curl -fsS localhost:8400/healthz && open http://localhost:8400/
+```
+Non-root image, internal-only Postgres, `scripts/smoke.sh` end-to-end check; flavors and GPU: [docs/deploy.md](docs/deploy.md).
+
 ## Quickstart
 
 ```bash
-docker compose up -d db                     # pgvector on :5434
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db  # dev-only: pgvector on 127.0.0.1:5434
 uv venv --python 3.12 .venv
 uv pip install -e '.[dev]'                  # zero-ML core
 # optional, for real embeddings + Laya:
@@ -140,7 +149,7 @@ export MCPR_ADMIN_TOKEN=$(openssl rand -hex 24)
 export MCPR_AGENT_KEYS="my-agent:$(openssl rand -hex 24)"
 .venv/bin/uvicorn --factory mcprouter.api.app:create_app --port 8400
 
-cd ui && npm ci && npm run dev              # dashboard on :5180
+cd ui && npm ci && npm run build            # dashboard served at :8400/
 ```
 
 Register servers via the dashboard or `POST /api/v1/servers` (admin token),
@@ -162,11 +171,19 @@ bulk imports.
 Want a synthetic fleet to play with? `python -m testbed.serve --servers 10`
 spins up realistic MCP servers with overlapping tools across five domains.
 
+### First run
+
+1. Open http://localhost:8400.
+2. Click **Connect** and paste your `MCPR_ADMIN_TOKEN` (kept in this browser tab's session only).
+3. On a fresh install you are taken to `/setup` once per session: add servers and skill
+   sources, create an agent (its key is shown once), optionally grant it read-only starter
+   rules, then copy the client snippet. **Skip setup** returns to the dashboard.
+
 ## Status — honest ledger
 
 | Verified (ran here, CPU) | Pending (needs the target GPU) |
 |---|---|
-| 1277 backend + 111 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
+| 1339 backend (+5 skipped) + 131 UI tests green; e2e: discover → route → execute → audit → analytics funnel | CUDA/FP16 paths (written, device-agnostic, unproven) |
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 |
 | 100 servers / 1,000 tools full refresh in 6.1s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |

@@ -42,6 +42,7 @@ from testbed.harness import http_fleet
 from mcprouter.api.app import create_app
 from mcprouter.gateway.server import (
     ACTIVATE_SKILL_TOOL,
+    FEEDBACK_TOOL,
     META_TOOL,
     READ_SKILL_RESOURCE_TOOL,
 )
@@ -196,7 +197,7 @@ async def test_end_to_end_register_discover_route_expose_execute_audit(
         # Router meta-tools are always listed (skill meta-tools whenever the
         # skills service is wired; they enforce routing per call). The routed
         # exposure is everything else.
-        meta = {META_TOOL, ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL}
+        meta = {META_TOOL, FEEDBACK_TOOL, ACTIVATE_SKILL_TOOL, READ_SKILL_RESOURCE_TOOL}
         assert meta <= set(listed), listed
         exposed = {n for n in listed if n not in meta}
         assert exposed == {f"{server1}.{t['tool']}" for t in routed["tools"]}, listed

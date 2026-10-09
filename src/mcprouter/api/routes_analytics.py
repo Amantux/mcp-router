@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Req
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics import service
+from mcprouter.analytics.economy import SavingsBasis
 from mcprouter.analytics.metrics import install_metrics
 from mcprouter.analytics.rollup import RollupNotAllowed
 from mcprouter.analytics.staleness import DEFAULT_STALE_DAYS
@@ -59,6 +60,18 @@ def get_session(request: Request) -> Iterator[Session]:
         yield s
 
 
+def get_basis(request: Request) -> SavingsBasis:
+    """Savings-estimate rates from settings (unconfigured -> null estimates)."""
+    st = getattr(request.app.state, "settings", None)
+    if st is None:
+        return SavingsBasis()
+    return SavingsBasis(
+        prefill_ms_per_1k_tokens=st.prefill_ms_per_1k_tokens,
+        price_per_1k_input_tokens=st.price_per_1k_input_tokens,
+        currency=st.currency,
+    )
+
+
 def get_window(
     now: Annotated[datetime, Depends(get_now)],
     window: Annotated[str, Query(pattern=WINDOW_PATTERN, max_length=5)] = DEFAULT_WINDOW,
@@ -71,11 +84,12 @@ def get_window(
 
 SessionDep = Annotated[Session, Depends(get_session)]
 WindowDep = Annotated[Window, Depends(get_window)]
+BasisDep = Annotated[SavingsBasis, Depends(get_basis)]
 
 
 @router.get("/overview", response_model=OverviewOut)
-def overview(session: SessionDep, window: WindowDep) -> OverviewOut:
-    return service.overview(session, window)
+def overview(session: SessionDep, window: WindowDep, basis: BasisDep) -> OverviewOut:
+    return service.overview(session, window, basis)
 
 
 @router.get("/tools", response_model=ToolFunnelPageOut)
@@ -110,8 +124,8 @@ def tool_detail(
 
 
 @router.get("/agents", response_model=AgentPageOut)
-def agents(session: SessionDep, window: WindowDep) -> AgentPageOut:
-    return service.agent_profiles(session, window)
+def agents(session: SessionDep, window: WindowDep, basis: BasisDep) -> AgentPageOut:
+    return service.agent_profiles(session, window, basis)
 
 
 @router.get("/suggestions", response_model=SuggestionsOut)
@@ -149,4 +163,7 @@ def rollup(
 
 def install_analytics(app: FastAPI) -> None:
     app.include_router(router)
+    from mcprouter.api.routes_feedback import router as feedback_router  # local: optional
+
+    app.include_router(feedback_router)
     install_metrics(app.state.session_factory)
