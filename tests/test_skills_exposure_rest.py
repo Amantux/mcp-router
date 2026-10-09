@@ -4,6 +4,7 @@ visibility, traversal refusal, bundle route not shadowed."""
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import zipfile
@@ -24,6 +25,7 @@ from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.gateway.skills import SkillExposure
 from mcprouter.models import ExecutionRecord, RoutingDecisionRecord, SkillRecord
 from mcprouter.settings import Settings
+from mcprouter.skills.serve import manifest_entries
 
 from .conftest import TEST_DB_URL, requires_db
 from .test_execution_support import KEYS, FakeInvoker, seed
@@ -175,10 +177,34 @@ def test_resource_read(env: Env) -> None:
 
 @pytest.mark.parametrize(
     "path",
-    ["..%2f..%2fetc%2fpasswd", "guide.md%00.txt", "%2fetc%2fpasswd", "%2e%2e/secret", "missing.md"],
+    [
+        "..%2f..%2fetc%2fpasswd",
+        "guide.md%00.txt",
+        "%2fetc%2fpasswd",
+        "%2e%2e/secret",
+        "..%2fsecret",
+        "link.md",
+        "missing.md",
+    ],
 )
 def test_traversal_refused_without_leak(env: Env, path: str, tmp_path: Path) -> None:
+    # The escapes ARE in the manifest with the right sha256, so `not_in_manifest`
+    # cannot be what refuses them: removing the normalizer (../secret) or the
+    # realpath containment guard (link.md -> outside) must make this test fail.
     (tmp_path / "secret").write_text("TOPSECRET")
+    (tmp_path / "src" / "secret").write_text("TOPSECRET")  # = pdf-tools/../secret
+    (tmp_path / "src" / "pdf-tools" / "link.md").symlink_to(tmp_path / "secret")
+    digest = hashlib.sha256(b"TOPSECRET").hexdigest()
+    with env.db() as s:
+        sk = s.get(SkillRecord, env.a)
+        assert sk is not None
+        sk.resource_manifest = [
+            *(sk.resource_manifest or []),
+            {"path": "../secret", "size": 9, "sha256": digest},
+            {"path": "link.md", "size": 9, "sha256": digest},
+        ]
+        s.commit()
+        assert "../secret" not in manifest_entries(sk)  # normalizer drops it
     env.route("alice", env.a)
     r = env.client.get(f"/api/v1/skills/{env.a}/resources/{path}", headers=H_ALICE)
     assert r.status_code == 404, r.text
