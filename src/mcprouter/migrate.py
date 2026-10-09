@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import functools
+import logging
 import sys
 import time
 from collections.abc import Iterator, Sequence
@@ -34,6 +35,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
+from alembic.util.exc import CommandError
 from sqlalchemy import Connection, Engine, text
 
 SCRIPT_LOCATION = str(Path(__file__).resolve().parent / "migrations")
@@ -44,8 +46,7 @@ SET_LOCK_TIMEOUT_SQL = "SET lock_timeout = '30s'"
 LOCK_WAIT_S = 600.0  # how long a second process waits for the first one's migration
 _POLL_S = 0.2
 
-# Tables that only exist in a database this app created (legacy detection).
-_OUR_TABLES = ("mcp_servers", "mcp_tools", "agent_principals")
+log = logging.getLogger(__name__)
 
 # Indexes created by raw SQL in migrations, not declared on the ORM models
 # (expression GIN, HNSW, DESC composite). Excluded from metadata comparison;
@@ -76,6 +77,15 @@ class SchemaVersionError(RuntimeError):
             "run a newer image or restore the pre-upgrade backup"
         )
         self.revision = revision
+
+
+class BaselineDowngradeRefused(RuntimeError):
+    """A downgrade below the 0001 baseline would drop every table."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            f"refusing to downgrade below the baseline {BASELINE_REVISION}; restore a backup"
+        )
 
 
 class MigrationLockTimeout(RuntimeError):
@@ -119,7 +129,12 @@ def schema_state(conn: Connection) -> SchemaState:
     if conn.execute(text("SELECT to_regclass('alembic_version')")).scalar() is not None:
         if current_revision(conn) is not None:
             return "versioned"
-    for table in _OUR_TABLES:
+    # ANY table this app owns (not just the core ones): a database where only a
+    # side table exists must take the idempotent bridge, not a CREATE TABLE
+    # that fails on every boot.
+    from mcprouter.models import ALL_METADATA
+
+    for table in sorted({t for md in ALL_METADATA for t in md.tables}):
         if conn.execute(text("SELECT to_regclass(:t)"), {"t": table}).scalar() is not None:
             return "legacy"
     return "empty"
@@ -151,7 +166,11 @@ def migration_lock(engine: Engine, wait_s: float = LOCK_WAIT_S) -> Iterator[None
         try:
             yield
         finally:
-            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": MIGRATION_LOCK_KEY})
+            try:
+                conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": MIGRATION_LOCK_KEY})
+            except Exception as exc:  # noqa: BLE001 — never mask the migration's own error
+                # Session lock: it is released anyway when this connection closes.
+                log.warning("migrate.unlock_failed: %s", type(exc).__name__)
 
 
 @contextmanager
@@ -162,9 +181,13 @@ def _ddl_connection(engine: Engine) -> Iterator[Connection]:
         try:
             yield conn
         finally:
-            conn.rollback()
-            conn.execute(text("RESET lock_timeout"))
-            conn.commit()
+            try:
+                conn.rollback()
+                conn.execute(text("RESET lock_timeout"))
+                conn.commit()
+            except Exception as exc:  # noqa: BLE001 — never mask the migration's own error
+                conn.invalidate()  # do not return a connection with a stale lock_timeout
+                log.warning("migrate.reset_failed: %s", type(exc).__name__)
 
 
 def _upgrade_locked(engine: Engine, target: str) -> str | None:
@@ -202,9 +225,26 @@ def upgrade_to_head(engine: Engine) -> None:
         _upgrade_locked(engine, "head")
 
 
+def _refuse_below_baseline(current: str | None, target: str) -> None:
+    """Refuse BEFORE alembic runs anything: with transaction_per_migration the
+    steps above the baseline would otherwise commit before 0001 refuses."""
+    if target == "base":
+        raise BaselineDowngradeRefused()
+    if target.startswith("-") and target[1:].isdecimal():
+        script = ScriptDirectory.from_config(alembic_config())
+        rev = current
+        for _ in range(int(target[1:])):
+            if rev is None or rev == BASELINE_REVISION:
+                raise BaselineDowngradeRefused()
+            down = script.get_revision(rev).down_revision
+            rev = down if isinstance(down, str) or down is None else down[0]
+
+
 def downgrade(engine: Engine, target: str) -> str | None:
     with migration_lock(engine), _ddl_connection(engine) as conn:
-        _check_known(current_revision(conn))
+        current = current_revision(conn)
+        _check_known(current)
+        _refuse_below_baseline(current, target)
         conn.commit()
         command.downgrade(alembic_config(conn), target)
         conn.commit()
@@ -244,7 +284,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             with engine.connect() as conn:
                 print(current_revision(conn) or "(none)")
-    except (SchemaVersionError, MigrationLockTimeout) as exc:
+    except (
+        SchemaVersionError,
+        MigrationLockTimeout,
+        BaselineDowngradeRefused,
+        CommandError,
+    ) as exc:
         print(f"FATAL: {exc}", file=sys.stderr)
         return 1
     finally:

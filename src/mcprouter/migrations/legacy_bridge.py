@@ -73,6 +73,8 @@ _ADDITIVE_COLUMNS: tuple[str, ...] = (
 _RECONCILE: tuple[str, ...] = (
     "UPDATE agent_principals SET max_skills = 3 WHERE max_skills IS NULL",
     "ALTER TABLE agent_principals ALTER COLUMN max_skills SET NOT NULL",
+    # 0001 has no server default here (the model default is Python-side).
+    "ALTER TABLE agent_principals ALTER COLUMN max_skills DROP DEFAULT",
 )
 
 

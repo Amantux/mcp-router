@@ -1,16 +1,23 @@
 """ANN + hot-path indexes (D9, P-605, P-607).
 
 * HNSW (`vector_cosine_ops`) on `mcp_tools.embedding` and `skills.embedding`
-  (both `vector(384)`, fixed dimension) — ANN for the routing vector leg and
-  nearest-neighbour lookups.
+  (both `vector(384)`, fixed dimension, D9). Used by `ORDER BY embedding <=> q
+  LIMIT k` queries. NOTE: the routing vector legs (routing/retriever.py) order
+  by distance THEN name, which the planner cannot serve from HNSW, and the
+  dedup self-joins cannot use it either; adopting it there needs an
+  ORDER-BY change plus `hnsw.iterative_scan` (filtered ANN), not done here.
 * `(agent_id, created_at DESC, id DESC)` on `routing_decisions` — the
   per-request "latest decision for this agent" lookup.
 * `agent_principals (key_hash)` — indexed credential lookup (one query per
   auth instead of a full-table scan).
 
 Built `CONCURRENTLY` (outside a transaction, `autocommit_block`) so an upgrade
-on a populated database never takes a write-blocking lock. A concurrent build
-that failed leaves an INVALID index behind; it is dropped and rebuilt rather
+on a populated database never takes a write-blocking lock. `lock_timeout` is
+lifted for these statements: a concurrent build waits for older writers by
+design and never queues other DML behind it, so the 30 s guard the migrator
+sets would only fail the boot (and leave an INVALID index) while a long write
+transaction is open. A concurrent build that failed leaves an INVALID index
+behind; it is dropped and rebuilt rather
 than skipped by IF NOT EXISTS.
 
 Revision ID: 0002
@@ -21,6 +28,8 @@ from __future__ import annotations
 
 from alembic import op
 from sqlalchemy import text
+
+from mcprouter.migrate import SET_LOCK_TIMEOUT_SQL
 
 revision = "0002"
 down_revision: str | None = "0001"
@@ -60,6 +69,9 @@ _DROP: dict[str, str] = {
     "ix_agent_principals_key_hash": "DROP INDEX CONCURRENTLY IF EXISTS ix_agent_principals_key_hash",
 }
 
+# Session-level; restored to the migrator's guard in `finally`.
+_NO_LOCK_TIMEOUT = "SET lock_timeout = 0"
+
 _INVALID_SQL = text(
     "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid"
     " WHERE c.relname = :name AND NOT i.indisvalid"
@@ -69,13 +81,21 @@ _INVALID_SQL = text(
 def upgrade() -> None:
     bind = op.get_bind()
     with op.get_context().autocommit_block():
-        for name, create in INDEXES:
-            if bind.execute(_INVALID_SQL, {"name": name}).first() is not None:
-                op.execute(_DROP[name])  # leftover of a failed concurrent build
-            op.execute(create)
+        op.execute(_NO_LOCK_TIMEOUT)
+        try:
+            for name, create in INDEXES:
+                if bind.execute(_INVALID_SQL, {"name": name}).first() is not None:
+                    op.execute(_DROP[name])  # leftover of a failed concurrent build
+                op.execute(create)
+        finally:
+            op.execute(SET_LOCK_TIMEOUT_SQL)  # later revisions keep the guard
 
 
 def downgrade() -> None:
     with op.get_context().autocommit_block():
-        for name, _create in reversed(INDEXES):
-            op.execute(_DROP[name])
+        op.execute(_NO_LOCK_TIMEOUT)
+        try:
+            for name, _create in reversed(INDEXES):
+                op.execute(_DROP[name])
+        finally:
+            op.execute(SET_LOCK_TIMEOUT_SQL)
