@@ -20,7 +20,7 @@ from mcprouter.auth.keys import hash_key
 from mcprouter.models import AgentPrincipal
 from mcprouter.settings import Settings
 
-log = logging.getLogger("mcprouter.api.deps_auth")  # unchanged logger name (log filters/tests)
+log = logging.getLogger(__name__)
 
 ADMIN_TOKEN_ENV = "MCPR_ADMIN_TOKEN"
 DEV_AGENT_ID = "dev"

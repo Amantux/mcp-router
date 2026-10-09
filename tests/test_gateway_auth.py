@@ -296,3 +296,11 @@ def test_ambiguous_key_match_is_401_not_last_wins(
         s.add(AgentPrincipal(agent_id="mallory", key_hash=hash_key(KEY_A)))
         s.commit()
     assert c.get("/whoami", headers={"Authorization": f"Bearer {KEY_A}"}).status_code == 401
+
+
+def test_auth_core_logs_under_its_own_package() -> None:
+    """HS-C-018: no logger left named after the pre-move module."""
+    from mcprouter.auth import config, principals
+
+    assert config.log.name == "mcprouter.auth.config"
+    assert principals.log.name == "mcprouter.auth.principals"

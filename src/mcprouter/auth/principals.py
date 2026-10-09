@@ -34,7 +34,7 @@ from mcprouter.auth.keys import (
 from mcprouter.models import AgentPrincipal
 from mcprouter.settings import Settings
 
-log = logging.getLogger("mcprouter.api.deps_auth")  # unchanged logger name
+log = logging.getLogger(__name__)
 
 
 def bootstrap_principals(session: Session, settings: Settings, config: SecurityConfig) -> int:
