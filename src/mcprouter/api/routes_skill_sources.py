@@ -24,8 +24,12 @@ class _Camel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="forbid")
 
 
+# No "/" (names become path/URI segments), whitespace or control chars.
+_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$"
+
+
 class SourceIn(_Camel):
-    name: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=120, pattern=_NAME_PATTERN)
     kind: str
     location: str = Field(min_length=1, max_length=2000)
     git_ref: str | None = Field(default=None, max_length=200)
@@ -34,7 +38,7 @@ class SourceIn(_Camel):
 
 
 class SourcePatch(_Camel):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=1, max_length=120, pattern=_NAME_PATTERN)
     location: str | None = Field(default=None, min_length=1, max_length=2000)
     git_ref: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
