@@ -75,6 +75,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from mcprouter import __version__
 from mcprouter.analytics import feedback as _fb
 from mcprouter.api.deps_auth import (
+    DEV_AGENT_ID,
     AuthenticationError,
     SecurityConfig,
     hash_key,
@@ -404,6 +405,8 @@ class _AuthASGI:
         scope[PRINCIPAL_SCOPE_KEY] = principal
         if not _opens_session(scope):
             await self._inner(scope, receive, send)
+            if scope.get("method") == "DELETE":
+                self._gw._forget_session(principal.agent_id, Headers(scope=scope))
             return
         if not self._gw._reserve_open(principal.agent_id, credential):
             await _json_response(
@@ -426,13 +429,23 @@ class _AuthASGI:
 SESSION_RETRY_AFTER_S = 60
 
 
+def subject_for_key_hash(key_hash: str) -> str:
+    """Session subject of the credential whose stored hash is ``key_hash``;
+    lets the fan-out re-check derive the CURRENT credential's subject from
+    the DB row (domain-separated: never equal to the stored hash itself)."""
+    return hash_key("mcp-session:" + key_hash)
+
+
+DEV_SUBJECT = hash_key("mcp-session:dev")
+
+
 def session_subject(authorization: str | None) -> str:
-    """The session-binding subject: a hash of the presented KEY (scheme case
-    and spacing normalised by ``parse_bearer``, so ``Bearer k``/``bearer k``
-    are one credential), domain-separated so it never equals the stored
-    ``key_hash``. Dev mode (no header) is one constant subject. Only called
-    after authentication succeeded, so ``parse_bearer`` cannot raise here."""
-    return hash_key("mcp-session:" + (parse_bearer(authorization) or "dev"))
+    """The session-binding subject of the presented key (scheme case and
+    spacing normalised by ``parse_bearer``, so ``Bearer k``/``bearer k`` are
+    one credential). Dev mode (no header) is one constant subject. Only
+    called after authentication succeeded, so ``parse_bearer`` cannot raise."""
+    token = parse_bearer(authorization)
+    return DEV_SUBJECT if token is None else subject_for_key_hash(hash_key(token))
 
 
 TOO_MANY_SESSIONS = "Too many open sessions for this agent; close one and retry."
@@ -488,8 +501,6 @@ class GatewayServer:
     ) -> None:
         self._factory = session_factory
         self._skills = skills
-        # Routed skill ids per agent (RoutedTool.kind == "skill" of the last route).
-        self._skill_ids: dict[str, tuple[str, ...]] = {}
         self._security = security
         self._settings = settings
         self._manager = manager
@@ -616,6 +627,59 @@ class GatewayServer:
                 self._opening[key] = left
             else:
                 self._opening.pop(key, None)
+
+    def _forget_session(self, agent_id: str, headers: Headers) -> None:
+        """After a client DELETE: stop tracking the session for notifications
+        if the SDK has discarded it (no stale sends to a terminated session)."""
+        sid = headers.get("mcp-session-id")
+        if sid is None or sid in self.server.session_manager._server_instances:
+            return
+        with self._lock:
+            sessions = self._legacy.get(agent_id)
+            if sessions is not None:
+                sessions.pop(sid, None)
+
+    def _current_subject(self, agent_id: str) -> str | None:
+        """The subject of the agent's CURRENT credential, or None when the
+        agent is deleted or disabled. The synthetic dev agent (no row) keeps
+        the dev subject; per-request auth already refuses it outside dev mode."""
+        with self._factory() as s:
+            row = s.scalars(
+                select(AgentPrincipal).where(AgentPrincipal.agent_id == agent_id)
+            ).one_or_none()
+            if row is None:
+                return DEV_SUBJECT if agent_id == DEV_AGENT_ID else None
+            return subject_for_key_hash(row.key_hash) if row.enabled else None
+
+    async def _end_stale_streams(self, agent_id: str, subject: str | None) -> None:
+        """Close what outlived a revocation: every handshake session of the
+        agent not created with ``subject`` (all of them when None), and, when
+        the agent is gone/disabled, its modern listen streams. Per-request
+        auth already refuses new requests; this ends LONG-LIVED streams."""
+        manager = self.server.session_manager
+        stale = [
+            sid
+            for sid, owner in list(manager._session_owners.items())
+            if owner["client_id"] == agent_id and owner["subject"] != subject
+        ]
+        for sid in stale:
+            transport = manager._server_instances.get(sid)
+            if transport is not None:
+                await manager._discard_session(sid, transport)
+        with self._lock:
+            sessions = self._legacy.get(agent_id)
+            for sid in stale:
+                if sessions is not None:
+                    sessions.pop(sid, None)
+        if subject is None:
+            _, handler = self._bus(agent_id)
+            handler.close()
+            with self._lock:
+                self._legacy.pop(agent_id, None)
+        if stale or subject is None:
+            log.info(
+                "gateway.revoked_streams agent=%s sessions=%d", scrub_log(agent_id), len(stale)
+            )
 
     def _bus(self, agent_id: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
         with self._lock:
@@ -880,15 +944,13 @@ class GatewayServer:
         return _text(f"Recorded feedback for {n} item(s).", is_error=False)
 
     def _routed_skills(self, agent_id: str) -> tuple[tuple[str, ...], str | None]:
+        """(routed skill ids, request id) from ONE exposure snapshot, so the
+        pair always comes from the same route. exposure.clear(agent) is the
+        reset: skills go with the tools (fail closed)."""
         exposure = self.exposure.get(agent_id)
-        with self._lock:
-            if exposure is None:
-                # exposure.clear(agent) is the reset: skills go with the tools
-                # (fail closed; never serve a stale routed skill set).
-                self._skill_ids.pop(agent_id, None)
-                return (), None
-            ids = self._skill_ids.get(agent_id, ())
-        return ids, exposure.request_id
+        if exposure is None:
+            return (), None
+        return exposure.skill_ids, exposure.request_id
 
     async def _on_list_prompts(
         self, ctx: ServerRequestContext[Any, Any], params: types.PaginatedRequestParams | None
@@ -1032,11 +1094,7 @@ class GatewayServer:
         """Install an agent's route result; notify its sessions if it changed."""
         tool_ids = [t.tool_id for t in result.tools if t.kind == "tool"]
         skill_ids = tuple(t.tool_id for t in result.tools if t.kind == "skill")
-        changed = self.exposure.set(agent_id, tool_ids, result.request_id)
-        with self._lock:
-            if self._skill_ids.get(agent_id, ()) != skill_ids:
-                self._skill_ids[agent_id] = skill_ids
-                changed = True
+        changed = self.exposure.set(agent_id, tool_ids, result.request_id, skill_ids=skill_ids)
         if changed:
             await self.notify_tools_changed(agent_id)
         return changed
@@ -1047,6 +1105,12 @@ class GatewayServer:
         return anyio.from_thread.run(self.apply_route, agent_id, result)
 
     async def notify_tools_changed(self, agent_id: str) -> None:
+        # Re-check the principal at fan-out: streams opened by a revoked,
+        # disabled or rotated-away credential are closed, never notified.
+        subject = await anyio.to_thread.run_sync(self._current_subject, agent_id)
+        await self._end_stale_streams(agent_id, subject)
+        if subject is None:
+            return
         bus, _ = self._bus(agent_id)
         await bus.publish(ToolsListChanged())
         if self._skills is not None:

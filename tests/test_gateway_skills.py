@@ -167,9 +167,9 @@ async def test_apply_route_splits_kinds_between_stores(gw: Any, monkeypatch: Any
     seen: list[list[str]] = []
     real_set = gw.exposure.set
 
-    def spy(agent: str, ids: list[str], rid: Any) -> Any:
+    def spy(agent: str, ids: list[str], rid: Any, **kw: Any) -> Any:
         seen.append(list(ids))
-        return real_set(agent, ids, rid)
+        return real_set(agent, ids, rid, **kw)
 
     monkeypatch.setattr(gw.exposure, "set", spy)
     tools = [
@@ -179,4 +179,4 @@ async def test_apply_route_splits_kinds_between_stores(gw: Any, monkeypatch: Any
     ]
     await gw.apply_route("alice", RouteResult("rr-k", tools, False, 1.0, "m"))
     assert seen == [["t1"]]
-    assert gw._skill_ids["alice"] == ("sk1",)
+    assert gw.exposure.get("alice").skill_ids == ("sk1",)

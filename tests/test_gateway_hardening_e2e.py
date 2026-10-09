@@ -354,3 +354,106 @@ async def test_body_just_under_the_cap_is_accepted(live: dict[str, Any]) -> None
     async with _client("alice") as http:
         r = await http.post(live["url"], content=body, headers=headers)
     assert r.status_code == 200
+
+
+# ------------------------------------------------ P-310 exposure snapshot + stream lifetime
+def test_routed_skills_pair_is_always_from_one_route(world: dict[str, Any]) -> None:
+    """Readers on worker threads never see route A's request id with route
+    B's skills while the loop flips between the two routes."""
+    import threading
+
+    from mcprouter.interfaces import RoutedTool, RouteResult
+
+    gw = world["gw"]
+    routes = {
+        rid: RouteResult(rid, [RoutedTool(s, "", "", 1.0, kind="skill")], False, 1.0, "m")
+        for rid, s in (("rA", "skA"), ("rB", "skB"))
+    }
+    valid = {((), None), (("skA",), "rA"), (("skB",), "rB")}
+    seen: set[Any] = set()
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            seen.add(gw._routed_skills("alice"))
+
+    threads = [threading.Thread(target=reader) for _ in range(2)]
+    for t in threads:
+        t.start()
+
+    async def flip() -> None:
+        for i in range(400):
+            await gw.apply_route("alice", routes["rA" if i % 2 else "rB"])
+
+    try:
+        anyio.run(flip)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+    assert seen <= valid, seen - valid
+    assert len(seen & valid) >= 2
+
+
+async def test_deleted_session_is_never_notified(live: dict[str, Any]) -> None:
+    gw = live["gw"]
+    add_rule(live["db"], "alice")
+    async with mcp_session(live["url"], "alice", HANDSHAKE) as session:
+        await session.list_tools()  # tracked for notifications
+        (sid,) = list(gw._legacy["alice"])
+    # The client's DELETE ran on exit; the gateway forgot the session.
+    assert sid not in gw._legacy.get("alice", {})
+    assert (("DELETE", 200) in live["wire"].statuses) or ("DELETE", 204) in live["wire"].statuses
+
+
+async def _set_principal(db: Any, agent: str, **fields: Any) -> None:
+    from mcprouter.models import AgentPrincipal
+
+    with db() as s:
+        row = s.query(AgentPrincipal).filter_by(agent_id=agent).one()
+        for k, v in fields.items():
+            setattr(row, k, v)
+        s.commit()
+
+
+async def test_disabled_principal_streams_are_closed_at_fan_out(live: dict[str, Any]) -> None:
+    from mcp.client.subscriptions import listen
+
+    from mcprouter.interfaces import RouteRequest
+
+    gw, route, db = live["gw"], live["route"], live["db"]
+    add_rule(db, "alice")
+    async with (
+        mcp_session(live["url"], "alice", HANDSHAKE) as legacy,
+        mcp_session(live["url"], "alice", MODERN) as modern,
+    ):
+        await legacy.list_tools()
+        (sid,) = list(gw._legacy["alice"])
+        async with listen(modern, tools_list_changed=True) as sub:
+            await _set_principal(db, "alice", enabled=False)
+            await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
+            with anyio.fail_after(5):
+                leftovers = [event async for event in sub]
+        assert leftovers == []  # closed, nothing announced to a disabled agent
+        assert sid not in gw.server.session_manager._server_instances
+        assert "alice" not in gw._legacy
+
+
+async def test_rotated_key_session_is_closed_at_fan_out(live: dict[str, Any]) -> None:
+    from mcprouter.api.deps_auth import hash_key
+    from mcprouter.interfaces import RouteRequest
+
+    gw, route, db = live["gw"], live["route"], live["db"]
+    add_rule(db, "alice")
+    async with mcp_session(live["url"], "alice", HANDSHAKE) as legacy:
+        await legacy.list_tools()
+        (sid,) = list(gw._legacy["alice"])
+        await _set_principal(db, "alice", key_hash=hash_key("key_alice_rotated_" + "r" * 30))
+        await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
+        assert sid not in gw.server.session_manager._server_instances
+        assert sid not in gw._legacy.get("alice", {})
+    # bob (untouched) keeps his sessions
+    async with mcp_session(live["url"], "bob", HANDSHAKE) as bob:
+        await bob.list_tools()
+        await gw.apply_route("bob", route(RouteRequest("q", "bob", 8)))
+        assert list(gw._legacy["bob"])
