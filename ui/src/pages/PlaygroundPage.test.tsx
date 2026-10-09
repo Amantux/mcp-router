@@ -98,7 +98,8 @@ describe("PlaygroundPage", () => {
     await user.click(screen.getByRole("button", { name: "Run tool" }));
     const dialog = await screen.findByRole("dialog");
     expect(screen.queryByText("Required.")).toBeNull(); // the typed value survived to submit
-    expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
+    expect(within(dialog).getByText("Run create_issue as agent “billing-bot”?")).toBeTruthy();
+    expect(dialog.textContent).toContain("audited as impersonation of that agent");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     // The confirm button is named after the tool, distinct from the page's "Run tool".
     await user.click(within(dialog).getByRole("button", { name: "Run create_issue" }));
@@ -220,13 +221,15 @@ describe("PlaygroundPage skills tab", () => {
       json: { body: "<img src=x onerror=alert(1)><b>bold</b>", resources: [{ path: "scripts/run.sh", size: 120, kind: "script" }], record_id: "rec-9" },
     }));
     const { container } = renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
-    const btn = await screen.findByRole("button", { name: /^Activate as/ });
+    // No agent picked yet: a plain, disabled "Activate", never "Activate as the admin token".
+    const btn = await screen.findByRole("button", { name: "Activate" });
     expect((btn as HTMLButtonElement).disabled).toBe(true);
     await screen.findByRole("option", { name: "billing-bot" });
     await user.selectOptions(screen.getByTestId("skill-run-as-picker"), "billing-bot");
-    await user.click(screen.getByRole("button", { name: "Activate as agent “billing-bot” (admin-initiated)" }));
+    await user.click(screen.getByRole("button", { name: "Activate as agent “billing-bot”" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Activate deploy-helper as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
+    expect(within(dialog).getByText("Activate deploy-helper as agent “billing-bot”?")).toBeTruthy();
+    expect(dialog.textContent).toContain("audited as impersonation of that agent");
     expect(calls.some((c) => c.method === "POST")).toBe(false);
     await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
     const ok = await screen.findByTestId("activation-ok");
@@ -249,7 +252,22 @@ describe("PlaygroundPage skills tab", () => {
     await user.click(await screen.findByRole("button", { name: /^Activate as/ }));
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
-    expect(await screen.findByTestId("outcome-rate_limited")).toBeTruthy();
+    const outcome = await screen.findByTestId("outcome-rate_limited");
+    // Skill copy, not tool copy (HS-U-009).
+    expect(outcome.textContent).toContain("activated skills too often");
+    expect(outcome.textContent).not.toMatch(/\btool\b/);
+  });
+
+  it("a 403 activation says the skill was denied, not a tool (HS-U-009)", async () => {
+    const user = userEvent.setup();
+    setCredentials({ adminToken: "adm", agentKey: "agt" });
+    mockSkill(() => ({ status: 403, json: { detail: "denied" } }));
+    renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
+    await user.click(await screen.findByRole("button", { name: "Activate as agent “billing-bot”" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Activate deploy-helper" }));
+    const outcome = await screen.findByTestId("outcome-denied");
+    expect(outcome.textContent).toContain("No policy rule lets this agent activate this skill");
+    expect(outcome.textContent).not.toMatch(/\btool\b/);
   });
 });
 
@@ -264,9 +282,9 @@ describe("useRunAs", () => {
     });
     const { result, unmount } = renderHook(() => useRunAs(), { wrapper: wrap });
     await waitFor(() => expect(result.current.agents).toEqual(["on-bot"]));
-    expect([result.current.adminOnly, result.current.who]).toEqual([true, "the admin token"]);
+    expect([result.current.adminOnly, result.current.who]).toEqual([true, null]);
     act(() => result.current.setRunAs("on-bot"));
-    expect(result.current.who).toBe("agent “on-bot” (admin-initiated)");
+    expect(result.current.who).toBe("agent “on-bot”");
     unmount();
     fail = true;
     const again = renderHook(() => useRunAs(), { wrapper: wrap });

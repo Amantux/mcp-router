@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Badge,
   Body1,
@@ -81,19 +81,32 @@ export const APPROVAL_POLL_MS = 3000;
 /** Who a playground run executes as. Shows only names, never credentials. */
 export function RunAsLine({ impersonating }: { impersonating?: string } = {}) {
   const a = useAuth();
-  let who: string;
+  let line: ReactNode;
   if (a.hasAgentKey)
-    who = a.agentKeyRejected ? "agent key — refused by the backend; fix it in Connect" : a.agentId ? `agent “${a.agentId}” (agent key)` : "agent key (resolving agent…)";
+    line = a.agentKeyRejected ? (
+      <>The backend refused the agent key, so nothing can run as it. Fix the key in Connect.</>
+    ) : a.agentId ? (
+      <>
+        Runs as agent <strong>“{a.agentId}”</strong> (the agent key in Connect).
+      </>
+    ) : (
+      <>Runs as the agent key's agent (looking up its id…).</>
+    );
   else if (a.hasAdminToken)
-    who = impersonating
-      ? `agent “${impersonating}” (admin-initiated — runs under that agent's own policy, and is audited as impersonation)`
-      : "admin token — pick an agent below to run as (the backend refuses admin runs with no agent named)";
-  else who = "no credential — in dev mode the backend runs this as agent “dev”";
-  return (
-    <Caption1 data-testid="run-as">
-      Runs as <strong>{who}</strong>
-    </Caption1>
-  );
+    line = impersonating ? (
+      <>
+        Runs as agent <strong>“{impersonating}”</strong>, started by an admin: under that agent's own policy, and audited as impersonation.
+      </>
+    ) : (
+      <>Signed in with the admin token. Choose an agent below: the backend refuses admin runs that name no agent.</>
+    );
+  else
+    line = (
+      <>
+        No credential is set. In dev mode the backend runs this as agent <strong>“dev”</strong>, the name the audit log records.
+      </>
+    );
+  return <Caption1 data-testid="run-as">{line}</Caption1>;
 }
 
 function ResultContent({ result }: { result: NonNullable<ExecuteResult["result"]> }) {
@@ -192,7 +205,11 @@ function ApprovalTracker({ approvalId, asAgent, pollMs }: { approvalId: string; 
     );
   const copy: Record<string, { intent: "success" | "error" | "warning"; title: string; body: string }> = {
     executed: { intent: "success", title: "Approved and executed", body: "An admin approved the call and it ran." },
-    failed: { intent: "error", title: "Approved, but the call failed", body: "It was re-checked against current policy and schema, or the upstream call failed." },
+    failed: {
+      intent: "error",
+      title: "Approved, but the call failed",
+      body: "Either the re-check at approval time refused it (current policy or the tool's input schema no longer allow it), or the upstream tool call itself failed. Execution history has the reason.",
+    },
     denied: { intent: "error", title: "Approval denied", body: "An admin denied this call. Nothing was executed." },
     expired: { intent: "warning", title: "Approval expired", body: "Nobody decided within 10 minutes. Nothing was executed; run it again to re-request." },
   };
@@ -210,14 +227,27 @@ function ApprovalTracker({ approvalId, asAgent, pollMs }: { approvalId: string; 
   );
 }
 
-const STATUS_COPY: Record<string, { intent: "error" | "warning"; title: string; body: string }> = {
-  denied: { intent: "error", title: "Denied by policy", body: "No policy rule lets this identity run this tool. Nothing was executed." },
-  rate_limited: { intent: "warning", title: "Rate limit reached", body: "This agent made too many calls in the last minute. Wait a moment, then run it again." },
-  unavailable: { intent: "warning", title: "Tool unavailable", body: "The tool or its server is disabled or offline. Check the Servers page, then retry." },
-  invalid_args: { intent: "error", title: "The tool's schema rejected these arguments", body: "Fix the highlighted fields and run it again." },
-  timeout: { intent: "warning", title: "The tool didn't answer in time", body: "The upstream call hit the execution timeout. It may still have had side effects upstream." },
-  error: { intent: "error", title: "The tool call failed", body: "The upstream server returned an error." },
-  cancelled: { intent: "warning", title: "Call cancelled", body: "The call was cancelled before it finished." },
+type Copy = { intent: "error" | "warning"; title: string; body: string };
+/** Outcome copy per noun: a tool runs, a skill activates (HS-U-009). Skills only ever get denied / rate_limited / unavailable. */
+const STATUS_COPY: Record<"tool" | "skill", Record<string, Copy>> = {
+  tool: {
+    denied: { intent: "error", title: "Denied by policy", body: "No policy rule lets this agent run this tool. Nothing was executed." },
+    rate_limited: { intent: "warning", title: "Rate limit reached", body: "This agent made too many calls in the last minute. Wait a moment, then run it again." },
+    unavailable: { intent: "warning", title: "Tool unavailable", body: "The tool or its server is disabled or offline. Check the Servers page, then retry." },
+    invalid_args: { intent: "error", title: "The tool's schema rejected these arguments", body: "Fix the highlighted fields and run it again." },
+    timeout: { intent: "warning", title: "The tool didn't answer in time", body: "The upstream call hit the execution timeout. It may still have had side effects upstream." },
+    error: { intent: "error", title: "The tool call failed", body: "The upstream server returned an error." },
+    cancelled: { intent: "warning", title: "Call cancelled", body: "The call was cancelled before it finished." },
+  },
+  skill: {
+    denied: { intent: "error", title: "Denied by policy", body: "No policy rule lets this agent activate this skill. Nothing was returned." },
+    rate_limited: { intent: "warning", title: "Rate limit reached", body: "This agent activated skills too often in the last minute. Wait a moment, then activate it again." },
+    unavailable: {
+      intent: "warning",
+      title: "Skill not available to this agent",
+      body: "Routing doesn't offer this skill to the agent, or the skill or its source is disabled. Check the Skills and Skill sources pages.",
+    },
+  },
 };
 
 /** Honest rendering of every execution outcome, plus the audit id and latency. */
@@ -225,18 +255,21 @@ export function ExecutionOutcomeView({
   tool,
   outcome,
   asAgent,
+  noun = "tool",
   generalErrors = [],
   pollMs = APPROVAL_POLL_MS,
 }: {
   tool: Pick<MCPTool, "name">;
   outcome: ExecuteResult & { roundTripMs?: number };
   asAgent: boolean;
+  /** What was attempted: a tool run or a skill activation. Picks the outcome copy. */
+  noun?: "tool" | "skill";
   generalErrors?: string[];
   pollMs?: number;
 }) {
   const s = useStyles();
   const c = useCommonStyles();
-  const copy = STATUS_COPY[outcome.status];
+  const copy = STATUS_COPY[noun][outcome.status];
   return (
     <section className={s.outcome} aria-label="Run outcome" data-testid={`outcome-${outcome.status}`}>
       <Subtitle2 as="h2">Outcome</Subtitle2>
@@ -284,10 +317,11 @@ export function ExecutionOutcomeView({
       <div className={s.meta}>
         <Caption1>
           Audit record{" "}
+          {/* Plain text: Execution history can't filter by record id, so a link would land on an unfiltered list (HS-U-012). */}
           {outcome.recordId ? (
-            <Link to={`/executions`} className={c.mono} data-testid="audit-id">
+            <span className={c.mono} data-testid="audit-id">
               {outcome.recordId}
-            </Link>
+            </span>
           ) : (
             "—"
           )}
@@ -334,15 +368,17 @@ export function useRunAs() {
       });
     return () => ctl.abort();
   }, [adminOnly]);
-  const who = auth.hasAgentKey
+  // Short "as <who>" label for buttons and dialog titles (HS-U-010); RunAsLine explains it.
+  // null = an admin session that hasn't picked an agent yet (the action is disabled).
+  const who: string | null = auth.hasAgentKey
     ? auth.agentId
       ? `agent “${auth.agentId}”`
-      : "the agent key"
+      : "the agent key's agent"
     : auth.hasAdminToken
       ? runAs
-        ? `agent “${runAs}” (admin-initiated)`
-        : "the admin token"
-      : "dev mode";
+        ? `agent “${runAs}”`
+        : null
+      : "agent “dev”";
   return { adminOnly, runAs, setRunAs, agents, agentsFailed, who };
 }
 
@@ -542,11 +578,12 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
       {outcome && <ExecutionOutcomeView tool={tool} outcome={outcome} asAgent={asAgent} generalErrors={generalErrors} />}
       <ConfirmDialog
         open={confirmArgs !== null}
-        title={`Run ${tool.name} as ${who}?`}
+        title={who ? `Run ${tool.name} as ${who}?` : `Run ${tool.name}?`}
         body={
           <>
             This calls the real <strong>{tool.name}</strong> tool on <strong>{tool.serverName ?? "its server"}</strong>. It is classified as a{" "}
             <strong>{tool.operation}</strong> tool, so it may change data upstream. Policy, approval rules and the audit log apply as for any agent call.
+            {adminOnly && runAs && " You are starting it as an admin, so it is audited as impersonation of that agent."}
           </>
         }
         confirmLabel={`Run ${tool.name}`}
@@ -566,22 +603,21 @@ const ACTIVATION_STATUS: Record<
 > = {
   403: {
     status: "denied",
-    detail: "Policy denied this activation for the chosen identity.",
+    detail: "Policy denied this activation for the chosen agent.",
   },
   404: {
     status: "unavailable",
-    detail: "This skill is not routed to the chosen identity.",
+    detail: "This skill is not routed to the chosen agent.",
   },
   429: {
     status: "rate_limited",
     detail:
-      "Activation rate limit reached for this identity. Try again shortly.",
+      "Activation rate limit reached for this agent. Try again shortly.",
   },
 };
 
 function SkillActivator({ skill }: { skill: SkillDetail }) {
   const s = useStyles();
-  const c = useCommonStyles();
   const notify = useNotify();
   const auth = useAuth();
   // Same Run-as rules as tools: an admin-only session must name the agent it activates as.
@@ -641,12 +677,13 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
               : void activate()
           }
         >
-          {running ? "Activating…" : `Activate as ${who}`}
+          {running ? "Activating…" : who ? `Activate as ${who}` : "Activate"}
         </Button>
       </div>
       {failure && (
         <ExecutionOutcomeView
           tool={skill}
+          noun="skill"
           outcome={failure}
           asAgent={auth.hasAgentKey}
         />
@@ -667,7 +704,7 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
           </MessageBar>
           <Subtitle2 as="h3">Body</Subtitle2>
           {/* Skill bodies are untrusted text: a text node in <pre>, never Markdown/HTML. */}
-          <pre aria-label="Skill body" className={c.muted}>
+          <pre aria-label="Skill body" style={{ whiteSpace: "pre-wrap" }}>
             {result.body}
           </pre>
           <Subtitle2 as="h3">Resources</Subtitle2>
@@ -686,13 +723,14 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
       )}
       <ConfirmDialog
         open={confirming}
-        title={`Activate ${skill.name} as ${who}?`}
+        title={who ? `Activate ${skill.name} as ${who}?` : `Activate ${skill.name}?`}
         body={
           <>
             <strong>{skill.name}</strong> is classified as an{" "}
             <strong>execute</strong> skill: its instructions may tell an agent
             to run scripts or act on real systems. Activation is audited and
             subject to policy as for any agent.
+            {adminOnly && runAs && " You are starting it as an admin, so it is audited as impersonation of that agent."}
           </>
         }
         confirmLabel={`Activate ${skill.name}`}
@@ -746,9 +784,13 @@ function SkillsPlayground() {
           <ErrorState what="Skills" onRetry={skills.reload} />
         ) : items.length === 0 ? (
           <Caption1>
-            {q
-              ? "No enabled skills match."
-              : "No enabled skills yet. Add a skill source first."}
+            {q ? (
+              "No enabled skills match."
+            ) : (
+              <>
+                No enabled skills yet. Add a <Link to="/skill-sources">skill source</Link> first.
+              </>
+            )}
           </Caption1>
         ) : (
           <ul className={s.list} aria-label="Skills">
@@ -835,7 +877,15 @@ function ToolsPlayground() {
         ) : tools.failed && !tools.data ? (
           <ErrorState what="Tools" onRetry={tools.reload} />
         ) : items.length === 0 ? (
-          <Caption1>{q || serverId ? "No enabled tools match." : "No enabled tools yet. Register a server first."}</Caption1>
+          <Caption1>
+            {q || serverId ? (
+              "No enabled tools match."
+            ) : (
+              <>
+                No enabled tools yet. Register a <Link to="/servers">server</Link> first.
+              </>
+            )}
+          </Caption1>
         ) : (
           <ul className={s.list} aria-label="Tools">
             {items.map((t) => (
