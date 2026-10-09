@@ -23,7 +23,7 @@ describe("delete server / skill source", () => {
   it("deletes a server after a confirmation naming it and the history rule", async () => {
     const user = userEvent.setup();
     const { calls } = mockFetch({
-      [`GET ${API}/servers`]: () => ({ json: [{ id: "s1", name: "github", transport: "stdio", stdio_command: ["x"], enabled: true, status: "healthy", tool_count: 4 }] }),
+      [`GET ${API}/servers`]: () => ({ json: [{ id: "s1", name: "github", transport: "stdio", enabled: true, status: "healthy", tool_count: 4 }] }),
       [`DELETE ${API}/servers/s1`]: () => ({ status: 204 }),
     });
     renderWithProviders(<ServersPage />, { route: "/servers" });

@@ -39,8 +39,6 @@ export interface MCPServer {
   name: string;
   transport: Transport;
   endpoint?: string | null;
-  // CONTRACT: stdio command line exposed as a string list (models.py stdio_command).
-  stdioCommand?: string[] | null;
   enabled: boolean;
   status: ServerStatus;
   version?: string | null;
@@ -49,9 +47,9 @@ export interface MCPServer {
   toolCount?: number;
 }
 
-// CONTRACT: register body. http/sse → endpoint; stdio → stdioCommand [cmd, ...args].
+/** POST /servers (ServerIn, extra keys refused): http/sse → endpoint; stdio → command [cmd, ...args]. */
 export type RegisterServerRequest =
-  | { name: string; transport: "stdio"; stdioCommand: string[] }
+  | { name: string; transport: "stdio"; command: string[] }
   | { name: string; transport: "streamable-http" | "sse"; endpoint: string };
 
 // ------------------------------------------------------------------- tools

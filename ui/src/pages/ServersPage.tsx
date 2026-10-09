@@ -20,7 +20,8 @@ import { useLoader } from "../hooks/useLoader";
 import { RegisterServerDialog } from "./RegisterServerDialog";
 
 function endpointLabel(s: MCPServer): string {
-  if (s.transport === "stdio") return (s.stdioCommand ?? []).join(" ") || "—";
+  // The backend never returns a stdio server's argv (it may carry secrets).
+  if (s.transport === "stdio") return "local process";
   return s.endpoint ?? "—";
 }
 

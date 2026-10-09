@@ -92,7 +92,7 @@ export function RegisterServerDialog({
         .split("\n")
         .map((a) => a.trim())
         .filter(Boolean);
-      body = { name: name.trim(), transport, stdioCommand: [command.trim(), ...argv] };
+      body = { name: name.trim(), transport, command: [command.trim(), ...argv] };
     } else {
       const err = validateHttpUrl(endpoint, httpsOnly);
       if (err) e.endpoint = err;

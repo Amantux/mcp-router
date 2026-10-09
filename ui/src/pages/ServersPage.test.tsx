@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { callsTo, mockFetch, renderWithProviders } from "../test/render";
 import { ServersPage } from "./ServersPage";
 
-const GH = { id: "s1", name: "github", transport: "stdio", stdio_command: ["npx", "-y", "@mcp/github"], enabled: true, status: "healthy", tool_count: 12, last_discovered_at: "2026-10-01T00:00:00Z" };
+const GH = { id: "s1", name: "github", transport: "stdio", env_names: [], enabled: true, status: "healthy", tool_count: 12, last_discovered_at: "2026-10-01T00:00:00Z" };
 const WEB = { id: "s2", name: "web", transport: "streamable-http", endpoint: "https://mcp.example.com/mcp", enabled: false, status: "offline", tool_count: 3 };
 
 function routes(extra: Parameters<typeof mockFetch>[0] = {}) {
@@ -12,12 +12,12 @@ function routes(extra: Parameters<typeof mockFetch>[0] = {}) {
 }
 
 describe("ServersPage", () => {
-  it("lists servers with transport, endpoint or argv, status and tool count", async () => {
+  it("lists servers with transport, endpoint, status and tool count", async () => {
     routes();
     renderWithProviders(<ServersPage />, { route: "/servers" });
     const table = await screen.findByRole("table", { name: "Servers" });
     const [, gh, web] = within(table).getAllByRole("row");
-    expect(within(gh).getByText("npx -y @mcp/github")).toBeTruthy();
+    expect(within(gh).getByText("local process")).toBeTruthy();
     expect(within(gh).getByText("healthy")).toBeTruthy();
     expect(within(gh).getByText("12")).toBeTruthy();
     expect(within(web).getByText("https://mcp.example.com/mcp")).toBeTruthy();
@@ -81,7 +81,7 @@ describe("ServersPage", () => {
     await user.type(within(dialog).getByRole("textbox", { name: /Command/ }), "uvx");
     await user.type(within(dialog).getByRole("textbox", { name: /Arguments/ }), "mcp-files{Enter}--root /srv/data{Enter}");
     await user.click(within(dialog).getByRole("button", { name: "Register server" }));
-    await waitFor(() => expect(callsTo(calls, "POST", "/api/v1/servers").map((c) => c.body)).toEqual([{ name: "files", transport: "stdio", stdioCommand: ["uvx", "mcp-files", "--root /srv/data"] }]));
+    await waitFor(() => expect(callsTo(calls, "POST", "/api/v1/servers").map((c) => c.body)).toEqual([{ name: "files", transport: "stdio", command: ["uvx", "mcp-files", "--root /srv/data"] }]));
     await waitFor(() => expect(callsTo(calls, "GET", "/api/v1/servers").length).toBeGreaterThan(1));
   });
 });
