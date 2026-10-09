@@ -376,17 +376,33 @@ def pair_evidence(
 class Wasted:
     tool_id: str
     counts: ToolCounts = field(default_factory=ToolCounts)
+    unhelpful: int = 0
 
 
 def wasted_exposure(
-    funnel: dict[str, ToolCounts], *, min_surfaced: int, max_selection_rate: float
+    funnel: dict[str, ToolCounts],
+    *,
+    min_surfaced: int,
+    max_selection_rate: float,
+    unhelpful: dict[str, int] | None = None,
 ) -> list[Wasted]:
     """Tools surfaced >= min_surfaced whose selection rate is below the
-    threshold — context spent on tools agents don't pick. Surfaced desc."""
+    threshold — context spent on tools agents don't pick. Ordered by
+    unhelpful feedback desc, then surfaced desc, then selection rate asc
+    (None as 0), then tool id. Feedback only reorders; it never admits a
+    tool the surfaced/rate filter rejects."""
+    unhelpful = unhelpful or {}
     hits = [
-        Wasted(tid, c)
+        Wasted(tid, c, unhelpful.get(tid, 0))
         for tid, c in funnel.items()
         if c.surfaced >= min_surfaced and (c.selection_rate or 0.0) < max_selection_rate
     ]
-    hits.sort(key=lambda w: (-w.counts.surfaced, w.tool_id))
+    hits.sort(
+        key=lambda w: (
+            -w.unhelpful,
+            -w.counts.surfaced,
+            w.counts.selection_rate or 0.0,
+            w.tool_id,
+        )
+    )
     return hits
