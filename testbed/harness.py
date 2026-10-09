@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -59,14 +60,18 @@ def _terminate(proc: subprocess.Popen[str]) -> None:
 def http_fleet(
     n_servers: int,
     *,
-    port_base: int,
+    port_base: int | None = None,
     ports: int = 1,
     tools: int | None = None,
     startup_timeout_s: float = 60.0,
 ) -> Iterator[dict[str, str]]:
-    """Run ``python -m testbed.serve`` and yield ``{server name: url}``."""
+    """Run ``python -m testbed.serve`` and yield ``{server name: url}``.
+
+    ``port_base=None`` (default): OS-assigned free ports, read back from READY."""
     cmd = [sys.executable, "-m", "testbed.serve", "--servers", str(n_servers)]
-    cmd += ["--port-base", str(port_base), "--ports", str(ports)]
+    cmd += ["--ports", str(ports)]
+    if port_base is not None:
+        cmd += ["--port-base", str(port_base)]
     if tools is not None:
         cmd += ["--tools", str(tools)]
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT)}
@@ -111,9 +116,8 @@ class InprocFleet:
     name in ``down`` to make it unreachable (points at a dead local port).
     """
 
-    DEAD_URL = "http://127.0.0.1:8619/dead/mcp"  # nothing listens on 8619 in tests
-
     def __init__(self, specs: list[ServerSpec] | None = None) -> None:
+        self.dead_url = f"http://127.0.0.1:{dead_port()}/dead/mcp"
         self.specs: dict[str, ServerSpec] = {s.name: s for s in specs or []}
         self.down: set[str] = set()
 
@@ -127,24 +131,36 @@ class InprocFleet:
 
         del target
         if server.name in self.down:
-            dead = ServerTarget(transport="streamable-http", endpoint=self.DEAD_URL)
+            dead = ServerTarget(transport="streamable-http", endpoint=self.dead_url)
             return Connector(dead, connect_timeout_s=3)
         return Connector(build_server(self.specs[server.name]))
 
 
+def dead_port(host: str = "127.0.0.1") -> int:
+    """A port nothing listens on: bound by us, then closed (never a fixed number)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        port: int = sock.getsockname()[1]
+        return port
+
+
 @contextmanager
-def sse_server(spec: ServerSpec, *, port: int, host: str = "127.0.0.1") -> Iterator[str]:
-    """Serve one spec over LEGACY SSE in a background thread; yield its URL."""
+def sse_server(spec: ServerSpec, *, port: int = 0, host: str = "127.0.0.1") -> Iterator[str]:
+    """Serve one spec over LEGACY SSE in a background thread; yield its URL.
+
+    ``port=0`` (default): a pre-bound OS-assigned port handed to uvicorn."""
     import uvicorn
 
     from testbed.servers import build_server
 
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+    port = sock.getsockname()[1]
     server = uvicorn.Server(
-        uvicorn.Config(
-            build_server(spec).sse_app(host=host), host=host, port=port, log_level="warning"
-        )
+        uvicorn.Config(build_server(spec).sse_app(host=host), log_level="warning")
     )
-    th = threading.Thread(target=server.run, daemon=True)
+    th = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     th.start()
     try:
         deadline = time.monotonic() + 15
@@ -156,3 +172,4 @@ def sse_server(spec: ServerSpec, *, port: int, host: str = "127.0.0.1") -> Itera
     finally:
         server.should_exit = True
         th.join(timeout=10)
+        sock.close()

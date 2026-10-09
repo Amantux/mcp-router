@@ -154,7 +154,7 @@ def test_complete_survives_a_concurrent_winner(client: TestClient) -> None:
     def stale_get(self: Session, entity: object, ident: object, **kw: object) -> object:
         if entity is AppSetting:  # simulate the loser's stale "row absent" read
             return None
-        return real_get(self, entity, ident, **kw)  # type: ignore[call-overload]
+        return real_get(self, entity, ident, **kw)
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(Session, "get", stale_get)

@@ -103,7 +103,7 @@ def _seed_pair(s: Session, **b_overrides: object) -> tuple[str, str]:
         "error_count": 30,
     }
     b_kw.update(b_overrides)
-    b = make_tool(s, gl, "list_issues", "List project issues", **b_kw)  # type: ignore[arg-type]
+    b = make_tool(s, gl, "list_issues", "List project issues", **b_kw)
     s.commit()
     return a.id, b.id
 

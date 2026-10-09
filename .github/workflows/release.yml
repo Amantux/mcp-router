@@ -1,31 +1,92 @@
 name: release
-# On a v* tag: build and push ghcr.io/amantux/mcp-router:<tag> and :latest,
-# plus the -inference flavor (allowed to fail independently: CPU torch is large).
+# On a vX.Y.Z[suffix] tag: `verify` proves the tag is shippable (D7), then both
+# images build and push. Nothing publishes unless verify succeeds:
+#   - tag == "v" + pyproject version, top CHANGELOG heading == that version
+#   - a successful `CI` push run exists for this exact SHA on master
+#   - the SHA is an ancestor of origin/master (no releasing side branches)
+# `:latest` / `:latest-inference` move only for a plain vX.Y.Z tag.
+# Tag protection (who may push v* tags) is a repo ruleset, not this file.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 
 # Nothing at workflow level; each job declares exactly what it needs.
 permissions: {}
 
+# One lane for every tag: two releases never race on :latest.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 env:
   IMAGE: ghcr.io/amantux/mcp-router
 
 jobs:
-  image:
-    name: image
+  verify:
+    name: verify
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read  # read CI runs for this SHA
+    outputs:
+      is_release: ${{ steps.local.outputs.is_release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0  # all branches + tags: ancestor check, newest-tag check
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: SHA is an ancestor of origin/master
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master \
+            || { echo "::error::$GITHUB_SHA is not on origin/master"; exit 1; }
+      # Waits (bounded, 30 min) when master and the tag were pushed together and
+      # CI is still running; fails as soon as every CI run for the SHA is done
+      # and none succeeded.
+      - name: A green CI push run exists for this SHA on master
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for _ in $(seq 1 60); do
+            runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&branch=master" \
+              --jq '[.workflow_runs[] | {s: .status, c: .conclusion}]')
+            green=$(jq '[.[] | select(.s == "completed" and .c == "success")] | length' <<<"$runs")
+            total=$(jq 'length' <<<"$runs")
+            pending=$(jq '[.[] | select(.s != "completed")] | length' <<<"$runs")
+            echo "CI runs for $GITHUB_SHA: total=$total green=$green pending=$pending"
+            if [ "$green" -ge 1 ]; then exit 0; fi
+            if [ "$total" -ge 1 ] && [ "$pending" -eq 0 ]; then
+              echo "::error::every CI run on master for $GITHUB_SHA finished and none succeeded"; exit 1
+            fi
+            sleep 30
+          done
+          echo "::error::no green CI run on master for $GITHUB_SHA within 30 min"; exit 1
+      - name: Tag matches pyproject version and CHANGELOG; newest plain tag moves latest
+        id: local
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          out=$(python .github/scripts/release_verify.py "$TAG") || { echo "$out"; exit 1; }
+          echo "$out" | tee -a "$GITHUB_OUTPUT"
+
+  image:
+    name: image
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}  # build exactly what verify checked
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -33,7 +94,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -41,12 +103,13 @@ jobs:
           sbom: true
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ !contains(github.ref_name, '-') && format('{0}:latest', env.IMAGE) || '' }}
+            ${{ needs.verify.outputs.is_release == 'true' && format('{0}:latest', env.IMAGE) || '' }}
 
+  # Fails visibly (no continue-on-error): a release whose inference flavour did
+  # not ship is not a complete release.
   image-inference:
     name: image-inference
-    needs: image
-    continue-on-error: true
+    needs: [verify, image]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -55,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}  # build exactly what verify checked
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -67,8 +131,10 @@ jobs:
           context: .
           file: Dockerfile.inference
           push: true
+          provenance: mode=max
+          sbom: true
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE }}:${{ github.ref_name }}
+            BASE_IMAGE=${{ env.IMAGE }}@${{ needs.image.outputs.digest }}
           tags: |
             ${{ env.IMAGE }}:${{ github.ref_name }}-inference
-            ${{ !contains(github.ref_name, '-') && format('{0}:latest-inference', env.IMAGE) || '' }}
+            ${{ needs.verify.outputs.is_release == 'true' && format('{0}:latest-inference', env.IMAGE) || '' }}

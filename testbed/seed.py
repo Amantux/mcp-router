@@ -1,7 +1,7 @@
 """Register + discover a synthetic fleet straight into the database.
 
     python -m testbed.seed --servers 100 --tools 1000                 # in-process
-    python -m testbed.seed --servers 100 --tools 1000 --transport http --port-base 8600 --ports 2
+    python -m testbed.seed --servers 100 --tools 1000 --transport http --ports 2
 
 ``inproc`` (default) discovers each server through an in-process MCPServer
 (no network; rows keep a placeholder ``http://inproc.invalid/...`` endpoint,
@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--servers", type=int, default=100)
     ap.add_argument("--tools", type=int, default=1000)
     ap.add_argument("--transport", choices=("inproc", "http"), default="inproc")
-    ap.add_argument("--port-base", type=int, default=8600)
+    ap.add_argument("--port-base", type=int, default=None, help="default: OS-assigned ports")
     ap.add_argument("--ports", type=int, default=2)
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--database-url", default=None, help="defaults to MCPR_DATABASE_URL")
