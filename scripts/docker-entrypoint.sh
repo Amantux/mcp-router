@@ -61,9 +61,9 @@ PY
 if [ "$#" -gt 0 ]; then exec "$@"; fi
 
 # Schema to head before serving (E6 P-601): the CLI takes the same advisory
-# lock as the app's boot path, logs the revision (stderr), prints FATAL itself
-# (no DSN) and exits 1.
-python -m mcprouter.migrate upgrade >&2 || die "schema migration failed (see the FATAL line above)."
+# lock as the app's boot path, prints FATAL itself (no DSN) and exits 1.
+rev=$(python -m mcprouter.migrate upgrade) || die "schema migration failed (see the FATAL line above)."
+log "database schema at revision $rev"
 
 exec uvicorn --factory mcprouter.api.app:create_app \
   --host "$bind_host" --port "$port" --workers 1 \
