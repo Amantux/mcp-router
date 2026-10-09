@@ -24,7 +24,12 @@ from mcprouter.execution.redaction import redact
 from mcprouter.models import SkillRecord, SkillSourceRecord, SkillVersionRecord
 from mcprouter.settings import Settings
 from mcprouter.skills.hashing import content_hash, manifest_hash
-from mcprouter.skills.validate import ParsedSkill, SkillValidationError, parse_skill_md
+from mcprouter.skills.validate import (
+    FRONTMATTER_MAX_BYTES,
+    ParsedSkill,
+    SkillValidationError,
+    parse_skill_md,
+)
 from mcprouter.skills.walker import FoundSkill, walk_source
 
 
@@ -77,7 +82,12 @@ def sync_source(
         source.status = "offline"
         report["skipped"].append({"path": ".", "reason": "source root is not readable"})
         return report
-    walked = walk_source(root, resource_max_bytes=settings.skill_resource_max_bytes)
+    walked = walk_source(
+        root,
+        resource_max_bytes=settings.skill_resource_max_bytes,
+        # Owner decision: read at most body cap + frontmatter cap + 1 byte.
+        skill_md_max_bytes=settings.skill_body_max_bytes + FRONTMATTER_MAX_BYTES,
+    )
     report["skipped"].extend(walked.skipped)
     existing = {
         r.name: r

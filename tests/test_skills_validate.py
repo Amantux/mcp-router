@@ -29,7 +29,6 @@ GOOD = "name: pdf-tools\ndescription: Work with PDFs."
         ("name: pdf\ndescription: x\ncompatibility: " + "c" * 501, "pdf", "compatibility"),
         ("name: pdf\ndescription: x\nmetadata: {a: 1}", "pdf", "metadata"),
         ("name: pdf\ndescription: x\nmetadata: [a]", "pdf", "metadata"),
-        ("name: pdf\ndescription: x\nbogus: 1", "pdf", "unsupported"),
         ("- a\n- b", "pdf", "mapping"),
         ("just a string", "pdf", "mapping"),
         ("name: pdf\nname: pdf\ndescription: x", "pdf", "duplicate"),
@@ -67,3 +66,15 @@ def test_body_truncated_on_char_boundary() -> None:
     p = parse_skill_md(_md(GOOD, "é" * 10), dir_name="pdf-tools", body_max_bytes=5)
     assert p.body == "éé" and p.flags == ["body_truncated"]
     assert len(p.body.encode()) <= 5
+
+
+def test_unknown_frontmatter_keys_accepted_and_flagged() -> None:
+    text = "---\nname: pdf\ndescription: x\nzeta: 1\nvendor-x: {a: b}\n---\nbody"
+    p = parse_skill_md(text, dir_name="pdf", body_max_bytes=1000)
+    assert p.flags == ["unknown_frontmatter_keys"]
+    assert p.metadata["_unknown_keys"] == "vendor-x,zeta"
+
+
+def test_known_keys_only_not_flagged() -> None:
+    p = parse_skill_md("---\nname: pdf\ndescription: x\n---\nb", dir_name="pdf", body_max_bytes=9)
+    assert p.flags == [] and "_unknown_keys" not in p.metadata

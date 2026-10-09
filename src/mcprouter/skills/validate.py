@@ -100,9 +100,11 @@ def _truncate_utf8(body: str, cap: int) -> tuple[str, bool]:
 def parse_skill_md(text: str, *, dir_name: str, body_max_bytes: int) -> ParsedSkill:
     fm, body = split_frontmatter(text)
     data = _load_yaml(fm)
-    unknown = set(map(str, data)) - _ALLOWED_KEYS
-    if unknown:
-        raise SkillValidationError("frontmatter has unsupported keys")
+    # Owner decision (wave 4): unknown top-level keys are ACCEPTED, not rejected --
+    # real-world skills carry vendor keys. Their names are recorded (sorted,
+    # comma-joined) in metadata["_unknown_keys"] and flagged
+    # `unknown_frontmatter_keys`. Spec-required fields stay strictly enforced.
+    unknown = sorted(set(map(str, data)) - _ALLOWED_KEYS)
     name = data.get("name")
     if not isinstance(name, str) or not 1 <= len(name) <= 64 or not NAME_RE.fullmatch(name):
         raise SkillValidationError("name must be 1-64 chars of [a-z0-9] joined by single hyphens")
@@ -118,13 +120,18 @@ def parse_skill_md(text: str, *, dir_name: str, body_max_bytes: int) -> ParsedSk
         raise SkillValidationError("metadata must map strings to strings")
     tools_raw = _opt_str(data, "allowed-tools")
     body, truncated = _truncate_utf8(body, body_max_bytes)
+    meta = dict(meta)
+    flags = ["body_truncated"] if truncated else []
+    if unknown:
+        meta["_unknown_keys"] = ",".join(unknown)[:1024]
+        flags.append("unknown_frontmatter_keys")
     return ParsedSkill(
         name=name,
         description=desc,
         body=body,
         license=_opt_str(data, "license"),
         compatibility=_opt_str(data, "compatibility", 500),
-        metadata=dict(meta),
+        metadata=meta,
         allowed_tools=tools_raw.split() if tools_raw else [],
-        flags=["body_truncated"] if truncated else [],
+        flags=flags,
     )

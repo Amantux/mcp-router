@@ -57,6 +57,9 @@ def build_manifest(
     for dirpath, dirnames, filenames in os.walk(skill_dir, followlinks=False):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         base = Path(dirpath)
+        # Owner decision (wave 4): a child directory with its own SKILL.md is a
+        # separate skill; its files never appear in the parent's manifest.
+        dirnames[:] = [d for d in dirnames if not (base / d / "SKILL.md").exists()]
         for d in list(dirnames):
             if (base / d).is_symlink():
                 dirnames.remove(d)
@@ -92,7 +95,22 @@ def _rel(root: Path, p: Path) -> str:
         return p.name
 
 
-def walk_source(root_in: Path | str, *, resource_max_bytes: int) -> WalkResult:
+def _read_capped(p: Path, cap: int | None) -> bytes | None:
+    """Read at most cap+1 bytes; None if larger than cap. O_NOFOLLOW + fstat
+    closes the swap-to-symlink race between the walk's checks and this read."""
+    fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError("not a regular file")
+        data = f.read() if cap is None else f.read(cap + 1)
+    if cap is not None and len(data) > cap:
+        return None
+    return data
+
+
+def walk_source(
+    root_in: Path | str, *, resource_max_bytes: int, skill_md_max_bytes: int | None = None
+) -> WalkResult:
     root = Path(os.path.realpath(root_in))
     res = WalkResult()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -106,6 +124,14 @@ def walk_source(root_in: Path | str, *, resource_max_bytes: int) -> WalkResult:
         if not _inside(root, md) or not md.is_file():
             res.skipped.append({"path": _rel(root, md), "reason": "symlink escapes source root"})
             continue
+        try:
+            skill_md = _read_capped(md, skill_md_max_bytes)
+        except OSError:
+            res.skipped.append({"path": _rel(root, md), "reason": "SKILL.md not readable"})
+            continue
+        if skill_md is None:
+            res.skipped.append({"path": _rel(root, md), "reason": "skill_md_too_large"})
+            continue
         manifest, has_scripts = build_manifest(
             root, base, resource_max_bytes=resource_max_bytes, skipped=res.skipped
         )
@@ -113,7 +139,7 @@ def walk_source(root_in: Path | str, *, resource_max_bytes: int) -> WalkResult:
             FoundSkill(
                 dir=base,
                 relative_path=base.relative_to(root).as_posix(),
-                skill_md=md.read_bytes(),
+                skill_md=skill_md,
                 manifest=manifest,
                 has_scripts=has_scripts,
             )

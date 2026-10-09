@@ -111,3 +111,17 @@ def test_flags_and_offline(sdb: Any, settings: Settings, tmp_path: Path) -> None
     _run(sdb, tmp_path / "missing", settings, sid)
     with sdb() as s:
         assert s.get(SkillSourceRecord, sid).status == "offline"
+
+
+def test_unknown_keys_and_skill_md_cap(sdb: Any, settings: Settings, tmp_path: Path) -> None:
+    sid = _new_source(sdb, tmp_path)
+    _write(tmp_path, "vendor", desc="d\nx-vendor: 1")
+    cap = settings.skill_body_max_bytes + 16 * 1024
+    _write(tmp_path, "huge", body="b" * (cap + 10))
+    rep = _run(sdb, tmp_path, settings, sid)
+    assert {"path": "huge/SKILL.md", "reason": "skill_md_too_large"} in rep["skipped"]
+    with sdb() as s:
+        rec = s.scalars(select(SkillRecord).where(SkillRecord.name == "vendor")).one()
+        assert "unknown_frontmatter_keys" in rec.ingest_flags
+        assert rec.skill_metadata["_unknown_keys"] == "x-vendor"
+        assert s.scalars(select(SkillRecord).where(SkillRecord.name == "huge")).first() is None

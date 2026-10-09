@@ -72,3 +72,27 @@ def test_manifest_hash_order_independent() -> None:
     a = [{"path": "a", "sha256": "1", "size": 1}, {"path": "b", "sha256": "2", "size": 1}]
     assert manifest_hash(a) == manifest_hash(list(reversed(a)))
     assert manifest_hash(a) != manifest_hash(a[:1])
+
+
+def test_skill_md_over_cap_skipped_without_full_read(tmp_path: Path) -> None:
+    d = _skill(tmp_path, "big")
+    (d / "SKILL.md").write_text(MD.format(n="big") + "x" * 500)
+    size = (d / "SKILL.md").stat().st_size
+    over = walk_source(tmp_path, resource_max_bytes=100, skill_md_max_bytes=size - 1)
+    assert over.skills == []
+    assert over.skipped == [{"path": "big/SKILL.md", "reason": "skill_md_too_large"}]
+    exact = walk_source(tmp_path, resource_max_bytes=100, skill_md_max_bytes=size)
+    assert len(exact.skills) == 1 and len(exact.skills[0].skill_md) == size
+
+
+def test_parent_manifest_excludes_nested_child_skill(tmp_path: Path) -> None:
+    parent = _skill(tmp_path, "parent")
+    (parent / "notes.md").write_text("n")
+    child = _skill(tmp_path, "parent/child")
+    (child / "scripts").mkdir()
+    (child / "scripts" / "run.sh").write_text("echo")
+    res = walk_source(tmp_path, resource_max_bytes=100)
+    by = {s.relative_path: s for s in res.skills}
+    assert [e["path"] for e in by["parent"].manifest] == ["notes.md"]
+    assert not by["parent"].has_scripts
+    assert [e["path"] for e in by["parent/child"].manifest] == ["scripts/run.sh"]
