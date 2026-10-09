@@ -23,14 +23,21 @@ Re-runs: an existing OPEN suggestion for the pair is refreshed (score,
 rationale, preferred tool); an accepted/dismissed pair is never re-suggested
 — a human decision is not re-litigated on every run.
 
-Requires `registry.schema.init_registry()` (unique pair index for
-INSERT ... ON CONFLICT DO NOTHING).
+Bounded (D9): each candidate query (tool pairs, skill pairs, tool<->skill)
+returns at most `max_pairs` rows, most similar first; `DedupRun.truncated`
+says a cap was hit (re-run after resolving the top suggestions, or raise
+MCPR_DEDUP_MAX_PAIRS). The pair search is a self-join, so it is exact and
+O(n^2) per domain; the HNSW indexes (migration 0002) serve single-vector
+nearest-neighbour queries, not this join.
+
+Requires the unique pair index `ux_dup_pair` (migration 0001) for
+INSERT ... ON CONFLICT.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy import select, text
@@ -52,6 +59,7 @@ W_COSINE = 0.6
 W_NAME = 0.2
 W_SCHEMA = 0.2
 DEFAULT_THRESHOLD = 0.85
+DEFAULT_MAX_PAIRS = 5000  # Settings.dedup_max_pairs (MCPR_DEDUP_MAX_PAIRS) default
 MIN_THRESHOLD = 0.5
 
 # Preferred-tool evidence floors.
@@ -72,6 +80,8 @@ _CANDIDATES_SQL = text(
       AND vector_norm(a.embedding) > 0 AND vector_norm(b.embedding) > 0
       AND (a.operation = b.operation OR a.operation = 'unknown' OR b.operation = 'unknown')
       AND 1 - (a.embedding <=> b.embedding) >= :cos_floor
+    ORDER BY cosine DESC, a.id, b.id
+    LIMIT :lim
     """
 )
 
@@ -152,16 +162,29 @@ class DedupRun:
     created: int
     refreshed: int
     skipped_decided: int
+    truncated: bool = False  # a candidate query hit max_pairs
 
 
-def run_dedup(session: Session, *, threshold: float = DEFAULT_THRESHOLD) -> DedupRun:
+def _capped(session: Session, sql: Any, params: dict[str, Any], cap: int) -> tuple[list[Any], bool]:
+    rows = list(session.execute(sql, {**params, "lim": cap + 1}).all())
+    return rows[:cap], len(rows) > cap
+
+
+def run_dedup(
+    session: Session,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    max_pairs: int = DEFAULT_MAX_PAIRS,
+) -> DedupRun:
     if not MIN_THRESHOLD <= threshold <= 1.0:
         raise InvalidArgument(f"threshold must be between {MIN_THRESHOLD} and 1.0.")
+    if max_pairs < 1:
+        raise InvalidArgument("max_pairs must be at least 1.")
     cos_floor = (threshold - (W_NAME + W_SCHEMA)) / W_COSINE
-    rows = session.execute(_CANDIDATES_SQL, {"cos_floor": cos_floor}).all()
-    skill_run = _run_skill_dedup(session, threshold)
+    rows, truncated = _capped(session, _CANDIDATES_SQL, {"cos_floor": cos_floor}, max_pairs)
+    skill_run = _run_skill_dedup(session, threshold, max_pairs)
     if not rows:
-        return skill_run
+        return replace(skill_run, truncated=skill_run.truncated or truncated)
 
     ids = {r.a_id for r in rows} | {r.b_id for r in rows}
     tools = {
@@ -222,6 +245,7 @@ def run_dedup(session: Session, *, threshold: float = DEFAULT_THRESHOLD) -> Dedu
         created=created + skill_run.created,
         refreshed=refreshed + skill_run.refreshed,
         skipped_decided=decided + skill_run.skipped_decided,
+        truncated=truncated or skill_run.truncated,
     )
 
 
@@ -245,6 +269,8 @@ _SKILL_PAIRS_SQL = text(
       AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
       AND vector_norm(a.embedding) > 0 AND vector_norm(b.embedding) > 0
       AND 1 - (a.embedding <=> b.embedding) >= :cos_floor
+    ORDER BY cosine DESC, a.id, b.id
+    LIMIT :lim
     """
 )
 
@@ -257,6 +283,8 @@ _CROSS_SQL = text(
       AND t.embedding IS NOT NULL AND k.embedding IS NOT NULL
       AND vector_norm(t.embedding) > 0 AND vector_norm(k.embedding) > 0
       AND 1 - (t.embedding <=> k.embedding) >= :threshold
+    ORDER BY cosine DESC, t.id, k.id
+    LIMIT :lim
     """
 )
 
@@ -309,10 +337,12 @@ def _upsert(
     counts[0] += int(res.scalar_one_or_none() is not None)
 
 
-def _run_skill_dedup(session: Session, threshold: float) -> DedupRun:
+def _run_skill_dedup(
+    session: Session, threshold: float, max_pairs: int = DEFAULT_MAX_PAIRS
+) -> DedupRun:
     cos_floor = (threshold - (W_NAME + W_SCHEMA)) / W_COSINE
-    pairs = session.execute(_SKILL_PAIRS_SQL, {"cos_floor": cos_floor}).all()
-    cross = session.execute(_CROSS_SQL, {"threshold": threshold}).all()
+    pairs, t1 = _capped(session, _SKILL_PAIRS_SQL, {"cos_floor": cos_floor}, max_pairs)
+    cross, t2 = _capped(session, _CROSS_SQL, {"threshold": threshold}, max_pairs)
     ids = {r.a_id for r in pairs} | {r.b_id for r in pairs} | {r.k_id for r in cross}
     skills = {k.id: k for k in session.scalars(select(SkillRecord).where(SkillRecord.id.in_(ids)))}
     counts = [0, 0, 0]
@@ -337,4 +367,4 @@ def _run_skill_dedup(session: Session, threshold: float) -> DedupRun:
         )
         _upsert(session, r.t_id, skill_ref(k.id), float(r.cosine), why, counts)
     session.flush()
-    return DedupRun(len(pairs) + len(cross), counts[0], counts[1], counts[2])
+    return DedupRun(len(pairs) + len(cross), counts[0], counts[1], counts[2], t1 or t2)
