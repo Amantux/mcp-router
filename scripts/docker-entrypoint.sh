@@ -55,4 +55,5 @@ PY
 
 if [ "$#" -gt 0 ]; then exec "$@"; fi
 exec uvicorn --factory mcprouter.api.app:create_app \
-  --host "$bind_host" --port "${MCPR_PORT:-8400}" --workers 1
+  --host "$bind_host" --port "${MCPR_PORT:-8400}" --workers 1 \
+  --timeout-graceful-shutdown 20
