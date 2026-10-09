@@ -30,10 +30,23 @@
 Body + bundle use a new `requestRaw` (same bearer/credentials:"omit"/noteResponse/ApiError rules as
 `request`, but no JSON parse); always presented as admin.
 
+## Wave 4 S4b additions
+- Playground: top-level Tools / Skills tabs (`?skill=<id>` or `?tab=skills` selects Skills). Skills tab: debounced
+  search, Run-as rules identical to tools (agent key; admin-only must pick an agent → POST carries `agentId`),
+  confirm dialog for `operation === "execute"` naming skill + identity, success shows audit record id, resources
+  list, body as an inert `<pre>` text node. 403/404/429 → shared `ExecutionOutcomeView`
+  (denied / unavailable / rate_limited). Page title is now "Playground" (nav label unchanged).
+- Duplicates: `skill:<id>` refs load via `getSkill`; when a skill is in the pair, each side shows a "skill"/"tool"
+  badge. Copy unchanged.
+
+| Call | Guess | Status |
+|---|---|---|
+| `POST /skills/{id}/activate {agentId?}` → `{body, resources[{path,size,kind}], recordId}`; 403/404/429 | from S3 exposure notes | aligned with S3 *planned* shape, not verified against code |
+| dedup `toolAId/toolBId = "skill:<id>"` | guessed | S2 routing notes absent |
+
 ## NOT done (budget) — next executor
-- Playground Skills tab (activate as identity, body+resources+recordId, denied/pending renderer).
-- Lens two-section (Tools/Skills) budgets + maxSkills slider; filtered-out table both kinds.
-- Analytics kind chip, wasted-exposure skills, economy note; Duplicates cross-kind badges.
-- Drawer Classification tab (ClassificationEditor is typed to MCPTool — needs a kind-generic prop or
-  a `PATCH /skills/{id}/classification` save fn passed in) and Funnel tab.
-- Lens/route types (`skills[]`, `maxSkillsApplied`) not added — S2 notes absent.
+- Lens two-section (Tools/Skills) budgets + maxSkills slider; filtered-out table kind badges.
+- Analytics kind chip (All/Tools/Skills), skills in wasted exposure, economy caption.
+- Skills drawer Classification tab (ClassificationEditor is typed to MCPTool — add a `save` prop) and Funnel tab.
+- Route/simulate types (`skills[]`, `maxSkillsApplied`, maxSkills clamp): not added — S2 notes
+  (/root/mcpr4-wt-s2/docs/INTEGRATION_NOTES-wave4-routing.md) still absent at S4b's run.
