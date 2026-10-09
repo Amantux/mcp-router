@@ -1,0 +1,21 @@
+# GPU override — stack ON TOP of the inference flavor:
+#   docker compose -f docker-compose.yml -f docker-compose.inference.yml \
+#     -f docker-compose.gpu.yml up -d --build
+# Requires the NVIDIA Container Toolkit (or WSL2 + Docker Desktop GPU support)
+# and a CUDA torch wheel: set MCPR_TORCH_INDEX_URL to e.g.
+# https://download.pytorch.org/whl/cu124 (the default index is CPU-only).
+# UNPROVEN: authored on a host with no GPU; see docs/deploy.md.
+services:
+  api:
+    build:
+      args:
+        TORCH_INDEX_URL: ${MCPR_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}
+    environment:
+      MCPR_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

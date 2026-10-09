@@ -1,0 +1,20 @@
+# Inference flavor (CPU): bge embeddings + Laya decisions.
+#   docker build -t mcp-router:local .            # base image first
+#   docker compose -f docker-compose.yml -f docker-compose.inference.yml up -d --build
+# Models download into the mcpr-models-cache volume (HF_HOME) on first start;
+# the first boot is slow (model load happens in the lifespan, before /healthz).
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.inference
+      args:
+        BASE_IMAGE: ${MCPR_BASE_IMAGE:-mcp-router:local}
+    image: ${MCPR_INFERENCE_IMAGE:-mcp-router:local-inference}
+    environment:
+      MCPR_EMBEDDING_BACKEND: ${MCPR_EMBEDDING_BACKEND:-bge}
+      MCPR_DECISION_BACKEND: ${MCPR_DECISION_BACKEND:-laya}
+      MCPR_DEVICE: ${MCPR_DEVICE:-cpu}
+      HF_HOME: /srv/models-cache/hf
+    healthcheck:
+      start_period: 300s
