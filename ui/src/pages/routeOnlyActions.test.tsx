@@ -134,6 +134,7 @@ describe("Policy principal and rule actions", () => {
     const target = within(dialog).getByRole("combobox", { name: "Server" });
     expect((target as HTMLSelectElement).value).toBe("srv1");
     await user.selectOptions(target, "");
+    expect(within(dialog).getByText(/This widens the rule: “billing-bot” gets it on every server, not just github/)).toBeTruthy();
     await user.click(within(dialog).getByRole("button", { name: "Save rule" }));
     await waitFor(() =>
       expect(sent(calls, "PATCH")).toEqual([

@@ -148,7 +148,8 @@ async function failure(res: Response, path: string, presented: Identity): Promis
   let text = "";
   try {
     text = await res.text();
-  } catch {
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e; // an abort stays an abort
     /* unreadable body: generic advice */
   }
   return new ApiError(409, path, presented, curatedConflict(text));

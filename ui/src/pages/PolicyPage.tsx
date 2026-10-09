@@ -216,7 +216,8 @@ function EditRuleDialog({
     try {
       const retarget = targetId !== (rule.serverId ?? "") ? { serverId: targetId || null } : {};
       await updateRule(rule.id, { ...retarget, toolName: toolName.trim() || null, maxOperation: ceiling, requiresApproval: approval });
-      notify.success(`Updated the ${kind} rule for “${rule.agentId}” on ${target}`);
+      const newTarget = targetId === (rule.serverId ?? "") ? target : (targets.find((t) => t.id === targetId)?.name ?? (kind === "skill" ? "any source" : "any server"));
+      notify.success(`Updated the ${kind} rule for “${rule.agentId}” on ${newTarget}`);
       onSaved();
       onClose();
     } catch (e) {
@@ -240,7 +241,15 @@ function EditRuleDialog({
               Edit {kind} rule for “{rule.agentId}” on {target}
             </DialogTitle>
             <DialogContent className={s.form}>
-              <Field label={kind === "skill" ? "Skill source" : "Server"}>
+              <Field
+                label={kind === "skill" ? "Skill source" : "Server"}
+                validationState={targetId === "" && rule.serverId ? "warning" : "none"}
+                validationMessage={
+                  targetId === "" && rule.serverId
+                    ? `This widens the rule: “${rule.agentId}” gets it on every ${kind === "skill" ? "skill source" : "server"}, not just ${target}.`
+                    : undefined
+                }
+              >
                 <Select value={targetId} onChange={(_, d) => setTargetId(d.value)}>
                   <option value="">{kind === "skill" ? "Any source" : "Any server"}</option>
                   {/* A target that is no longer listed stays selectable, so saving other fields can't move the rule. */}
