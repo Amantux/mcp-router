@@ -235,33 +235,46 @@ def test_embedder_facade_refuses_stale_provenance() -> None:
 # ------------------------------------------------------------- concurrency
 @pytest.mark.parametrize("mode", ["performance", "balanced", "battery"])
 def test_semaphore_caps_concurrent_inference(mode: str) -> None:
-    active = 0
-    peak = 0
+    """Deterministic, not timing-based: every call that gets a slot blocks
+    inside the model until released, so the cap is observed as a stable
+    state (cap calls inside, the rest parked in the limiter's queue) rather
+    than hoped for by racing sleeps."""
+    cap = MODE_CONCURRENCY[mode]
+    calls = 8
+    arrived = 0
     lock = threading.Lock()
+    release = threading.Event()
 
-    class Slow(DeterministicDecisionModel):
+    class Held(DeterministicDecisionModel):
         def noul(self, state: str, question: str) -> float:
-            nonlocal active, peak
+            nonlocal arrived
             with lock:
-                active += 1
-                peak = max(peak, active)
-            time.sleep(0.05)
-            with lock:
-                active -= 1
+                arrived += 1
+            assert release.wait(30)
             return 0.5
 
-    eng, _ = make(Loaders(decider=Slow), mode=mode)
+    eng, _ = make(Loaders(decider=Held), mode=mode)
     eng.load()
-    threads = [threading.Thread(target=eng.noul, args=("s", "q")) for _ in range(8)]
+    threads = [threading.Thread(target=eng.noul, args=("s", "q")) for _ in range(calls)]
     for t in threads:
         t.start()
-    for t in threads:
-        t.join()
-    assert peak == MODE_CONCURRENCY[mode]
+    try:
+        # Stable: every thread is either inside the model or queued on a slot.
+        wait_for(
+            lambda: arrived == cap and eng.health()["concurrency"]["waiting"] == calls - cap,
+            timeout=30,
+        )
+        stats = eng.health()["concurrency"]
+        assert (arrived, stats["inFlight"], stats["waiting"]) == (cap, cap, calls - cap)
+    finally:
+        release.set()
+        for t in threads:
+            t.join(30)
+    assert arrived == calls
     stats = eng.health()["concurrency"]
-    assert stats["capacity"] == MODE_CONCURRENCY[mode]
-    assert stats["acquiredTotal"] == 8 and stats["inFlight"] == 0
-    assert stats["peakInFlight"] == MODE_CONCURRENCY[mode]
+    assert stats["capacity"] == cap
+    assert stats["acquiredTotal"] == calls and stats["inFlight"] == 0
+    assert stats["peakInFlight"] == cap
 
 
 def test_mode_concurrency_values() -> None:
@@ -435,24 +448,31 @@ def test_idle_timer_does_not_poll_during_a_long_request() -> None:
 
 
 def test_health_does_not_block_on_a_cold_load() -> None:
+    """Event-held, not timed: the loader is parked until health() has answered."""
     started = threading.Event()
+    release = threading.Event()
 
-    def slow_embedding(settings: Settings, device: str) -> EmbeddingBackend:
+    def held_embedding(settings: Settings, device: str) -> EmbeddingBackend:
         started.set()
-        time.sleep(1.0)
+        assert release.wait(30)
         return CountingEmbedder()
 
     eng = InferenceEngine(
-        Settings(embedding_backend="bge", device="cpu"), embedding_loader=slow_embedding
+        Settings(embedding_backend="bge", device="cpu"), embedding_loader=held_embedding
     )
     t = threading.Thread(target=eng.load)
     t.start()
-    assert started.wait(5)
-    t0 = time.perf_counter()
-    h = eng.health()
-    assert time.perf_counter() - t0 < 0.3
-    assert h["loaded"] is False
-    t.join()
+    try:
+        assert started.wait(30)
+        out: dict[str, Any] = {}
+        probe = threading.Thread(target=lambda: out.update(h=eng.health()))
+        probe.start()
+        probe.join(30)
+        assert not probe.is_alive()  # answered while the load is still held
+        assert out["h"]["loaded"] is False
+    finally:
+        release.set()
+        t.join(30)
     assert eng.health()["loaded"] is True
 
 
