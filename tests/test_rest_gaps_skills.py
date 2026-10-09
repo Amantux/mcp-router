@@ -147,3 +147,38 @@ def test_skill_source_kind_is_an_enum(client: TestClient, tmp_path: Path) -> Non
 def test_skill_source_unknown_field_is_422(client: TestClient, tmp_path: Path) -> None:
     body = {"name": "x", "kind": "directory", "location": str(tmp_path), "bogus": 1}
     assert client.post("/api/v1/skill-sources", json=body, headers=H).status_code == 422
+
+
+# ---- P-209: skill-source GET/PATCH happy paths, 404s on skills + sources ----
+def test_skill_source_get_and_patch_happy(client: TestClient, one_source: str) -> None:
+    got = client.get(f"/api/v1/skill-sources/{one_source}", headers=H)
+    assert got.status_code == 200 and got.json()["name"] == "src-a"
+    r = client.patch(
+        f"/api/v1/skill-sources/{one_source}",
+        json={"enabled": False, "syncIntervalS": 120},
+        headers=H,
+    )
+    assert r.status_code == 200
+    assert (r.json()["enabled"], r.json()["syncIntervalS"]) == (False, 120)
+    bad = client.patch(
+        f"/api/v1/skill-sources/{one_source}", json={"location": "relative/path"}, headers=H
+    )
+    assert bad.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/v1/skill-sources/nope"),
+        ("PATCH", "/api/v1/skill-sources/nope"),
+        ("DELETE", "/api/v1/skill-sources/nope"),
+        ("POST", "/api/v1/skill-sources/nope/sync"),
+        ("GET", "/api/v1/skills/nope"),
+        ("GET", "/api/v1/skills/nope/body"),
+        ("GET", "/api/v1/skills/nope/versions"),
+        ("PATCH", "/api/v1/skills/nope/classification"),
+    ],
+)
+def test_unknown_skill_or_source_is_404(client: TestClient, method: str, path: str) -> None:
+    r = client.request(method, path, json={}, headers=H)
+    assert r.status_code == 404, r.text
