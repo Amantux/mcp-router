@@ -50,3 +50,29 @@ Conventions fixed by the plan for that work (unchanged): `RoutingDecisionRecord.
 selected_tool_ids` carries skills as `"skill:<id>"` (tool ids bare); cross-kind
 DuplicateSuggestion uses `tool_b_id = "skill:<id>"`, rationale "cross-kind", never
 auto-applied; maxServers counts MCP servers only.
+
+## S2c (wave4/routing-analytics) — embeddings, eval; dedup/analytics BLOCKED
+Done:
+- `inference.pipeline.embed_pending_skills(session, backend)` -> `EmbedReport`.
+  Text = `canonical_skill_text(name, description, body)` =
+  `"name: description\n" + body[:1024]`. Same recompute/backend/optimistic
+  `updated_at` rules as tools; caller commits. Not yet wired into any job/route
+  (whoever owns the refresh job calls it next to `embed_pending_tools`).
+- Eval: JSONL gains `expected_skills` (ranked skill NAMES, matched on
+  `RoutedTool.tool_name` where `kind == "skill"`) and `kinds` (subset of
+  tool/skill, derived when omitted). `CaseOutcome.returned` is now tools-only;
+  `returned_skills` holds skill names. Metrics: `skills: {positive_cases,
+  top1_accuracy, top5_recall}`, `mixed: {cases, both_top1_rate}`. Case rows gain
+  `expected_skills`/`returned_skills`.
+BLOCKER (schema, needs a decision — outside the S2c fence):
+`duplicate_suggestions.tool_a_id/tool_b_id/preferred_tool_id` and
+`tool_stats_daily.tool_id` are `VARCHAR(36)` (verified in the live DB). The
+fixed convention `"skill:<uuid>"` is 42 chars, so cross-kind/skill dedup rows and
+skill rollup rows cannot be stored as planned; "rollups need no schema change"
+does not hold. Smallest fix: widen those four columns to VARCHAR(48) in
+models.py and add idempotent `ALTER TABLE ... ALTER COLUMN ... TYPE VARCHAR(48)`
+lines to db.py's upgrade list (widening varchar is metadata-only in PG). Alt:
+add a `kind` column and keep ids bare (bigger, touches every reader).
+Not done: dedup skill pairs/cross-kind + review kindA/kindB; analytics funnel/
+economy/profiles/`kind` filter/overview `skills`; 20 skill + 10 mixed synthetic
+cases + skills fixture in eval/synthetic_catalog.py.
