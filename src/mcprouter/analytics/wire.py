@@ -100,6 +100,12 @@ class SkillsOverviewOut(Wire):
     body_tokens_not_sent: int  # = contextEconomy.skillBodyTokensNotSent
 
 
+class FeedbackOverviewOut(Wire):
+    items: int  # counted route_feedback rows (live decisions, ownership-guarded)
+    helpful_rate: float | None  # helpful / items; None when items == 0
+    coverage: float | None  # live decisions with >=1 feedback / live decisions
+
+
 class OverviewOut(Wire):
     window: WindowOut
     context_economy: EconomyOut
@@ -110,6 +116,7 @@ class OverviewOut(Wire):
     catalog_drift: dict[str, int]
     skills: SkillsOverviewOut
     measured: MeasuredOut
+    feedback: FeedbackOverviewOut
 
 
 class ToolFunnelOut(Wire):
@@ -127,6 +134,9 @@ class ToolFunnelOut(Wire):
     success_rate: float | None
     avg_rank: float | None
     exposed_tokens: int
+    feedback_helpful: int = 0
+    feedback_unhelpful: int = 0
+    helpful_rate: float | None = None  # None when no feedback
 
 
 class ToolFunnelPageOut(Wire):
@@ -177,6 +187,8 @@ class AgentProfileOut(Wire):
     avg_surfaced_per_decision: float | None
     budget_tools: int | None = None  # not persisted per decision yet
     budget_utilization: float | None = None
+    feedback_items: int = 0
+    helpful_rate: float | None = None
     context_economy: EconomyOut
 
 
@@ -194,6 +206,7 @@ class WastedOut(Wire):
     selected: int
     selection_rate: float | None
     exposed_tokens: int
+    unhelpful: int = 0
 
 
 class StaleToolOut(Wire):
