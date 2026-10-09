@@ -20,8 +20,6 @@ from testbed.harness import http_fleet
 from testbed.serve import endpoint_urls
 from testbed.servers import build_server
 
-SERVE_PORT = 8603
-
 
 def test_fleet_is_deterministic_and_unique() -> None:
     a, b = generate_fleet(120, tools=1300), generate_fleet(120, tools=1300)
@@ -91,7 +89,7 @@ async def test_built_server_advertises_spec_schema() -> None:
 
 
 async def test_serve_cli_hosts_multiple_servers_per_port() -> None:
-    with http_fleet(4, port_base=SERVE_PORT, ports=1) as urls:
+    with http_fleet(4, ports=1) as urls:
         assert len(urls) == 4 and len({u.split("/")[2] for u in urls.values()}) == 1
         for name, url in urls.items():
             async with Client(streamable_http_client(url), cache=None) as c:

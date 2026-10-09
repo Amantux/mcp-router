@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import socket
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -11,6 +10,7 @@ import pytest
 
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
+from tests.support.ports import bound_socket
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -69,12 +69,10 @@ def test_error_count_is_capped() -> None:
 
 
 @pytest.fixture()
-def listener() -> Iterator[list[bytes]]:
-    """A live TCP listener on the workstream's port range, recording any hit."""
+def listener() -> Iterator[tuple[int, list[bytes]]]:
+    """A live TCP listener on an OS-assigned port, recording any hit."""
     hits: list[bytes] = []
-    srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", 8659))
+    srv = bound_socket()
     srv.listen(4)
     srv.settimeout(0.2)
     stop = threading.Event()
@@ -91,17 +89,18 @@ def listener() -> Iterator[list[bytes]]:
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    yield hits
+    yield srv.getsockname()[1], hits
     stop.set()
     t.join(1)
     srv.close()
 
 
-def test_remote_ref_is_never_fetched(listener: list[bytes]) -> None:
+def test_remote_ref_is_never_fetched(listener: tuple[int, list[bytes]]) -> None:
     """SSRF guard: a tool schema's remote $ref must not make us dial out."""
-    schema = {"$ref": "http://127.0.0.1:8659/evil.json"}
+    port, hits = listener
+    schema = {"$ref": f"http://127.0.0.1:{port}/evil.json"}
     assert _errors(schema, {}) == ["tool input schema has an unresolvable $ref"]
-    assert listener == []
+    assert hits == []
 
 
 # ------------------------------------------------------------ rate limiter

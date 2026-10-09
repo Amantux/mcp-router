@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import io
 import json
-import threading
-import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,7 +21,6 @@ from typing import Any
 
 import httpx
 import pytest
-import uvicorn
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
@@ -35,14 +32,12 @@ from testbed.skills.generate import generate
 from mcprouter.api.app import create_app
 from mcprouter.models import ExecutionRecord, SkillRecord
 from mcprouter.settings import Settings
+from tests.support.serve import run_app
 
 from .conftest import TEST_DB_URL, requires_db
 
 pytestmark = requires_db
 
-APP_PORT = 8820
-FLEET_PORT = 8821
-BASE = f"http://127.0.0.1:{APP_PORT}"
 ADMIN = "e2e-skills-admin-" + "a" * 24
 AGENT_KEY = "e2e-skills-agent1-" + "b" * 24
 ADMIN_H = {"Authorization": f"Bearer {ADMIN}"}
@@ -63,25 +58,22 @@ QUERIES = [
 def stack(db: sessionmaker[Session], tmp_path: Path) -> Iterator[dict[str, Any]]:
     corpus = tmp_path / "skills"
     truth = generate(corpus, 60, seed=7, include_invalid=False)
-    with http_fleet(3, port_base=FLEET_PORT) as urls:
+    with http_fleet(3) as urls:
         app = create_app(
             Settings(database_url=TEST_DB_URL, agent_keys=f"agent1:{AGENT_KEY}"),
             env={"MCPR_ADMIN_TOKEN": ADMIN},
         )
-        server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=APP_PORT, log_level="warning")
-        )
-        t = threading.Thread(target=server.run, daemon=True)
-        t.start()
-        deadline = time.time() + 20
-        while not server.started and time.time() < deadline:
-            time.sleep(0.05)
-        assert server.started, "uvicorn did not start"
+        port, stop = run_app(app)
         try:
-            yield {"urls": urls, "db": db, "corpus": corpus, "truth": truth}
+            yield {
+                "urls": urls,
+                "db": db,
+                "corpus": corpus,
+                "truth": truth,
+                "base": f"http://127.0.0.1:{port}",
+            }
         finally:
-            server.should_exit = True
-            t.join(15)
+            stop()
 
 
 async def test_end_to_end_skills_register_sync_route_expose_bundle_analytics(
@@ -92,7 +84,7 @@ async def test_end_to_end_skills_register_sync_route_expose_bundle_analytics(
     assert len(truth) >= 30 and any(v["has_scripts"] for v in truth.values())
     scripted = {n for n, v in truth.items() if v["has_scripts"]}
 
-    async with httpx.AsyncClient(base_url=BASE, timeout=60) as http:
+    async with httpx.AsyncClient(base_url=stack["base"], timeout=60) as http:
         # MCP side: register + refresh the testbed fleet; agent1 reads github.
         ids: dict[str, str] = {}
         for name, url in sorted(stack["urls"].items()):
@@ -169,7 +161,7 @@ async def test_end_to_end_skills_register_sync_route_expose_bundle_analytics(
 
     async with (
         create_mcp_http_client(headers=AGENT_H) as mcp_http,
-        streamable_http_client(f"{BASE}/mcp", http_client=mcp_http) as (read, write),
+        streamable_http_client(stack["base"] + "/mcp", http_client=mcp_http) as (read, write),
         ClientSession(read, write) as session,
     ):
         await session.initialize()
@@ -193,7 +185,7 @@ async def test_end_to_end_skills_register_sync_route_expose_bundle_analytics(
         (x.outcome, x.route_request_id) for x in rows
     ]
 
-    async with httpx.AsyncClient(base_url=BASE, timeout=60) as http:
+    async with httpx.AsyncClient(base_url=stack["base"], timeout=60) as http:
         r = await http.get("/api/v1/skills/bundle", headers=AGENT_H)
         assert r.status_code == 200, r.text
         zf = zipfile.ZipFile(io.BytesIO(r.content))

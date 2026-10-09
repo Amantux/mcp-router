@@ -31,7 +31,7 @@ REFRESH_BUDGET_S = 60.0
 @requires_db
 def test_full_catalog_refresh_100_servers_1000_tools_under_60s(db: SF) -> None:
     specs = generate_fleet(N_SERVERS, tools=N_TOOLS)
-    with http_fleet(N_SERVERS, port_base=8600, ports=2, tools=N_TOOLS) as urls:
+    with http_fleet(N_SERVERS, ports=2, tools=N_TOOLS) as urls:
         ids = register_fleet(db, specs, urls.__getitem__)
 
         results, cold_s = discover(db, ids, concurrency=16)  # first discovery: 1000 inserts

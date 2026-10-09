@@ -35,6 +35,7 @@ from mcprouter.interfaces import (
     EmbeddingBackend,
 )
 from mcprouter.settings import Settings
+from tests.support.wait import wait_for
 
 
 class FakeClock:
@@ -304,10 +305,7 @@ def test_non_battery_modes_never_idle_unload() -> None:
 def test_battery_idle_timer_frees_models_without_a_request() -> None:
     eng, _ = make(mode="battery", idle_unload_s=0.15)
     eng.embed(["x"])
-    deadline = time.monotonic() + 3.0
-    while eng.health(check_idle=False)["loaded"] and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert eng.health(check_idle=False)["loaded"] is False
+    wait_for(lambda: not eng.health(check_idle=False)["loaded"], timeout=3.0)
     eng.set_mode("balanced")  # cancels any pending timer
 
 

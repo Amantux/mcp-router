@@ -12,6 +12,7 @@ from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.interfaces import ToolInvocationError, ToolInvoker
 from mcprouter.mcpclient import Connector, ServerTarget
 from mcprouter.models import MCPServerRecord
+from tests.support.ports import free_port
 
 from .conftest import requires_db
 
@@ -40,12 +41,12 @@ async def test_calls_a_real_mcp_server_and_maps_the_result(db) -> None:  # noqa:
 
 
 async def test_unreachable_server_is_a_curated_invocation_error(db) -> None:  # noqa: ANN001
-    # Nothing listens on 8719 (inside this suite's reserved 8700-8719 range).
-    srv = _server(db, transport="streamable-http", endpoint="http://127.0.0.1:8719/mcp")
+    port = free_port()  # bound then closed: nothing listens there
+    srv = _server(db, transport="streamable-http", endpoint=f"http://127.0.0.1:{port}/mcp")
     with pytest.raises(ToolInvocationError) as ei:
         await ConnectorToolInvoker(db).call_tool(srv, "search_issues", {}, 3.0)
     assert ei.value.curated  # fixed connector message, never upstream text
-    assert "8719" not in ei.value.curated
+    assert str(port) not in ei.value.curated
 
 
 async def test_invalid_stored_target_never_dials(db) -> None:  # noqa: ANN001
