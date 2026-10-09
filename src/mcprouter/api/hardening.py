@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 
 from fastapi import FastAPI
 from starlette.datastructures import MutableHeaders
@@ -40,18 +41,21 @@ _SPA_CSP = (
     "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 )
 _FRAME_CSP = "frame-ancestors 'none'"
-_DOCS_PATHS = ("/docs", "/redoc")
-_MISDIRECTED = json.dumps({"detail": "Misdirected request: Host not allowed"}).encode()
+_DOCS_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc"})
+_MISDIRECTED = json.dumps(
+    {"detail": "Misdirected request: Host not allowed (add it to MCPR_ALLOWED_HOSTS)"}
+).encode()
+
+
+_HOST_RE = re.compile(r"(\[[0-9a-f:.]+\]|[^:\[\]@/\s]+)(?::\d{1,5})?")
 
 
 def hostname_of(host_header: str) -> str:
     """``Host`` header -> lower-case hostname without port. ``[::1]:8400`` ->
-    ``[::1]``; ``example.com:80`` -> ``example.com``."""
-    h = host_header.strip().lower()
-    if h.startswith("["):
-        end = h.find("]")
-        return h[: end + 1] if end != -1 else h
-    return h.rsplit(":", 1)[0] if h.count(":") == 1 else h
+    ``[::1]``; ``example.com:80`` -> ``example.com``. Anything that is not
+    strictly ``host[:digits]`` returns "" (never allowed)."""
+    m = _HOST_RE.fullmatch(host_header.strip().lower())
+    return m.group(1) if m else ""
 
 
 def allowed_hostnames(settings: Settings) -> frozenset[str]:
@@ -102,11 +106,12 @@ class HostGuard:
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
                 headers = MutableHeaders(scope=message)
                 headers.setdefault("X-Content-Type-Options", "nosniff")
                 headers.setdefault("Referrer-Policy", "no-referrer")
                 is_html = headers.get("content-type", "").startswith("text/html")
-                if is_html and not path.startswith(_DOCS_PATHS):
+                if is_html and path not in _DOCS_PATHS:
                     headers["Content-Security-Policy"] = _SPA_CSP
                 else:
                     headers.setdefault("Content-Security-Policy", _FRAME_CSP)

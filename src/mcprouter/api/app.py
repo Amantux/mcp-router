@@ -278,7 +278,7 @@ def create_app(
     app.mount("/metrics", hardening.MetricsGate(make_asgi_app(), security.admin_token_hash))
     # Dashboard + SPA fallback: registered LAST so API, /mcp and /metrics win.
     mount_ui(app, settings.ui_dist)
-    # Outermost: refuse oversized bodies before routing, auth or parsing.
+    # Refuse oversized bodies before routing, auth or parsing (inside HostGuard).
     app.add_middleware(BodySizeLimitMiddleware)
     # LAST = outermost middleware slot, reserved for HostGuard et al. (E1, D2).
     hardening.install(app, settings)

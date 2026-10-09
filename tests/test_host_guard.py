@@ -37,7 +37,9 @@ def client() -> Iterator[TestClient]:
 def test_foreign_host_is_421_everywhere(client: TestClient, path: str) -> None:
     r = client.get(path, headers=EVIL)
     assert r.status_code == 421, path
-    assert r.json() == {"detail": "Misdirected request: Host not allowed"}
+    assert r.json() == {
+        "detail": "Misdirected request: Host not allowed (add it to MCPR_ALLOWED_HOSTS)"
+    }
 
 
 def test_foreign_host_refused_before_auth_and_body(client: TestClient) -> None:
@@ -47,6 +49,39 @@ def test_foreign_host_refused_before_auth_and_body(client: TestClient) -> None:
         content=b"{not json",
     )
     assert r.status_code == 421
+    # Outermost: refused before the body-size limit (which would say 413).
+    big = client.post("/api/v1/servers", headers=EVIL, content=b"x" * (2 * 1024 * 1024))
+    assert big.status_code == 421
+
+
+def test_extra_hosts_seam_is_empty_in_production() -> None:
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(hardening))
+    seam = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.AnnAssign)
+        and isinstance(n.target, ast.Name)
+        and n.target.id == "_EXTRA_HOSTS"
+    ]
+    assert len(seam) == 1 and ast.unparse(seam[0].value) == "frozenset()"
+
+
+def test_websocket_with_foreign_host_closed(client: TestClient) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/mcp", headers=EVIL):
+            pass
+
+
+@pytest.mark.parametrize(
+    "host", ["[::1]evil.com", "[::1]@evil.com", "localhost:evil.com", "localhost.", "::1"]
+)
+def test_malformed_host_refused(client: TestClient, host: str) -> None:
+    assert client.get("/healthz", headers={"Host": host}).status_code == 421
 
 
 @pytest.mark.parametrize("host", ["localhost", "127.0.0.1:8400", "[::1]:9", "LOCALHOST:1"])

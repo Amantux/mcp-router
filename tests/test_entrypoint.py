@@ -86,11 +86,26 @@ def test_no_admin_token_binds_loopback_and_warns(stub_bin: Path, tmp_path: Path)
 
 
 def test_admin_token_binds_all_interfaces(stub_bin: Path, tmp_path: Path) -> None:
-    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN})
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN, "MCPR_ALLOWED_HOSTS": "router.lan"})
     assert r.returncode == 0, r.stderr
     assert _host(r.stdout) == "0.0.0.0"
     assert "WARNING" not in r.stderr
     assert TOKEN not in r.stdout + r.stderr
+
+
+def test_admin_token_file_binds_all_interfaces(stub_bin: Path, tmp_path: Path) -> None:
+    f = tmp_path / "admin"
+    f.write_text(TOKEN + "\n")
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN_FILE": str(f)})
+    assert r.returncode == 0, r.stderr
+    assert _host(r.stdout) == "0.0.0.0"
+    assert TOKEN not in r.stdout + r.stderr
+
+
+def test_token_without_allowed_hosts_warns_about_421(stub_bin: Path, tmp_path: Path) -> None:
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN})
+    assert _host(r.stdout) == "0.0.0.0"
+    assert "MCPR_ALLOWED_HOSTS is empty" in r.stderr
 
 
 def test_allow_open_dev_binds_all_interfaces_with_warning(stub_bin: Path, tmp_path: Path) -> None:
@@ -108,7 +123,7 @@ def test_agent_keys_without_token_still_loopback(stub_bin: Path, tmp_path: Path)
 
 
 def test_single_worker_and_port(stub_bin: Path, tmp_path: Path) -> None:
-    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN, "MCPR_PORT": "8871"})
+    r = run(stub_bin, tmp_path, {"MCPR_ADMIN_TOKEN": TOKEN, "MCPR_PORT": " 8871 "})
     argv = _argv(r.stdout)
     assert argv[argv.index("--workers") + 1] == "1"
     assert argv[argv.index("--port") + 1] == "8871"

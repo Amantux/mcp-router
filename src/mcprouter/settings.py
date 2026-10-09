@@ -498,6 +498,7 @@ class EntrypointPlan:
     bind_host: str
     db_wait_tries: int
     warnings: tuple[str, ...]
+    port: int = 8400
 
 
 def entrypoint_plan(settings: Settings, env: Mapping[str, str]) -> EntrypointPlan:
@@ -511,8 +512,15 @@ def entrypoint_plan(settings: Settings, env: Mapping[str, str]) -> EntrypointPla
 
     parsed = {spec.env: _parse(spec, get) for spec in ENV_ONLY_SPEC if spec.scope == "entrypoint"}
     tries = int(parsed["MCPR_DB_WAIT_TRIES"])
+    port = int(parsed["MCPR_PORT"])
     if settings.admin_token:
-        return EntrypointPlan(ALL_INTERFACES_BIND, tries, ())
+        warn: tuple[str, ...] = ()
+        if not settings.allowed_hosts:
+            warn = (
+                "listening on all interfaces but MCPR_ALLOWED_HOSTS is empty: "
+                "requests by any non-loopback name get 421",
+            )
+        return EntrypointPlan(ALL_INTERFACES_BIND, tries, warn, port)
     state = "locked (agent keys set)" if settings.agent_keys.strip() else "open"
     if settings.allow_open_dev:
         return EntrypointPlan(
@@ -522,16 +530,18 @@ def entrypoint_plan(settings: Settings, env: Mapping[str, str]) -> EntrypointPla
                 f"admin API {state}; MCPR_ALLOW_OPEN_DEV=1 binds ALL interfaces; "
                 "set MCPR_ADMIN_TOKEN for any shared host",
             ),
+            port,
         )
     return EntrypointPlan(
         LOOPBACK_BIND,
         tries,
         (f"admin API {state}; listening on loopback only; set MCPR_ADMIN_TOKEN",),
+        port,
     )
 
 
 def _entrypoint_main() -> int:
-    """`python -m mcprouter.settings entrypoint`: prints "<host> <tries>" on
+    """`python -m mcprouter.settings entrypoint`: prints "<host> <tries> <port>" on
     stdout, warnings on stderr. Invalid settings -> exit 2 with a FATAL line
     that names the variable (never its value)."""
     import sys
@@ -543,7 +553,7 @@ def _entrypoint_main() -> int:
         return 2
     for w in plan.warnings:
         print(f"[entrypoint] WARNING: {w}", file=sys.stderr)
-    print(f"{plan.bind_host} {plan.db_wait_tries}")
+    print(f"{plan.bind_host} {plan.db_wait_tries} {plan.port}")
     return 0
 
 

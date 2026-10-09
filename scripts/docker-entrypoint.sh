@@ -19,10 +19,12 @@ die() { log "FATAL: $*"; exit 1; }
 [ -n "${MCPR_DATABASE_URL:-}${MCPR_DATABASE_URL_FILE:-}" ] \
   || die "MCPR_DATABASE_URL (or MCPR_DATABASE_URL_FILE) is required (see docs/deploy.md)."
 
-# "<bind_host> <db_wait_tries>" on stdout; FATAL/WARNING lines on stderr.
+# "<bind_host> <db_wait_tries> <port>" on stdout; FATAL/WARNING on stderr.
 plan=$(python -m mcprouter.settings entrypoint) || exit $?
-bind_host=${plan% *}
-tries=${plan#* }
+bind_host=${plan%% *}
+rest=${plan#* }
+tries=${rest%% *}
+port=${rest#* }
 
 # MCPR_DATA_DIR: entrypoint-only knob (tests point it at a temp dir).
 for d in "${MCPR_DATA_DIR:-/data}" "${MCPR_SKILLS_CACHE_DIR:-/srv/skills-cache}" "${MCPR_MODELS_CACHE_DIR:-/srv/models-cache}"; do
@@ -56,5 +58,5 @@ PY
 
 if [ "$#" -gt 0 ]; then exec "$@"; fi
 exec uvicorn --factory mcprouter.api.app:create_app \
-  --host "$bind_host" --port "${MCPR_PORT:-8400}" --workers 1 \
+  --host "$bind_host" --port "$port" --workers 1 \
   --timeout-graceful-shutdown 20

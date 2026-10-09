@@ -51,8 +51,8 @@ services:
       # Admin API credential. Unset => the router binds loopback only inside
       # the container (D1); unset + agent keys => management API locked (403).
       MCPR_ADMIN_TOKEN: ${MCPR_ADMIN_TOKEN:-}
-      # Extra Host names /mcp accepts besides localhost (DNS-rebinding tradeoff:
-      # see docs/INSTALL.md §1). The dashboard is served at / on the same port.
+      # Extra Host names the WHOLE app accepts besides loopback (API, /mcp,
+      # dashboard; port ignored). Anything else gets 421 (DNS-rebinding guard).
       MCPR_ALLOWED_HOSTS: ${MCPR_ALLOWED_HOSTS:-}
       # Torch/BLAS thread cap for the inference flavor (set in .env to apply):
       # OMP_NUM_THREADS: ${OMP_NUM_THREADS:-}
