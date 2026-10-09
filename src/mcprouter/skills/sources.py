@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,26 @@ from mcprouter.models import PolicyRule, SkillSourceRecord
 from mcprouter.settings import Settings
 from mcprouter.skills import gitsource
 from mcprouter.skills.ingest import sync_source
+
+_log = logging.getLogger(__name__)
+
+# Constant client-facing messages per failure class: the exception text is
+# never echoed (a runner/stderr could carry URLs, tokens or paths).
+_GIT_SYNC_MESSAGES: dict[type[gitsource.GitSourceError], str] = {
+    gitsource.GitCloneFailedError: "git clone failed",
+    gitsource.GitTimeoutError: "git clone timed out",
+    gitsource.GitTooLargeError: "repository too large",
+    gitsource.GitInvalidRefError: "invalid git ref",
+    gitsource.GitNotRepositoryError: "not a git repository",
+}
+_GIT_SYNC_FALLBACK = "git sync failed"
+
+
+def git_error_message(exc: gitsource.GitSourceError) -> str:
+    for cls, msg in _GIT_SYNC_MESSAGES.items():
+        if isinstance(exc, cls):
+            return msg
+    return _GIT_SYNC_FALLBACK
 
 
 class SourceError(ValueError):
@@ -29,7 +50,7 @@ def validate_location(kind: str, location: str, git_ref: str | None) -> None:
         try:
             gitsource.validate_ref(git_ref or "main")
         except gitsource.GitSourceError as exc:
-            raise SourceError(str(exc)) from exc
+            raise SourceError(git_error_message(exc)) from exc
     else:
         raise SourceError("kind must be 'directory' or 'git'")
 
@@ -50,7 +71,9 @@ def run_sync(session: Session, src: SkillSourceRecord, settings: Settings) -> di
             )
         except gitsource.GitSourceError as exc:
             src.status = "offline"
-            return {"added": 0, "changed": 0, "removed": 0, "skipped": [], "error": str(exc)}
+            _log.warning("skill source git sync failed: %s", type(exc).__name__)
+            msg = git_error_message(exc)
+            return {"added": 0, "changed": 0, "removed": 0, "skipped": [], "error": msg}
         src.last_commit = commit
     else:
         root = Path(src.location)

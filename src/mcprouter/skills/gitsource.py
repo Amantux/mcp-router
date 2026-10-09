@@ -40,6 +40,26 @@ class GitSourceError(RuntimeError):
     """Curated (URL/path-free) git failure."""
 
 
+class GitCloneFailedError(GitSourceError):
+    """Clone exited non-zero or could not start."""
+
+
+class GitTimeoutError(GitSourceError):
+    """Clone exceeded the time budget."""
+
+
+class GitTooLargeError(GitSourceError):
+    """Checkout exceeded the size cap."""
+
+
+class GitInvalidRefError(GitSourceError):
+    """Ref failed validation."""
+
+
+class GitNotRepositoryError(GitSourceError):
+    """Clone produced no git repository."""
+
+
 def _default_runner(argv: Sequence[str]) -> None:
     env = {"PATH": os.environ.get("PATH", ""), "GIT_TERMINAL_PROMPT": "0", "HOME": "/nonexistent"}
     try:
@@ -47,14 +67,14 @@ def _default_runner(argv: Sequence[str]) -> None:
             list(argv), check=True, capture_output=True, timeout=GIT_TIMEOUT_S, env=env
         )
     except subprocess.TimeoutExpired as exc:
-        raise GitSourceError("git clone timed out") from exc
+        raise GitTimeoutError("git clone timed out") from exc
     except (subprocess.CalledProcessError, OSError) as exc:
-        raise GitSourceError("git clone failed") from exc
+        raise GitCloneFailedError("git clone failed") from exc
 
 
 def validate_ref(ref: str) -> str:
     if not _REF_RE.fullmatch(ref) or ".." in ref or ref.endswith((".lock", "/")):
-        raise GitSourceError("invalid git ref")
+        raise GitInvalidRefError("invalid git ref")
     return ref
 
 
@@ -122,7 +142,10 @@ def fetch(
     runner(clone_argv(url, ref or "main", tmp))
     if _tree_size(tmp) > max_bytes:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise GitSourceError("git source exceeds the size cap")
+        raise GitTooLargeError("git source exceeds the size cap")
+    if not (tmp / ".git").is_dir():
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise GitNotRepositoryError("not a git repository")
     shutil.rmtree(final, ignore_errors=True)
     tmp.rename(final)
     return final, _head_commit(final)
