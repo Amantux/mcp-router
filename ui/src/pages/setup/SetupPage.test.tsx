@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { mockFetch, renderWithProviders, type FetchCall } from "../../test/render";
 import { clearCredentials, setCredentials } from "../../api/auth";
-import { SetupPage } from "./SetupPage";
+import { SetupPage, sourceName } from "./SetupPage";
 import { STEP_KEY } from "./redirect";
 
 const ADMIN = "adm-SECRET-token-123";
@@ -23,6 +23,12 @@ function routes(extra: Parameters<typeof mockFetch>[0] = {}) {
 }
 const posts = (path: string) => calls.filter((c) => c.method === "POST" && c.url.endsWith(path));
 const goTo = (label: string) => fireEvent.click(screen.getByRole("tab", { name: new RegExp(label) }));
+
+it("derives a backend-valid skill source name from a path", () => {
+  expect(sourceName("/srv/My Skills")).toBe("My-Skills");
+  expect(sourceName("/opt/_x")).toBe("x");
+  expect(sourceName("/")).toBe("skills");
+});
 
 describe("SetupPage wizard", () => {
   beforeEach(() => {
@@ -53,6 +59,7 @@ describe("SetupPage wizard", () => {
     goTo("Agent identity");
     fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
     expect((await screen.findByTestId("api-key")).textContent).toBe("agent-key-once");
+    expect((screen.getByLabelText("Agent id") as HTMLInputElement).disabled).toBe(true);
     fireEvent.click(await screen.findByLabelText("Server: github"));
     fireEvent.click(screen.getByLabelText("Skill source: team-skills"));
     fireEvent.click(screen.getByRole("button", { name: "Create rules" }));

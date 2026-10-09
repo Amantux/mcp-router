@@ -48,6 +48,13 @@ export function starterRules(agentId: string, targets: Target[]): CreateRuleRequ
   }));
 }
 
+/** A backend-valid source name (^[A-Za-z0-9][A-Za-z0-9._-]*$) from a path's last segment. */
+export function sourceName(loc: string): string {
+  const seg = loc.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  const clean = seg.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "");
+  return clean.slice(0, 64) || "skills";
+}
+
 /** Directory skill sources must be absolute paths on the router host. */
 export function isAbsolutePath(p: string): boolean {
   return p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p);
@@ -89,6 +96,8 @@ export function SetupPage() {
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [ruleCount, setRuleCount] = useState<number | null>(null);
+  const [rulesBusy, setRulesBusy] = useState(false);
+  const [createdAgent, setCreatedAgent] = useState<string | null>(null); // server-confirmed id
   const url = `${window.location.origin}/mcp`;
 
   const recheck = () =>
@@ -218,7 +227,7 @@ export function SetupPage() {
             return setMsg("Enter an absolute directory path, e.g. /srv/skills.");
           void run(
             createSkillSource({
-              name: loc.split(/[\\/]/).filter(Boolean).pop() || "skills",
+              name: sourceName(loc),
               kind: "directory",
               location: loc,
             }),
@@ -232,6 +241,7 @@ export function SetupPage() {
     <div key="e">
       <Input
         aria-label="Agent id"
+        disabled={apiKey !== null}
         value={agentId}
         onChange={(_, d) => setAgentId(d.value)}
       />
@@ -239,7 +249,10 @@ export function SetupPage() {
         disabled={apiKey !== null}
         onClick={() =>
           void createPrincipal({ agentId, maxTools: 8 }).then(
-            (p) => setApiKey(p.apiKey),
+            (p) => {
+              setCreatedAgent(p.agentId);
+              setApiKey(p.apiKey);
+            },
             () => setMsg("Could not create the agent."),
           )
         }
@@ -285,19 +298,33 @@ export function SetupPage() {
             })}
           {policy === "readonly" && (
             <Button
-              disabled={picked.size === 0}
+              disabled={picked.size === 0 || rulesBusy || createdAgent === null}
               onClick={() => {
                 const sel = (targets ?? []).filter((t) => picked.has(`${t.kind}:${t.id}`));
+                if (createdAgent === null) return;
                 let made = 0; // sequential, so a partial failure can say how many landed
-                void starterRules(agentId, sel)
+                const landed = new Set<string>();
+                setRulesBusy(true);
+                void starterRules(createdAgent, sel)
                   .reduce<Promise<void>>(
-                    (acc, r) => acc.then(() => createRule(r).then(() => void made++)),
+                    (acc, r, i) =>
+                      acc.then(() =>
+                        createRule(r).then(() => {
+                          made++;
+                          landed.add(`${sel[i].kind}:${sel[i].id}`);
+                        }),
+                      ),
                     Promise.resolve(),
                   )
                   .then(
                     () => setRuleCount(made),
-                    () => setMsg(`Created ${made} of ${sel.length} rules; add the rest on the Policy page.`),
-                  );
+                    () => {
+                      // Unpick what landed so a retry cannot duplicate it.
+                      setPicked(new Set([...picked].filter((k) => !landed.has(k))));
+                      setMsg(`Created ${made} of ${sel.length} rules; retry or add the rest on the Policy page.`);
+                    },
+                  )
+                  .finally(() => setRulesBusy(false));
               }}
             >
               Create rules
