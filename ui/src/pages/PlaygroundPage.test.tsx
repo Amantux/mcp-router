@@ -88,23 +88,24 @@ describe("PlaygroundPage", () => {
     // Let every async load settle BEFORE typing: the principals option is the last
     // thing to arrive, and typing into a form that is still being (re)mounted loses
     // the value, which fails validation silently and never opens the dialog.
-    await screen.findByRole("option", { name: "billing-bot" }, { timeout: 5000 });
+    await screen.findByRole("option", { name: "billing-bot" });
     // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
-    expect(((await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 })) as HTMLButtonElement).disabled).toBe(true);
-    await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
+    expect(((await screen.findByRole("button", { name: "Run tool" })) as HTMLButtonElement).disabled).toBe(true);
+    await user.type(await screen.findByRole("textbox", { name: /repo/ }), "a/b");
     await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
-    await user.click(await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
-    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    await user.click(screen.getByRole("button", { name: "Run tool" }));
+    const dialog = await screen.findByRole("dialog");
     expect(screen.queryByText("Required.")).toBeNull(); // the typed value survived to submit
-    expect(await within(dialog).findByText("Run create_issue as agent “billing-bot” (admin-initiated)?", {}, { timeout: 5000 })).toBeTruthy();
+    expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
-    const ok = await screen.findByTestId("outcome-ok", {}, { timeout: 5000 });
-    expect(await within(ok).findByText("Ran create_issue", {}, { timeout: 5000 })).toBeTruthy();
+    // The confirm button is named after the tool, distinct from the page's "Run tool".
+    await user.click(within(dialog).getByRole("button", { name: "Run create_issue" }));
+    const ok = await screen.findByTestId("outcome-ok");
+    expect(within(ok).getByText("Ran create_issue")).toBeTruthy();
     expect(within(ok).getByLabelText("Result block 1").textContent).toBe('{\n  "number": 7\n}');
     const exec = calls.find((c) => c.method === "POST")!;
     expect((exec.body as Record<string, unknown>).agentId).toBe("billing-bot");
-  }, 30000);
+  });
 
   it("raw JSON toggle: form→JSON always works; unrepresentable JSON stays raw with a notice", async () => {
     const user = userEvent.setup();
@@ -187,7 +188,7 @@ describe("ExecutionOutcomeView — pending approval", () => {
     const pending = await screen.findByTestId("outcome-pending");
     expect(within(pending).getByRole("link", { name: "Approvals" }).getAttribute("href")).toBe("/approvals");
     expect(screen.getByTestId("audit-id").textContent).toBe("rec-9");
-    await screen.findByTestId("approval-executed", {}, { timeout: 2000 });
+    await screen.findByTestId("approval-executed");
     expect(screen.getByText(/issue #7 created/)).toBeTruthy();
     const settled = polls;
     await new Promise((r) => setTimeout(r, 80));
@@ -223,7 +224,7 @@ describe("PlaygroundPage skills tab", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Activate deploy-helper as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
     const ok = await screen.findByTestId("activation-ok");
     expect(within(ok).getByText(/Audit record rec-9/)).toBeTruthy();
     expect(within(ok).getByText(/scripts\/run.sh/)).toBeTruthy();
@@ -241,7 +242,7 @@ describe("PlaygroundPage skills tab", () => {
     renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
     await user.click(await screen.findByRole("button", { name: /^Activate as/ }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
     expect(await screen.findByTestId("outcome-rate_limited")).toBeTruthy();
   });
 });

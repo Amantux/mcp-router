@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { hydrateAuth } from "../api/auth";
+
+// One async budget for every findBy*/waitFor, so a starved runner gets the same slack
+// everywhere and nobody sprinkles per-call { timeout } overrides.
+configure({ asyncUtilTimeout: 5000 });
 
 // jsdom lacks ResizeObserver, which Fluent's MessageBar reflow logic uses.
 class ResizeObserverStub {

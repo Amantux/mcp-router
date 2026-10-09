@@ -518,7 +518,7 @@ function ToolRunner({ tool }: { tool: MCPTool }) {
             <strong>{tool.operation}</strong> tool, so it may change data upstream. Policy, approval rules and the audit log apply as for any agent call.
           </>
         }
-        confirmLabel="Run tool"
+        confirmLabel={`Run ${tool.name}`}
         pendingLabel="Running…"
         pending={running}
         onConfirm={() => confirmArgs && void run(confirmArgs)}
@@ -697,7 +697,7 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
             subject to policy as for any agent.
           </>
         }
-        confirmLabel="Activate skill"
+        confirmLabel={`Activate ${skill.name}`}
         pendingLabel="Activating…"
         pending={running}
         onConfirm={() => void activate()}
