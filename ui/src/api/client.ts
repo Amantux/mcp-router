@@ -49,6 +49,7 @@ import type {
   RouteResponse,
   RoutedTool,
   RoutedSkill,
+  AnalyticsKind,
   RouteKind,
   ToolDetail,
   ToolQuery,
@@ -615,14 +616,18 @@ export function getAnalyticsOverview(window: AnalyticsWindow, signal?: AbortSign
 }
 
 export async function listToolFunnels(
-  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number },
+  q: { window: AnalyticsWindow; sort?: ToolFunnelSort; order?: "asc" | "desc"; limit: number; offset: number; kind?: AnalyticsKind },
   signal?: AbortSignal,
 ): Promise<ToolFunnelPage> {
   const raw = await request<ToolFunnelPage>("GET", `${ANALYTICS}/tools`, {
     signal,
-    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset },
+    // CONTRACT (guessed, S2f): GET /analytics/tools?kind=tool|skill; omitted = all kinds.
+    query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset, kind: q.kind && q.kind !== "all" ? q.kind : undefined },
   });
-  return { ...raw, ...toPage(raw, q.limit, q.offset) };
+  const page = { ...raw, ...toPage(raw, q.limit, q.offset) };
+  // Client-side fallback for a backend that ignores ?kind=: rows without a kind count as tools.
+  if (q.kind && q.kind !== "all") page.items = page.items.filter((r) => (r.kind ?? "tool") === q.kind);
+  return page;
 }
 
 export function getToolAnalytics(toolId: string, window: AnalyticsWindow, signal?: AbortSignal): Promise<ToolAnalytics> {

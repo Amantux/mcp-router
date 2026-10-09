@@ -483,10 +483,26 @@ export interface AnalyticsOverview {
   executions: ExecutionStats;
   positionCurve: RankPoint[];
   catalogDrift: Record<string, number>;
+  // CONTRACT (guessed — S2f analytics wire not landed; names from the wave-4 brief):
+  // overview.skills {surfaced, activated, activationRate, bodyTokensNotSent}. Absent on older backends.
+  skills?: SkillsOverview;
 }
+
+export interface SkillsOverview {
+  surfaced: number;
+  activated: number;
+  /** activated / surfaced, 0..1, null with no denominator. */
+  activationRate: number | null;
+  bodyTokensNotSent: number;
+}
+
+/** Analytics kind filter; "all" sends no ?kind=. */
+export type AnalyticsKind = "all" | "tool" | "skill";
 
 export interface ToolFunnel {
   toolId: string;
+  // CONTRACT (guessed, S2f): rows gain kind "tool" | "skill".
+  kind?: "tool" | "skill";
   /** null: the tool is no longer in the catalog. */
   toolName: string | null;
   serverName: string | null;
@@ -500,6 +516,8 @@ export interface ToolFunnel {
   successRate: number | null;
   avgRank: number | null;
   exposedTokens: number;
+  // CONTRACT (guessed, S2f): rows gain kind.
+  kind?: "tool" | "skill";
 }
 
 export type ToolFunnelSort =
