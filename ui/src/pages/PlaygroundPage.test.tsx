@@ -93,12 +93,11 @@ describe("PlaygroundPage", () => {
     expect(((await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 })) as HTMLButtonElement).disabled).toBe(true);
     await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
     await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
-    expect(screen.queryByText("Required.")).toBeNull();
     await user.click(await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
     const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    expect(screen.queryByText("Required.")).toBeNull(); // the typed value survived to submit
     expect(await within(dialog).findByText("Run create_issue as agent “billing-bot” (admin-initiated)?", {}, { timeout: 5000 })).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    // Fluent keeps the surface aria-hidden during its open transition; wait it out.
     await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
     const ok = await screen.findByTestId("outcome-ok", {}, { timeout: 5000 });
     expect(await within(ok).findByText("Ran create_issue", {}, { timeout: 5000 })).toBeTruthy();
