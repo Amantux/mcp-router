@@ -1,4 +1,9 @@
-# Scoping decisions (binding for v0.1)
+# Scoping decisions (v0.1 baseline; amended)
+
+> **Design baseline, not current behaviour.** These decisions were binding for
+> v0.1. Where shipped behaviour moved on, the change is listed under
+> [Amendments](#amendments-since-v01) and the item is corrected in place.
+> Current operator docs: [deploy.md](deploy.md), [security-model.md](security-model.md).
 
 Reasonable assertions made against spec v0.2 — each reversible later, none
 silently:
@@ -24,8 +29,9 @@ silently:
    vectors from different backends are never compared.
 6. **Auth v1 = local API keys** (agent_id:key pairs, hashed at rest), scope
    model = per-agent PolicyRules with read<write<execute ceilings +
-   requires_approval. OIDC is out. Auth disabled only when no keys are
-   configured, with a loud startup warning.
+   requires_approval. OIDC is out. *(Amended)* Auth is disabled (dev mode)
+   only when there are no agent keys, no admin token **and** zero principals
+   in the database, with a loud warning; see security-model.md §1.
 7. **Transports**: stdio + streamable-http first-class; legacy SSE
    best-effort (client-side only) behind the same connector interface.
 8. **100 servers / 1,000 tools** is the catalog SCALE target, validated with
@@ -35,3 +41,18 @@ silently:
 10. **Spec §9 response shape is canonical**; scores in responses are the
     decision model's calibrated probabilities (or fallback heuristic scores,
     flagged by `fallback_used`).
+
+## Amendments since v0.1
+
+- **#1 Deployment.** The router ships as a container image with compose
+  files (0.5.0), a zero-ML base and an inference flavor; see deploy.md.
+- **#3 Monolith, one worker.** Unchanged, and from v0.6 enforced: only the
+  process holding a Postgres advisory lock runs the background loops.
+- **#4 Sync SQLAlchemy.** Still true for the REST API and the services; the
+  MCP gateway is async (MCP SDK 2.x) and calls the sync services in threads.
+- **#6 Auth.** Dev mode needs no keys, no admin token and zero principals.
+  From v0.6 the container binds to loopback when no admin token is set, and a
+  `Host` allowlist (421) guards every path.
+- **#9 UI.** The dashboard is served by the API itself at `/` (0.5.0).
+- **Schema.** `create_all` plus additive column fixes until 0.5; Alembic
+  migrations from 0.6 (docs/upgrade.md).
