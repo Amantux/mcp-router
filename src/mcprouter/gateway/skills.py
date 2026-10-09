@@ -17,7 +17,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from mcprouter.execution.manager import ExecutionManager
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
@@ -99,16 +100,24 @@ class SkillExposure:
         if not ids:
             return []  # skills are opt-in via routing: no route => none exposed
         with self._factory() as s:
+            # ONE query (skill JOIN source) regardless of how many ids are routed.
+            stmt = (
+                select(SkillRecord)
+                .where(SkillRecord.id.in_(ids))
+                .options(joinedload(SkillRecord.source))
+            )
+            found = {sk.id: sk for sk in s.scalars(stmt).unique()}
             out = []
-            for sid in ids:
-                sk = s.get(SkillRecord, sid)
+            for sid in ids:  # preserve routed order
+                sk = found.get(sid)
                 if sk is None or not sk.enabled or not sk.available:
                     continue
                 src = sk.source
                 if not src.enabled:
                     continue
                 s.expunge(sk)
-                s.expunge(src)
+                if src in s:  # sources are shared between skills
+                    s.expunge(src)
                 out.append((sk, src))
             return out
 
@@ -222,7 +231,9 @@ class SkillExposure:
             raise SkillAccessError(exc.code, exc.message) from None
         except Exception as exc:  # noqa: BLE001 -- curated: class name only
             raise self._internal(agent_id, sk.id, exc, route_request_id, initiated_by) from None
+        # outcome "read", not "ok": only body activations bump activation_count
+        # (the manager bumps on outcome == "ok").
         self._manager.record_skill_activation(
-            agent_id, sk.id, "ok", f"resource: {content.path}", route_request_id, initiated_by
+            agent_id, sk.id, "read", f"resource: {content.path}", route_request_id, initiated_by
         )
         return content

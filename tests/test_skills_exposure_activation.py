@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.execution.manager import ExecutionManager
@@ -158,7 +158,39 @@ def test_resource_read_gated_and_audited(db: sessionmaker[Session], tmp_path: Pa
     assert ei.value.code == "invalid_path"
     assert sorted((r.outcome, r.detail) for r in _rows(db)) == [
         ("error", "resource refused: invalid_path"),
-        ("ok", "resource: guide.md"),
+        ("read", "resource: guide.md"),
     ]
     with pytest.raises(SkillAccessError):
         _exp(db, FakePolicy(allow=False)).read_resource("agent-a", a, "guide.md", [a])
+
+
+def test_resource_read_does_not_bump_activation_count(
+    db: sessionmaker[Session], tmp_path: Path
+) -> None:
+    a, _ = _seed(db, tmp_path)
+    exp = _exp(db, FakePolicy())
+    exp.read_resource("agent-a", a, "guide.md", [a])
+    exp.read_resource("agent-a", a, "guide.md", [a])
+    with db() as s:
+        assert s.get(SkillRecord, a).activation_count in (0, None)  # type: ignore[union-attr]
+    exp.activate("agent-a", a, [a])
+    with db() as s:
+        assert s.get(SkillRecord, a).activation_count == 1  # type: ignore[union-attr]
+
+
+def test_load_routed_is_batched(db: sessionmaker[Session], tmp_path: Path) -> None:
+    a, b = _seed(db, tmp_path)
+    exp = _exp(db, FakePolicy())
+    engine = db.kw["bind"]
+    stmts: list[str] = []
+
+    def on_exec(*args: object) -> None:
+        stmts.append(str(args[2]))
+
+    event.listen(engine, "before_cursor_execute", on_exec)
+    try:
+        got = exp.load_routed([b, a, "missing"])
+    finally:
+        event.remove(engine, "before_cursor_execute", on_exec)
+    assert [sk.id for sk, _ in got] == [b, a]
+    assert len([q for q in stmts if q.lstrip().upper().startswith("SELECT")]) <= 2
