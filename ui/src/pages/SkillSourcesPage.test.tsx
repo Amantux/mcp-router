@@ -41,6 +41,8 @@ describe("SkillSourcesPage", () => {
     expect(report.textContent).toContain("2 added · 1 changed · 0 removed · 1 skipped");
     expect(within(report).getByText("invalid frontmatter")).toBeTruthy();
     expect(within(report).getByText("bad/SKILL.md")).toBeTruthy();
+    // Under the table, not inside the row's name cell (HS-U-050).
+    expect(screen.getByRole("table", { name: "Skill sources" }).contains(report)).toBe(false);
   });
 
   it("reopens the add dialog blank after an add and after a cancel; Enter submits", async () => {

@@ -69,7 +69,7 @@ export function FlagChips({ flags, explain = false }: { flags?: string[]; explai
 /** Untrusted SKILL.md body: React text node inside <pre> — never parsed as HTML or Markdown. */
 export function SkillBodyText({ body }: { body: string }) {
   return (
-    <pre aria-label="Skill body" style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12, margin: 0 }}>
+    <pre aria-label="Skill body" role="region" tabIndex={0} style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 12, margin: 0 }}>
       {body}
     </pre>
   );

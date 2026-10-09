@@ -319,7 +319,7 @@ export function SetupPage() {
         </div>
       )}
       {apiKey !== null && ruleCount === null && (
-        <div aria-label="Starter policy">
+        <div role="group" aria-label="Starter policy">
           <RadioGroup
             value={policy}
             onChange={(_, d) => setPolicy(d.value as "readonly" | "later")}

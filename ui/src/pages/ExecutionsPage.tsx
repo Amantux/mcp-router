@@ -118,8 +118,9 @@ export function ExecutionsPage() {
                   <TableCell>
                     <OutcomeBadge outcome={x.outcome} />
                     {x.initiatedBy === "admin" && (
-                      <Badge size="small" appearance="tint" color="important" title="Admin-initiated run, impersonating this agent">
-                        admin
+                      // The badge text says it all: a title tooltip is unreachable by keyboard and touch (HS-U-052).
+                      <Badge size="small" appearance="tint" color="important">
+                        started by admin
                       </Badge>
                     )}
                   </TableCell>

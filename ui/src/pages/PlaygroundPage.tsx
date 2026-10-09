@@ -704,7 +704,7 @@ function SkillActivator({ skill }: { skill: SkillDetail }) {
           </MessageBar>
           <Subtitle2 as="h3">Body</Subtitle2>
           {/* Skill bodies are untrusted text: a text node in <pre>, never Markdown/HTML. */}
-          <pre aria-label="Skill body" style={{ whiteSpace: "pre-wrap" }}>
+          <pre aria-label="Skill body" role="region" tabIndex={0} style={{ whiteSpace: "pre-wrap" }}>
             {result.body}
           </pre>
           <Subtitle2 as="h3">Resources</Subtitle2>

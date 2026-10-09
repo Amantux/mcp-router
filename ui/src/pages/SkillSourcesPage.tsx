@@ -23,8 +23,8 @@ import {
 } from "@fluentui/react-components";
 import { AddRegular, ArrowSyncRegular, BookRegular, DeleteRegular } from "@fluentui/react-icons";
 import { createSkillSource, deleteSkillSource, listSkillSources, setSkillSourceEnabled, syncSkillSource } from "../api/client";
-import type { SkillSource, SkillSourceKind, SyncReport } from "../api/types";
-import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import type { ServerStatus, SkillSource, SkillSourceKind, SyncReport } from "../api/types";
+import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, StatusBadge, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 import { Link } from "react-router";
@@ -147,7 +147,7 @@ function AddSourceDialog({ open, onClose, onAdded }: { open: boolean; onClose: (
 export function SyncReportView({ report }: { report: SyncReport }) {
   const c = useCommonStyles();
   return (
-    <div aria-label="Sync report">
+    <div role="group" aria-label="Sync report">
       <Caption1>
         {fmtInt(report.added)} added · {fmtInt(report.changed)} changed · {fmtInt(report.removed)} removed · {fmtInt(report.skipped.length)} skipped
       </Caption1>
@@ -270,7 +270,6 @@ export function SkillSourcesPage() {
               <TableRow key={s.id}>
                 <TableCell>
                   <strong>{s.name}</strong>
-                  {reports[s.id] && <SyncReportView report={reports[s.id]} />}
                 </TableCell>
                 <TableCell>
                   <Badge appearance="outline">{s.kind}</Badge>
@@ -278,7 +277,7 @@ export function SkillSourcesPage() {
                 <TableCell className={c.mono} title={s.location}>
                   {locationLabel(s)}
                 </TableCell>
-                <TableCell>{s.status ?? "—"}</TableCell>
+                <TableCell>{s.status ? <StatusBadge status={s.status as ServerStatus} /> : "—"}</TableCell>
                 <TableCell className={c.num}>{fmtInt(s.skillCount)}</TableCell>
                 <TableCell>
                   {fmtTime(s.lastSyncedAt)}
@@ -305,6 +304,36 @@ export function SkillSourcesPage() {
           </TableBody>
         </Table>
       )}
+      {list.length > 0 && (
+        <Caption1 as="p" className={c.muted}>
+          Status: healthy = the last sync read everything; degraded = some entries were skipped (sync it to see which and why); offline = the
+          source couldn't be read.
+        </Caption1>
+      )}
+      {/* Sync reports sit under the table, not inside the name cell where they stretched the row (HS-U-050). */}
+      {list
+        .filter((s) => reports[s.id])
+        .map((s) => (
+          <section key={s.id} aria-label={`Last sync of ${s.name}`} className={c.section}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <strong>Last sync: {s.name}</strong>
+              <Button
+                size="small"
+                appearance="subtle"
+                onClick={() =>
+                  setReports((m) => {
+                    const next = { ...m };
+                    delete next[s.id];
+                    return next;
+                  })
+                }
+              >
+                Dismiss
+              </Button>
+            </div>
+            <SyncReportView report={reports[s.id]} />
+          </section>
+        ))}
       <AddSourceDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => sources.refresh()} />
       <ConfirmDialog
         open={confirmDisable !== null}

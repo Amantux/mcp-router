@@ -18,6 +18,8 @@ describe("ServersPage", () => {
     const table = await screen.findByRole("table", { name: "Servers" });
     const [, gh, web] = within(table).getAllByRole("row");
     expect(within(gh).getByText("local process")).toBeTruthy();
+    expect(within(gh).getByText("Local process (stdio)")).toBeTruthy(); // transport in words (HS-U-051)
+    expect(within(web).getByText("Streamable HTTP")).toBeTruthy();
     expect(within(gh).getByText("healthy")).toBeTruthy();
     expect(within(gh).getByText("12")).toBeTruthy();
     expect(within(web).getByText("https://mcp.example.com/mcp")).toBeTruthy();

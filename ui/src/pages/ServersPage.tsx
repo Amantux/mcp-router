@@ -20,6 +20,9 @@ import { useLoader } from "../hooks/useLoader";
 import { Link } from "react-router";
 import { RegisterServerDialog } from "./RegisterServerDialog";
 
+/** One spelling per transport; RegisterServerDialog's radios use the same words (HS-U-051). */
+const TRANSPORT_LABEL: Record<string, string> = { stdio: "Local process (stdio)", "streamable-http": "Streamable HTTP", sse: "SSE (legacy)" };
+
 function endpointLabel(s: MCPServer): string {
   // The backend never returns a stdio server's argv (it may carry secrets).
   if (s.transport === "stdio") return "local process";
@@ -130,7 +133,7 @@ export function ServersPage() {
                     <strong>{srv.name}</strong>
                     {srv.version && <Caption1 className={c.muted}> v{srv.version}</Caption1>}
                   </TableCell>
-                  <TableCell>{srv.transport}</TableCell>
+                  <TableCell>{TRANSPORT_LABEL[srv.transport] ?? srv.transport}</TableCell>
                   <TableCell>
                     <Tooltip content={endpointLabel(srv)} relationship="description">
                       <span className={c.mono} style={{ display: "inline-block", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>

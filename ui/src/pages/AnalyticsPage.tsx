@@ -237,7 +237,7 @@ export function AnalyticsPage() {
       {header}
       {sg && <WastedExposure items={sg.wastedExposure} minSurfaced={sg.minSurfaced} maxSelectionRate={sg.maxSelectionRate} onOpen={open} />}
 
-      <div className={s.cards} aria-label="Overview">
+      <div className={s.cards} role="group" aria-label="Overview">
         <div className={s.savings}>
           <StatCard
             testId="card-savings"
@@ -286,7 +286,7 @@ export function AnalyticsPage() {
 
       {o.measured && (
         // MEASURED (recorded per row), deliberately set apart from the estimates above.
-        <div className={`${s.cards} ${s.measured}`} aria-label="Measured latency">
+        <div className={`${s.cards} ${s.measured}`} role="group" aria-label="Measured latency">
           <StatCard
             testId="card-measured-route"
             label="Measured route latency"

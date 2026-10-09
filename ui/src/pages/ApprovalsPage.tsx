@@ -32,6 +32,15 @@ const COLOR: Record<ApprovalStatus, "warning" | "informative" | "success" | "dan
 
 type Pending = { approval: Approval; action: "approve" | "deny" } | null;
 
+/** What an approve did (ApprovalDecision.status), in words for the toast (HS-U-048). */
+const DECISION_LABEL: Record<string, string> = {
+  executed: "it ran",
+  failed: "it was re-checked or called and failed; Execution history has the reason",
+  executing: "it is running",
+  expired: "it had already expired",
+  denied: "it had already been denied",
+};
+
 export function ApprovalsPage() {
   const c = useCommonStyles();
   const notify = useNotify();
@@ -49,7 +58,7 @@ export function ApprovalsPage() {
     setBusy(true);
     try {
       const res = action === "approve" ? await approveApproval(approval.id) : await denyApproval(approval.id);
-      notify.success(action === "approve" ? `Approved ${tool} for ${approval.agentId} — ${res.status}` : `Denied ${tool} for ${approval.agentId}`);
+      notify.success(action === "approve" ? `Approved ${tool} for ${approval.agentId}: ${DECISION_LABEL[res.status] ?? res.status}` : `Denied ${tool} for ${approval.agentId}`);
       setConfirm(null);
       list.refresh();
     } catch (e) {

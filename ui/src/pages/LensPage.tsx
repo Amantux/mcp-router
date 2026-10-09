@@ -76,7 +76,7 @@ export function ClampView({ clamp }: { clamp: BudgetClamp }) {
   const fmt = (v: number | null) => (v == null ? "∞" : String(v));
   const clamped = clamp.clampedBy != null;
   return (
-    <div className={s.clamp} data-testid={`clamp-${clamp.budget}`} aria-label={`${name} budget`}>
+    <div className={s.clamp} data-testid={`clamp-${clamp.budget}`} role="group" aria-label={`${name} budget`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <strong>{name}</strong>
         {clamped ? (
@@ -145,7 +145,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
         </div>
       )}
       {result.stages.length > 0 && (
-        <div className={s.stages} aria-label="Pipeline stages">
+        <div className={s.stages} role="group" aria-label="Pipeline stages">
           {result.stages.map((st, i) => (
             <span key={`${st.stage}-${i}`}>
               {i > 0 && "→ "}
@@ -212,7 +212,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
           </Table>
         )}
       </div>
-      <div aria-label="Skills section">
+      <section aria-label="Skills section">
         <Subtitle2 as="h2">
           Skills surfaced{result.maxSkillsApplied != null ? ` (up to ${result.maxSkillsApplied})` : ""}
         </Subtitle2>
@@ -259,9 +259,9 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
             </TableBody>
           </Table>
         )}
-      </div>
+      </section>
       {showFiltered && (
-        <div aria-label="Filtered out">
+        <section aria-label="Filtered out">
           <Subtitle2 as="h2">Filtered out</Subtitle2>
           <Caption1 as="p" style={{ margin: "4px 0" }}>
             Admin-only view. The agent never sees these tools or the reasons.
@@ -294,7 +294,7 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
               </TableBody>
             </Table>
           )}
-        </div>
+        </section>
       )}
     </section>
   );

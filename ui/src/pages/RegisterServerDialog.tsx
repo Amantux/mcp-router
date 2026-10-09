@@ -131,7 +131,7 @@ export function RegisterServerDialog({
               </Field>
               <Field label="Transport">
                 <RadioGroup layout="horizontal" value={transport} onChange={(_, d) => setTransport(d.value as Transport)}>
-                  <Radio value="stdio" label="stdio" />
+                  <Radio value="stdio" label="Local process (stdio)" />
                   <Radio value="streamable-http" label="Streamable HTTP" />
                   <Radio value="sse" label="SSE (legacy)" />
                 </RadioGroup>

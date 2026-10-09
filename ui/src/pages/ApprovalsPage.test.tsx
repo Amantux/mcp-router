@@ -30,7 +30,7 @@ describe("ApprovalsPage", () => {
     await user.click(screen.getByRole("button", { name: "Approve github.create_issue for triage-bot" }));
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Approve and run" }));
-    await screen.findByText(/Approved github.create_issue for triage-bot/);
+    await screen.findByText("Approved github.create_issue for triage-bot: it ran"); // not the raw "executed" (HS-U-048)
     expect(calls.some((c) => c.method === "POST" && c.path === "/api/v1/approvals/a2/approve")).toBe(true);
   });
 
