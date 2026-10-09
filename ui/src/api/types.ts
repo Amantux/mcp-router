@@ -13,7 +13,27 @@ export type Transport = "stdio" | "streamable-http" | "sse";
 export type ServerStatus = "healthy" | "degraded" | "offline" | "unknown";
 export type Operation = "read" | "write" | "execute" | "unknown";
 export type OperationCeiling = "read" | "write" | "execute";
-export type ExecutionOutcome = "ok" | "error" | "denied" | "timeout" | "rate_limited";
+/**
+ * Every ExecutionRecord.outcome the backend writes (HS-U-013): execution/manager.py's
+ * outcome constants plus the skill-access outcomes gateway/skills.py records ("read" =
+ * a skill resource read, "bundle" = delivered in a skill bundle). outcomes.test.ts
+ * reads both backend files and fails when this list misses one.
+ */
+export const EXECUTION_OUTCOMES = [
+  "ok",
+  "error",
+  "timeout",
+  "denied",
+  "rate_limited",
+  "invalid_args",
+  "unavailable",
+  "pending_approval",
+  "started",
+  "cancelled",
+  "read",
+  "bundle",
+] as const;
+export type ExecutionOutcome = (typeof EXECUTION_OUTCOMES)[number];
 export type DedupStatus = "open" | "accepted" | "dismissed";
 
 /** FR-04 domain vocabulary (matches feat/registry classify.py). */

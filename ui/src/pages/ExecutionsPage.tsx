@@ -17,13 +17,12 @@ import { FilterDismissRegular, HistoryRegular } from "@fluentui/react-icons";
 import { Link as RouterLink } from "react-router";
 import { listExecutions } from "../api/client";
 import { FeedbackThumbs, kindOfId } from "../components/FeedbackThumbs";
-import type { ExecutionOutcome } from "../api/types";
-import { EmptyState, ErrorState, fmtInt, fmtMs, fmtTime, LoadingRow, OutcomeBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EXECUTION_OUTCOMES, type ExecutionOutcome } from "../api/types";
+import { EmptyState, ErrorState, fmtInt, fmtMs, fmtTime, LoadingRow, OUTCOME_LABEL, OutcomeBadge, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 
 const PAGE_SIZE = 50;
-const OUTCOMES: ExecutionOutcome[] = ["ok", "denied", "timeout", "rate_limited", "error"];
 
 export function ExecutionsPage() {
   const c = useCommonStyles();
@@ -67,9 +66,9 @@ export function ExecutionsPage() {
             }}
           >
             <option value="">Any</option>
-            {OUTCOMES.map((o) => (
+            {EXECUTION_OUTCOMES.map((o) => (
               <option key={o} value={o}>
-                {o.replace("_", " ")}
+                {OUTCOME_LABEL[o]}
               </option>
             ))}
           </Select>

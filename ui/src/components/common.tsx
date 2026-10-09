@@ -115,18 +115,42 @@ export function StatusBadge({ status }: { status: ServerStatus }) {
   );
 }
 
-const OUTCOME_COLOR: Record<ExecutionOutcome, "success" | "warning" | "danger" | "severe" | "important"> = {
+type BadgeColor = "success" | "warning" | "danger" | "severe" | "important" | "informative";
+const OUTCOME_COLOR: Record<ExecutionOutcome, BadgeColor> = {
   ok: "success",
-  denied: "danger",
-  timeout: "warning",
-  rate_limited: "severe",
   error: "danger",
+  timeout: "warning",
+  denied: "danger",
+  rate_limited: "severe",
+  invalid_args: "danger",
+  unavailable: "warning",
+  pending_approval: "important",
+  started: "informative",
+  cancelled: "warning",
+  read: "success",
+  bundle: "success",
+};
+
+/** Words for each audit outcome; also the Executions filter's option labels. */
+export const OUTCOME_LABEL: Record<ExecutionOutcome, string> = {
+  ok: "ok",
+  error: "error",
+  timeout: "timeout",
+  denied: "denied",
+  rate_limited: "rate limited",
+  invalid_args: "invalid arguments",
+  unavailable: "unavailable",
+  pending_approval: "awaiting approval",
+  started: "in progress",
+  cancelled: "cancelled",
+  read: "resource read",
+  bundle: "in bundle",
 };
 
 export function OutcomeBadge({ outcome }: { outcome: ExecutionOutcome }) {
   return (
     <Badge appearance="tint" color={OUTCOME_COLOR[outcome] ?? "informative"}>
-      {outcome.replace("_", " ")}
+      {OUTCOME_LABEL[outcome] ?? String(outcome).replaceAll("_", " ")}
     </Badge>
   );
 }

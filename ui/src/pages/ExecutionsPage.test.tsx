@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { mockFetch, renderWithProviders } from "../test/render";
+import { callsTo, mockFetch, renderWithProviders } from "../test/render";
 import { ExecutionsPage } from "./ExecutionsPage";
 
 const ROW = {
@@ -63,5 +63,24 @@ describe("ExecutionsPage feedback", () => {
     expect(alert).toBeTruthy();
     await waitFor(() => expect(up.getAttribute("aria-pressed")).toBe("false"));
     expect(within(document.body).queryByText(/recorded/)).toBeNull();
+  });
+});
+
+describe("ExecutionsPage outcomes (HS-U-013)", () => {
+  it("labels every backend outcome and can filter by one the old list missed", async () => {
+    const rows = [
+      { ...UNATTRIBUTED, id: "o1", tool_name: "a", outcome: "invalid_args" },
+      { ...UNATTRIBUTED, id: "o2", tool_name: "b", outcome: "read" },
+    ];
+    const { calls } = mockFetch({ "GET /api/v1/executions": () => ({ json: { items: rows, total: 2, limit: 50, offset: 0 } }) });
+    renderWithProviders(<ExecutionsPage />, { route: "/executions" });
+    const table = await screen.findByRole("table", { name: "Executions" });
+    expect(within(table).getByText("invalid arguments")).toBeTruthy();
+    expect(within(table).getByText("resource read")).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Outcome" });
+    for (const label of ["unavailable", "invalid arguments", "cancelled", "in bundle", "resource read"])
+      expect(within(select).getByRole("option", { name: label })).toBeTruthy();
+    await userEvent.selectOptions(select, "unavailable");
+    await waitFor(() => expect(callsTo(calls, "GET", "/api/v1/executions").at(-1)?.query.outcome).toBe("unavailable"));
   });
 });
