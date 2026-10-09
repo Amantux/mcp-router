@@ -12,7 +12,7 @@ function routes(extra: Record<string, () => { json?: unknown; text?: string }> =
     "GET /api/v1/skill-sources": () => ({ json: [] }),
     "GET /api/v1/principals": () => ({ json: [{ id: "p1", agentId: "claude-desk", enabled: true, maxTools: 10, createdAt: "" }] }),
     "GET /api/v1/skills/k1": () => ({ json: { ...SKILL, license: "MIT", allowedTools: ["Read"], resourceManifest: [], versions: [] } }),
-    "GET /api/v1/skills/k1/body": () => ({ text: EVIL }),
+    "GET /api/v1/skills/k1/body": () => ({ json: { id: "k1", body: EVIL, bodyTokensEst: 1234 } }),
     ...extra,
   });
 }

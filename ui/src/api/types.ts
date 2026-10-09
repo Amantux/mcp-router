@@ -437,6 +437,12 @@ export interface ContextEconomy {
   catalogTokensPerDecision?: number | null;
   estimator: string;
   catalogBasis: string;
+  /** Skill metadata (name + description) shown in routes; part of exposedTokens. */
+  skillMetadataTokens: number;
+  /** Bodies of skills actually activated on the decision; part of exposedTokens. */
+  skillBodyTokensExposed: number;
+  /** Bodies of surfaced-but-never-activated skills; NOT in exposedTokens. */
+  skillBodyTokensNotSent: number;
 }
 
 export interface FunnelTotals {
@@ -483,9 +489,8 @@ export interface AnalyticsOverview {
   executions: ExecutionStats;
   positionCurve: RankPoint[];
   catalogDrift: Record<string, number>;
-  // CONTRACT (guessed — S2f analytics wire not landed; names from the wave-4 brief):
-  // overview.skills {surfaced, activated, activationRate, bodyTokensNotSent}. Absent on older backends.
-  skills?: SkillsOverview;
+  /** analytics/wire.py SkillsOverviewOut. */
+  skills: SkillsOverview;
 }
 
 export interface SkillsOverview {
@@ -501,8 +506,8 @@ export type AnalyticsKind = "all" | "tool" | "skill";
 
 export interface ToolFunnel {
   toolId: string;
-  // CONTRACT (guessed, S2f): rows gain kind "tool" | "skill".
-  kind?: "tool" | "skill";
+  /** From the id prefix ("skill:<id>"); skills: toolName = skill, serverName = source. */
+  kind: "tool" | "skill";
   /** null: the tool is no longer in the catalog. */
   toolName: string | null;
   serverName: string | null;
@@ -565,6 +570,10 @@ export interface AgentProfile {
   attributionCoverage: number | null;
   surfaced: number;
   selected: number;
+  skillsSurfaced: number;
+  skillsActivated: number;
+  /** skillsActivated / skillsSurfaced, null with no denominator. */
+  skillActivationRate: number | null;
   selectionRate: number | null;
   avgSurfacedPerDecision: number | null;
   budgetTools?: number | null;
@@ -611,8 +620,6 @@ export interface AnalyticsSuggestions {
 }
 
 // ------------------------------------------------------------ wave 4: skills
-// CONTRACT: shapes guessed from docs/skills-plan.md; backend notes for wave 4 were not yet
-// published when this was written. Every field the UI does not strictly need is optional.
 export type SkillSourceKind = "directory" | "git";
 export interface SkillSource {
   id: string;

@@ -627,7 +627,7 @@ export async function listToolFunnels(
 ): Promise<ToolFunnelPage> {
   const raw = await request<ToolFunnelPage>("GET", `${ANALYTICS}/tools`, {
     signal,
-    // CONTRACT (guessed, S2f): GET /analytics/tools?kind=tool|skill; omitted = all kinds.
+    // GET /analytics/tools?kind=tool|skill; omitted = all kinds.
     query: { window: q.window, sort: q.sort, order: q.order, limit: q.limit, offset: q.offset, kind: q.kind && q.kind !== "all" ? q.kind : undefined },
   });
   const page: ToolFunnelPage = { ...raw, ...toPage<ToolFunnel>(raw, q.limit, q.offset) };
@@ -650,7 +650,7 @@ export function getAnalyticsSuggestions(window: AnalyticsWindow, signal?: AbortS
 }
 
 // ------------------------------------------------------------ wave 4: skills
-// CONTRACT: REST surface per docs/skills-plan.md (no backend integration notes yet).
+// REST surface: api/routes_skill_sources.py + api/routes_skills.py.
 
 export async function listSkillSources(signal?: AbortSignal): Promise<SkillSource[]> {
   return toList<SkillSource>(await request("GET", `${API_BASE}/skill-sources`, { signal }));
@@ -658,12 +658,12 @@ export async function listSkillSources(signal?: AbortSignal): Promise<SkillSourc
 export function createSkillSource(body: CreateSkillSourceRequest): Promise<SkillSource> {
   return request("POST", `${API_BASE}/skill-sources`, { body });
 }
-// CONTRACT: POST /skill-sources/{id}/sync -> {added, changed, removed, skipped[{path, reason}]}.
+// POST /skill-sources/{id}/sync -> {added, changed, removed, skipped[{path, reason}]}.
 export async function syncSkillSource(id: string): Promise<SyncReport> {
   const r = (await request<Partial<SyncReport>>("POST", `${API_BASE}/skill-sources/${encodeURIComponent(id)}/sync`)) ?? {};
   return { added: r.added ?? 0, changed: r.changed ?? 0, removed: r.removed ?? 0, skipped: r.skipped ?? [] };
 }
-// CONTRACT: PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
+// PATCH /skill-sources/{id} {enabled} mirrors PATCH /servers/{id}.
 export function setSkillSourceEnabled(id: string, enabled: boolean): Promise<SkillSource> {
   return request("PATCH", `${API_BASE}/skill-sources/${encodeURIComponent(id)}`, { body: { enabled } });
 }
@@ -693,11 +693,12 @@ async function requestRaw(path: string, query?: Record<string, QueryValue>, sign
   if (!res.ok) throw new ApiError(res.status, path, presented);
   return res;
 }
-// CONTRACT: GET /skills/{id}/body -> text/plain (or text/markdown). Rendered as plain text only.
+// GET /skills/{id}/body -> JSON {id, body, bodyTokensEst}. Rendered as plain text only.
 export async function getSkillBody(id: string, signal?: AbortSignal): Promise<string> {
-  return (await requestRaw(`${API_BASE}/skills/${encodeURIComponent(id)}/body`, undefined, signal)).text();
+  const raw = await request<{ body?: unknown }>("GET", `${API_BASE}/skills/${encodeURIComponent(id)}/body`, { signal });
+  return typeof raw?.body === "string" ? raw.body : "";
 }
-// CONTRACT: GET /skills/bundle?agentId= -> application/zip.
+// GET /skills/bundle?agentId= -> application/zip; 409 stale / 413 too large|too many.
 export async function downloadSkillBundle(agentId: string): Promise<Blob> {
   return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
 }
