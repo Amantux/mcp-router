@@ -12,7 +12,7 @@
  * status. The response body is deliberately never surfaced to the UI.
  */
 import type {
-  CreateSkillSourceRequest, Skill, SkillDetail, SkillQuery, SkillSource, SyncReport,
+  CreateSkillSourceRequest, Skill, SkillActivation, SkillDetail, SkillQuery, SkillSource, SyncReport,
   Approval,
   ApprovalDecision,
   ApprovalStatus,
@@ -664,4 +664,14 @@ export async function getSkillBody(id: string, signal?: AbortSignal): Promise<st
 // CONTRACT: GET /skills/bundle?agentId= -> application/zip.
 export async function downloadSkillBundle(agentId: string): Promise<Blob> {
   return (await requestRaw(`${API_BASE}/skills/bundle`, { agentId })).blob();
+}
+
+// CONTRACT: aligned with S3 INTEGRATION_NOTES-wave4-exposure.md (planned, not yet verified):
+// POST /skills/{id}/activate {agentId?, routeRequestId?} -> {body, resources[{path,size,kind}], recordId};
+// 403 denied, 404 not routed, 429 rate_limited. agentId is required for admin-initiated activation.
+export async function activateSkill(id: string, opts: { agentId?: string } = {}, signal?: AbortSignal): Promise<SkillActivation> {
+  const body: JsonObject = {};
+  if (opts.agentId) body.agentId = opts.agentId;
+  const raw = await request<Partial<SkillActivation>>("POST", `${API_BASE}/skills/${encodeURIComponent(id)}/activate`, { body, signal, as: "agent" });
+  return { body: typeof raw?.body === "string" ? raw.body : "", resources: raw?.resources ?? [], recordId: raw?.recordId ?? null };
 }

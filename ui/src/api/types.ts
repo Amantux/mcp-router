@@ -650,3 +650,10 @@ export interface SkillQuery {
   limit: number;
   offset: number;
 }
+
+/** POST /skills/{id}/activate result (S3 exposure notes, planned shape). `body` is inert text. */
+export interface SkillActivation {
+  body: string;
+  resources: { path: string; size: number; kind: string }[];
+  recordId: string | null;
+}
