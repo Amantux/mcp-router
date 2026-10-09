@@ -374,9 +374,19 @@ def delete_rule(rule_id: str, request: Request) -> Response:
 
 
 # --------------------------------------------------------------- approvals
+ApprovalStatus = Literal["pending", "executing", "executed", "failed", "denied", "expired"]
+APPROVALS_MAX_LIMIT = 500
+
+
 @router.get("/approvals", response_model=list[ApprovalOut], dependencies=[Admin])
-async def list_approvals(request: Request, status: str | None = None) -> list[ApprovalOut]:
-    return [_a_out(v) for v in await _manager(request).list_approvals(status)]
+async def list_approvals(
+    request: Request,
+    status: ApprovalStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=APPROVALS_MAX_LIMIT)] = 200,
+) -> list[ApprovalOut]:
+    """Newest first, at most `limit` (default 200, the old silent cap). The
+    response stays a bare list; an unknown `status` is 422, not `[]`."""
+    return [_a_out(v) for v in await _manager(request).list_approvals(status, limit)]
 
 
 @router.post(
