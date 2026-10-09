@@ -163,3 +163,22 @@ async def test_reroute_publishes_prompt_and_resource_changes_per_agent(gw: Any) 
     }
     await gw.apply_route("alice", _route("rr-2", ["sk1"]))  # unchanged set: no notify
     assert len(seen["alice"]) == 3
+
+
+async def test_apply_route_splits_kinds_between_stores(gw: Any, monkeypatch: Any) -> None:
+    seen: list[list[str]] = []
+    real_set = gw.exposure.set
+
+    def spy(agent: str, ids: list[str], rid: Any) -> Any:
+        seen.append(list(ids))
+        return real_set(agent, ids, rid)
+
+    monkeypatch.setattr(gw.exposure, "set", spy)
+    tools = [
+        RoutedTool("t1", "", "", 1.0, kind="tool"),
+        RoutedTool("sk1", "", "", 1.0, kind="skill"),
+        RoutedTool("x1", "", "", 1.0, kind="prompt"),  # unknown kind: neither store
+    ]
+    await gw.apply_route("alice", RouteResult("rr-k", tools, False, 1.0, "m"))
+    assert seen == [["t1"]]
+    assert gw._skill_ids["alice"] == ("sk1",)

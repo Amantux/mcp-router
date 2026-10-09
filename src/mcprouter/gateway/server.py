@@ -718,7 +718,7 @@ class GatewayServer:
     # ------------------------------------------------------------ re-route
     async def apply_route(self, agent_id: str, result: RouteResult) -> bool:
         """Install an agent's route result; notify its sessions if it changed."""
-        tool_ids = [t.tool_id for t in result.tools if t.kind != "skill"]
+        tool_ids = [t.tool_id for t in result.tools if t.kind == "tool"]
         skill_ids = tuple(t.tool_id for t in result.tools if t.kind == "skill")
         changed = self.exposure.set(agent_id, tool_ids, result.request_id)
         with self._lock:
