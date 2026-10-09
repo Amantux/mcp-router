@@ -58,3 +58,42 @@ def test_synthetic_v1_baseline(db: sessionmaker[Session], settings: object, back
     assert m["unauthorized_exposures"] == 0
     assert m["unavailable_exposures"] == 0
     assert m["fallback_rate"] == (1.0 if backend == "fallback" else 0.0)
+
+
+def test_synthetic_skills_fixture_seeds_ground_truth(db: sessionmaker[Session]) -> None:
+    """Wave-4 skills fixture: deterministic ids, reviewed ground-truth
+    classification that the rule classifier agrees with, required hazards."""
+    from sqlalchemy import select
+
+    from mcprouter.eval.synthetic_catalog import (
+        NEAR_DUPLICATE_SKILLS,
+        SKILLS,
+        _stable_id,
+        seed_synthetic_skills,
+        skill_classification_mismatches,
+    )
+    from mcprouter.models import SkillRecord
+
+    assert skill_classification_mismatches() == []
+    assert len(SKILLS) >= 12
+    assert {sk.domain for sk in SKILLS} >= {
+        "communication",
+        "databases",
+        "development",
+        "files",
+        "productivity",
+    }
+    refs = {sk.ref for sk in SKILLS}
+    assert all(a in refs and b in refs for a, b in NEAR_DUPLICATE_SKILLS)
+    assert any(sk.operation == "execute" and sk.has_scripts for sk in SKILLS)
+    with db() as s:
+        seed_synthetic_skills(s, FakeHashEmbedder())
+        s.commit()
+        rows = s.scalars(select(SkillRecord)).all()
+    # Deterministic: ids are uuid5 of the qualified ref, not random.
+    assert len(rows) == len(SKILLS)
+    assert {r.id for r in rows} == {_stable_id("skill", sk.ref) for sk in SKILLS}
+    by_name = {sk.name: sk for sk in SKILLS}
+    for r in rows:
+        assert r.classification_reviewed and r.operation == by_name[r.name].operation
+        assert r.body_tokens_est == len(r.body) // 4 and r.embedding is not None
