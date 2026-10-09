@@ -67,15 +67,17 @@ def test_release_verify_job_checks_everything() -> None:
         assert "if" not in step, step
     for body in runs:
         assert "|| true" not in body and "true ||" not in body, body
-    # Ancestor check: must exit non-zero when the SHA is not on master.
+    # Ancestor check: must exit non-zero when the SHA is not on the default branch.
     anc = next(b for b in runs if "--is-ancestor" in b)
-    assert re.search(r'--is-ancestor "\$GITHUB_SHA" origin/master \\\n\s*\|\| \{.*exit 1; \}', anc)
-    # CI check: query pinned to this SHA, push event, master; success required.
+    assert re.search(
+        r'--is-ancestor "\$GITHUB_SHA" "origin/\$DEFAULT_BRANCH" \\\n\s*\|\| \{.*exit 1; \}', anc
+    )
+    # CI check: query pinned to this SHA, push event, the default branch; success required.
     ci = next(b for b in runs if "workflows/ci.yml/runs" in b)
     query = re.search(r"workflows/ci\.yml/runs\?([^\"]+)\"", ci)
     assert query, ci
     params = dict(urllib.parse.parse_qsl(query.group(1)))
-    assert params == {"head_sha": "${GITHUB_SHA}", "event": "push", "branch": "master"}
+    assert params == {"head_sha": "${GITHUB_SHA}", "event": "push", "branch": "${DEFAULT_BRANCH}"}
     assert '.c == "success"' in ci and 'if [ "$green" -ge 1 ]; then exit 0; fi' in ci
     assert ci.rstrip().endswith("exit 1")
     local = next(b for b in runs if "release_verify.py" in b)

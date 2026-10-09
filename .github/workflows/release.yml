@@ -2,8 +2,8 @@ name: release
 # On a vX.Y.Z[suffix] tag: `verify` proves the tag is shippable (D7), then both
 # images build and push. Nothing publishes unless verify succeeds:
 #   - tag == "v" + pyproject version, top versioned CHANGELOG heading == that version
-#   - a successful `CI` push run exists for this exact SHA on master
-#   - the SHA is an ancestor of origin/master (no releasing side branches)
+#   - a successful `CI` push run exists for this exact SHA on the default branch
+#   - the SHA is an ancestor of the default branch (no releasing side branches)
 # `:latest` / `:latest-inference` move only for a plain vX.Y.Z tag.
 # Tag protection (who may push v* tags) is a repo ruleset, not this file.
 on:
