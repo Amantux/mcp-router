@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { act, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { NotificationsProvider } from "../components/Notifications";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { setCredentials } from "../api/auth";
-import { ExecutionOutcomeView, PlaygroundPage } from "./PlaygroundPage";
+import { ExecutionOutcomeView, PlaygroundPage, useRunAs } from "./PlaygroundPage";
 
 const TOOL = {
   id: "t1",
@@ -88,23 +90,24 @@ describe("PlaygroundPage", () => {
     // Let every async load settle BEFORE typing: the principals option is the last
     // thing to arrive, and typing into a form that is still being (re)mounted loses
     // the value, which fails validation silently and never opens the dialog.
-    await screen.findByRole("option", { name: "billing-bot" }, { timeout: 5000 });
+    await screen.findByRole("option", { name: "billing-bot" });
     // The backend refuses admin runs with no agent named, so Run stays disabled until one is picked.
-    expect(((await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 })) as HTMLButtonElement).disabled).toBe(true);
-    await user.type(await screen.findByRole("textbox", { name: /repo/ }, { timeout: 5000 }), "a/b");
+    expect(((await screen.findByRole("button", { name: "Run tool" })) as HTMLButtonElement).disabled).toBe(true);
+    await user.type(await screen.findByRole("textbox", { name: /repo/ }), "a/b");
     await user.selectOptions(screen.getByTestId("run-as-picker"), "billing-bot");
-    await user.click(await screen.findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
-    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
+    await user.click(screen.getByRole("button", { name: "Run tool" }));
+    const dialog = await screen.findByRole("dialog");
     expect(screen.queryByText("Required.")).toBeNull(); // the typed value survived to submit
-    expect(await within(dialog).findByText("Run create_issue as agent “billing-bot” (admin-initiated)?", {}, { timeout: 5000 })).toBeTruthy();
+    expect(within(dialog).getByText("Run create_issue as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    await user.click(await within(dialog).findByRole("button", { name: "Run tool" }, { timeout: 5000 }));
-    const ok = await screen.findByTestId("outcome-ok", {}, { timeout: 5000 });
-    expect(await within(ok).findByText("Ran create_issue", {}, { timeout: 5000 })).toBeTruthy();
+    // The confirm button is named after the tool, distinct from the page's "Run tool".
+    await user.click(within(dialog).getByRole("button", { name: "Run create_issue" }));
+    const ok = await screen.findByTestId("outcome-ok");
+    expect(within(ok).getByText("Ran create_issue")).toBeTruthy();
     expect(within(ok).getByLabelText("Result block 1").textContent).toBe('{\n  "number": 7\n}');
     const exec = calls.find((c) => c.method === "POST")!;
     expect((exec.body as Record<string, unknown>).agentId).toBe("billing-bot");
-  }, 30000);
+  });
 
   it("raw JSON toggle: form→JSON always works; unrepresentable JSON stays raw with a notice", async () => {
     const user = userEvent.setup();
@@ -187,7 +190,7 @@ describe("ExecutionOutcomeView — pending approval", () => {
     const pending = await screen.findByTestId("outcome-pending");
     expect(within(pending).getByRole("link", { name: "Approvals" }).getAttribute("href")).toBe("/approvals");
     expect(screen.getByTestId("audit-id").textContent).toBe("rec-9");
-    await screen.findByTestId("approval-executed", {}, { timeout: 2000 });
+    await screen.findByTestId("approval-executed");
     expect(screen.getByText(/issue #7 created/)).toBeTruthy();
     const settled = polls;
     await new Promise((r) => setTimeout(r, 80));
@@ -201,6 +204,8 @@ const SKILL = { id: "k1", source_id: "src1", source_name: "team-skills", name: "
 function mockSkill(activate: (body: unknown) => { status?: number; json?: unknown }) {
   return mockFetch({
     "GET /api/v1/skills": () => ({ json: { items: [SKILL], total: 1 } }),
+    // The page resolves the agent key's id (the 429 test sets one).
+    "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
     "GET /api/v1/skills/k1": () => ({ json: SKILL }),
     "POST /api/v1/skills/k1/activate": activate,
     "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
@@ -223,7 +228,7 @@ describe("PlaygroundPage skills tab", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Activate deploy-helper as agent “billing-bot” (admin-initiated)?")).toBeTruthy();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
-    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
     const ok = await screen.findByTestId("activation-ok");
     expect(within(ok).getByText(/Audit record rec-9/)).toBeTruthy();
     expect(within(ok).getByText(/scripts\/run.sh/)).toBeTruthy();
@@ -232,6 +237,8 @@ describe("PlaygroundPage skills tab", () => {
     expect(container.querySelector("pre b")).toBeNull();
     const post = calls.find((c) => c.method === "POST")!;
     expect((post.body as Record<string, unknown>).agentId).toBe("billing-bot");
+    // The Skills tab never loads the tools tab's lists (A3-020).
+    expect(calls.some((c) => c.path === "/api/v1/tools" || c.path === "/api/v1/servers")).toBe(false);
   });
 
   it("maps a 429 activation onto the shared outcome renderer", async () => {
@@ -241,7 +248,38 @@ describe("PlaygroundPage skills tab", () => {
     renderWithProviders(<PlaygroundPage />, { route: "/playground?skill=k1" });
     await user.click(await screen.findByRole("button", { name: /^Activate as/ }));
     const dialog = await screen.findByRole("dialog");
-    await user.click(await within(dialog).findByRole("button", { name: "Activate skill" }, { timeout: 3000 }));
+    await user.click(within(dialog).getByRole("button", { name: "Activate deploy-helper" }));
     expect(await screen.findByTestId("outcome-rate_limited")).toBeTruthy();
   });
 });
+
+describe("useRunAs", () => {
+  const wrap = ({ children }: { children: ReactNode }) => <NotificationsProvider>{children}</NotificationsProvider>;
+  it("admin-only: lists enabled agents, names the impersonation, and flags a failed list", async () => {
+    setCredentials({ adminToken: "adm" });
+    let fail = false;
+    mockFetch({
+      "GET /api/v1/principals": () =>
+        fail ? { status: 500 } : { json: [{ id: "p1", agent_id: "on-bot", enabled: true }, { id: "p2", agent_id: "off-bot", enabled: false }] },
+    });
+    const { result, unmount } = renderHook(() => useRunAs(), { wrapper: wrap });
+    await waitFor(() => expect(result.current.agents).toEqual(["on-bot"]));
+    expect([result.current.adminOnly, result.current.who]).toEqual([true, "the admin token"]);
+    act(() => result.current.setRunAs("on-bot"));
+    expect(result.current.who).toBe("agent “on-bot” (admin-initiated)");
+    unmount();
+    fail = true;
+    const again = renderHook(() => useRunAs(), { wrapper: wrap });
+    await waitFor(() => expect(again.result.current.agentsFailed).toBe(true));
+    expect(again.result.current.agents).toEqual([]);
+  });
+
+  it("with an agent key there is no picker and no principals call", () => {
+    setCredentials({ agentKey: "agt" });
+    const { calls } = mockFetch({});
+    const { result } = renderHook(() => useRunAs(), { wrapper: wrap });
+    expect(result.current.adminOnly).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+});
+

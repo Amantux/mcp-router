@@ -274,3 +274,22 @@ describe("estimate helpers", () => {
     expect(c?.basis).toContain("0.5");
   });
 });
+
+describe("AnalyticsPage skill rows", () => {
+  it("opens a skill funnel row in the skill drawer, never the tool drawer", async () => {
+    const mixed = { ...TOOLS, items: [{ ...TOOLS.items[0], tool_id: "skill:k1", tool_name: "pdf-form-filler", server_name: "src-pdf", kind: "skill" }], total: 1 };
+    const { calls } = mockFetch({
+      "GET /api/v1/analytics/overview": () => ({ json: OVERVIEW }),
+      "GET /api/v1/analytics/suggestions": () => ({ json: SUGGESTIONS }),
+      "GET /api/v1/analytics/tools": () => ({ json: mixed }),
+      "GET /api/v1/analytics/agents": () => ({ json: AGENTS }),
+      "GET /api/v1/skills/k1": () => ({ json: { id: "k1", source_id: "s1", name: "pdf-form-filler", description: "Fills PDF forms", operation: "write", enabled: true, versions: [] } }),
+    });
+    renderWithProviders(<AnalyticsPage />, { route: "/analytics" });
+    await userEvent.click(await screen.findByRole("button", { name: "pdf-form-filler" }));
+    expect(await screen.findByText("Fills PDF forms")).toBeTruthy();
+    expect(calls.some((c) => c.path === "/api/v1/skills/k1")).toBe(true);
+    expect(calls.some((c) => c.path.startsWith("/api/v1/tools/"))).toBe(false);
+  });
+});
+

@@ -15,7 +15,7 @@ import {
 import { CheckmarkCircleRegular } from "@fluentui/react-icons";
 import { approveApproval, denyApproval, listApprovals } from "../api/client";
 import type { Approval, ApprovalStatus } from "../api/types";
-import { ConfirmDialog, EmptyState, fmtTime, JsonBlock, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
+import { ConfirmDialog, EmptyState, ErrorState, fmtTime, JsonBlock, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
 import { useVisiblePolling } from "../hooks/useVisiblePolling";
@@ -75,6 +75,8 @@ export function ApprovalsPage() {
       </div>
       {list.loading && !list.data ? (
         <LoadingRow label="Loading approvals…" />
+      ) : list.failed && !list.data ? (
+        <ErrorState what="Approvals" onRetry={list.reload} />
       ) : items.length === 0 && !list.failed ? (
         <EmptyState
           icon={<CheckmarkCircleRegular />}
@@ -91,7 +93,7 @@ export function ApprovalsPage() {
               <TableHeaderCell>Arguments (redacted)</TableHeaderCell>
               <TableHeaderCell>Requested</TableHeaderCell>
               <TableHeaderCell>Expires</TableHeaderCell>
-              <TableHeaderCell />
+              <TableHeaderCell aria-label="Actions" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -115,10 +117,10 @@ export function ApprovalsPage() {
                 <TableCell>
                   {a.status === "pending" && (
                     <span style={{ display: "flex", gap: 4 }}>
-                      <Button size="small" onClick={() => setConfirm({ approval: a, action: "approve" })}>
+                      <Button size="small" aria-label={`Approve ${a.summary.tool ?? a.toolId} for ${a.agentId}`} onClick={() => setConfirm({ approval: a, action: "approve" })}>
                         Approve
                       </Button>
-                      <Button size="small" onClick={() => setConfirm({ approval: a, action: "deny" })}>
+                      <Button size="small" aria-label={`Deny ${a.summary.tool ?? a.toolId} for ${a.agentId}`} onClick={() => setConfirm({ approval: a, action: "deny" })}>
                         Deny
                       </Button>
                     </span>

@@ -76,6 +76,12 @@ export function RegisterServerDialog({
     setErrors({});
   };
 
+  // Cancel/dismiss also resets, so the next open never starts with stale input or errors.
+  const close = () => {
+    reset();
+    onClose();
+  };
+
   const submit = async () => {
     const e: Errors = {};
     if (!name.trim()) e.name = "Enter a name for this server.";
@@ -86,7 +92,7 @@ export function RegisterServerDialog({
         .split("\n")
         .map((a) => a.trim())
         .filter(Boolean);
-      body = { name: name.trim(), transport, stdioCommand: [command.trim(), ...argv] };
+      body = { name: name.trim(), transport, command: [command.trim(), ...argv] };
     } else {
       const err = validateHttpUrl(endpoint, httpsOnly);
       if (err) e.endpoint = err;
@@ -99,8 +105,7 @@ export function RegisterServerDialog({
       const created = await registerServer(body);
       notify.success(`Registered server “${created.name ?? name.trim()}”`);
       onRegistered(created);
-      reset();
-      onClose();
+      close();
     } catch (err) {
       notify.error(`Register server “${name.trim()}”`, err);
     } finally {
@@ -109,7 +114,7 @@ export function RegisterServerDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && onClose()}>
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && !pending && close()}>
       <DialogSurface>
         <form
           noValidate
@@ -147,7 +152,7 @@ export function RegisterServerDialog({
               )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" onClick={onClose} disabled={pending}>
+              <Button appearance="secondary" onClick={close} disabled={pending}>
                 Cancel
               </Button>
               <Button appearance="primary" type="submit" disabled={pending}>

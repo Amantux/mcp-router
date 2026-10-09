@@ -79,7 +79,7 @@ export function AuthBanner({ onOpen }: { onOpen: () => void }) {
 
 type Verdict = { kind: "ok" | "error"; text: string } | null;
 
-export function ConnectPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ConnectPanel({ open, onClose, warnRemount = false }: { open: boolean; onClose: () => void; warnRemount?: boolean }) {
   const s = useStyles();
   const a = useAuth();
   const [admin, setAdmin] = useState("");
@@ -145,6 +145,14 @@ export function ConnectPanel({ open, onClose }: { open: boolean; onClose: () => 
             void save();
           }}
         >
+          {warnRemount && (
+            <MessageBar intent="warning" data-testid="connect-remount-warning">
+              <MessageBarBody>
+                Saving or forgetting credentials restarts the setup wizard's current step: an agent key it is showing disappears and cannot be
+                shown again. Copy it first.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Caption1>
             Credentials stay in this browser tab only (memory and session storage). Closing the tab forgets them. They are sent as an
             Authorization header and never shown again.

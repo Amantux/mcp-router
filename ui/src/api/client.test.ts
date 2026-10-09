@@ -6,13 +6,13 @@ import {
   executeTool,
   getModelsHealth,
   getTool,
+  getApproval,
   listDedupSuggestions,
   listRules,
   listServers,
   listTools,
   refreshServer,
   normaliseSimulation,
-  simulateRoute,
   snakeToCamel,
 } from "./client";
 import { mockFetch } from "../test/render";
@@ -96,44 +96,6 @@ describe("client requests", () => {
   it("defaults missing tool versions to an empty list", async () => {
     mockFetch({ "GET /api/v1/tools/t1": () => ({ json: { id: "t1", name: "x" } }) });
     expect((await getTool("t1")).versions).toEqual([]);
-  });
-
-  it("normalises the SPEC §9 literal route response ({server, tool}, snake_case)", async () => {
-    const { calls } = mockFetch({
-      "POST /api/v1/route": () => ({
-        json: { request_id: "r1", tools: [{ server: "github", tool: "list_prs", score: 0.81 }], fallback_used: false, latency_ms: 42.1 },
-      }),
-    });
-    const res = await simulateRoute({ query: "prs", agentId: "a1", maxTools: 5 });
-    expect(res).toEqual({
-      requestId: "r1",
-      tools: [{ toolId: undefined, serverName: "github", toolName: "list_prs", score: 0.81 }],
-      fallbackUsed: false,
-      latencyMs: 42.1,
-    });
-    expect(calls[0].body).toEqual({ query: "prs", agentId: "a1", maxTools: 5 });
-  });
-
-  it("camelises the wave-2 /route budget fields (sent snake_case)", async () => {
-    mockFetch({
-      "POST /api/v1/route": () => ({
-        json: {
-          request_id: "r2",
-          tools: [],
-          fallback_used: false,
-          latency_ms: 3,
-          no_match: true,
-          max_tools_applied: 5,
-          max_servers_applied: null,
-          cached: true,
-        },
-      }),
-    });
-    const res = await simulateRoute({ query: "prs", agentId: "a1", maxTools: 5 });
-    expect(res.maxToolsApplied).toBe(5);
-    expect(res.maxServersApplied).toBeNull();
-    expect(res.cached).toBe(true);
-    expect(res.noMatch).toBe(true);
   });
 
   it("executeTool sends agentId/routeRequestId only when given, and keeps result content opaque", async () => {
@@ -226,7 +188,9 @@ describe("integration reconciliation (backend shapes)", () => {
         json: { items: [{ id: "d1", tool_a: { id: "a", name: "x" }, tool_b: { id: "b", name: "y" }, similarity: 0.9, status: "open" }] },
       }),
     });
-    const [s] = await listDedupSuggestions();
+    const {
+      items: [s],
+    } = await listDedupSuggestions({ limit: 50, offset: 0 });
     expect([s.toolAId, s.toolBId, s.toolA, s.toolB]).toEqual(["a", "b", undefined, undefined]);
   });
 });
@@ -241,25 +205,7 @@ describe("refreshServer", () => {
   });
 });
 
-describe("skills on /route and /route/simulate (S2d item 2)", () => {
-  it("camelises /route skills[] and max_skills_applied", async () => {
-    mockFetch({
-      "POST /api/v1/route": () => ({
-        json: {
-          request_id: "r1",
-          tools: [{ server: "docs", tool: "fill_pdf_form", score: 0.91 }],
-          skills: [{ source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }],
-          fallback_used: false, latency_ms: 12, no_match: false,
-          max_tools_applied: 5, max_servers_applied: null, max_skills_applied: 1,
-        },
-      }),
-    });
-    const r = await simulateRoute({ query: "pdf", agentId: "a", maxTools: 5, maxSkills: 1 });
-    expect(r.tools.map((t) => t.toolName)).toEqual(["fill_pdf_form"]);
-    expect(r.skills).toEqual([{ skillId: undefined, source: "src-pdf", skill: "pdf-form-filler", score: 0.88, bodyTokensEst: 100 }]);
-    expect(r.maxSkillsApplied).toBe(1);
-  });
-
+describe("skills on /route/simulate (S2d item 2)", () => {
   it("normalises simulate skills, kinds, per-kind pruning and the maxSkills clamp", () => {
     const s = normaliseSimulation(
       {
@@ -289,3 +235,18 @@ describe("skills on /route and /route/simulate (S2d item 2)", () => {
     expect(s.maxSkillsApplied).toBeNull();
   });
 });
+
+describe("getApproval (admin path)", () => {
+  const ap = (status: string) => ({ id: "ap-1", agent_id: "a", tool_id: "t", status, summary: {}, created_at: "", expires_at: "", decided_at: null, result_preview: null });
+  it("polls only the pending list while the approval is pending", async () => {
+    const { calls } = mockFetch({ "GET /api/v1/approvals": () => ({ json: [ap("pending")] }) });
+    expect((await getApproval("ap-1", false))?.status).toBe("pending");
+    expect(calls.map((c) => c.query)).toEqual([{ status: "pending" }]);
+  });
+  it("looks once in the full list after it leaves pending", async () => {
+    const { calls } = mockFetch({ "GET /api/v1/approvals": (_b, call) => ({ json: call.query.status === "pending" ? [] : [ap("executed")] }) });
+    expect((await getApproval("ap-1", false))?.status).toBe("executed");
+    expect(calls.map((c) => c.query)).toEqual([{ status: "pending" }, {}]);
+  });
+});
+

@@ -3,8 +3,9 @@
  *
  * Every response passes through `camelizeKeys` in client.ts, so these hold
  * whether the backend emits snake_case (SPEC §9 literal) or camelCase
- * (CLAUDE.md wire convention). Fields marked `// CONTRACT:` are guesses beyond
- * the spec; each one is listed in docs/INTEGRATION_NOTES-ui.md.
+ * (CLAUDE.md wire convention). A CONTRACT line comment names the test that pins it
+ * (meta.test.ts enforces this); response fields are checked against
+ * docs/reference/openapi.json there.
  */
 
 export type Transport = "stdio" | "streamable-http" | "sse";
@@ -24,7 +25,8 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: s
 export type JsonObject = { [k: string]: JsonValue };
 
 /** Paged list envelope. */
-// CONTRACT: list endpoints return {items, total, limit, offset}. A bare array is
+// CONTRACT: list endpoints return {items, total, limit, offset} verified: meta.test.ts › page.envelope
+// A bare array is
 // also accepted (normalised in client.ts) in case the backend returns one.
 export interface Page<T> {
   items: T[];
@@ -39,26 +41,24 @@ export interface MCPServer {
   name: string;
   transport: Transport;
   endpoint?: string | null;
-  // CONTRACT: stdio command line exposed as a string list (models.py stdio_command).
-  stdioCommand?: string[] | null;
   enabled: boolean;
   status: ServerStatus;
   version?: string | null;
   lastDiscoveredAt?: string | null;
-  // CONTRACT: server list includes a tool count so the UI needn't page the catalog.
+  // CONTRACT: the server list carries a tool count verified: meta.test.ts › servers.toolCount
   toolCount?: number;
 }
 
-// CONTRACT: register body. http/sse → endpoint; stdio → stdioCommand [cmd, ...args].
+/** POST /servers (ServerIn, extra keys refused): http/sse → endpoint; stdio → command [cmd, ...args]. */
 export type RegisterServerRequest =
-  | { name: string; transport: "stdio"; stdioCommand: string[] }
+  | { name: string; transport: "stdio"; command: string[] }
   | { name: string; transport: "streamable-http" | "sse"; endpoint: string };
 
 // ------------------------------------------------------------------- tools
 export interface MCPTool {
   id: string;
   serverId: string;
-  // CONTRACT: denormalised server name for display.
+  // CONTRACT: denormalised server name verified: meta.test.ts › tools.serverName
   serverName?: string;
   name: string;
   description: string;
@@ -72,11 +72,12 @@ export interface MCPTool {
   operation: Operation;
   requiredScopes: string[];
   enabled: boolean;
-  // CONTRACT: availability/health flag (models.py `available`).
+  // CONTRACT: availability flag verified: meta.test.ts › tools.available
   available?: boolean;
   classificationReviewed?: boolean;
   version: number;
-  // CONTRACT: usage stats flattened onto the tool (models.py column names).
+  // Usage stats: the backend nests them under `stats`; client.normaliseTool flattens them.
+  // CONTRACT: stats.callCount/errorCount/avgLatencyMs verified: meta.test.ts › tools.stats
   callCount?: number;
   errorCount?: number;
   avgLatencyMs?: number | null;
@@ -92,7 +93,7 @@ export interface ToolVersion {
 }
 
 /** GET /api/v1/tools/{id} */
-// CONTRACT: detail = MCPTool + `versions` (newest first or any order; UI sorts).
+// CONTRACT: detail = MCPTool + `versions` (any order; the UI sorts) verified: meta.test.ts › tools.versions
 export interface ToolDetail extends MCPTool {
   versions: ToolVersion[];
 }
@@ -108,7 +109,7 @@ export interface ToolQuery {
   offset: number;
 }
 
-// CONTRACT: PATCH body; returns the updated MCPTool and marks it reviewed.
+// CONTRACT: PATCH returns the updated tool, marked reviewed verified: meta.test.ts › classification.returnsTool
 export interface ClassificationUpdate {
   domain: string | null;
   operation: Operation;
@@ -126,25 +127,12 @@ export interface DuplicateSuggestion {
   preferredToolId?: string | null;
   status: DedupStatus;
   createdAt: string;
-  // CONTRACT: suggestions embed both tools; if absent the UI fetches them by id.
+  // CONTRACT: suggestions embed refs to both sides; slim refs make the UI fetch by id verified: meta.test.ts › dedup.embedsTools
   toolA?: MCPTool;
   toolB?: MCPTool;
 }
 
 // ----------------------------------------------------------------- routing
-// SPEC §9 body is {query, agent_id, max_tools, allowed_servers?}.
-// CONTRACT: sent camelCase per the wire convention; backend should accept both.
-export interface RouteRequest {
-  query: string;
-  agentId: string;
-  maxTools: number;
-  allowedServers?: string[];
-  /** S2d item 2: may only LOWER the principal/global skills cap (1..1000). */
-  maxSkills?: number;
-  /** S2d item 2: narrows the routed kinds; omitted = both. */
-  kinds?: RouteKind[];
-}
-
 export type RouteKind = "tool" | "skill";
 
 /** S2d item 2 (aligned): /route skills[{source, skill, score, bodyTokensEst}]; simulate adds skillId. */
@@ -164,26 +152,8 @@ export interface RoutedTool {
   score: number;
 }
 
-export interface RouteResponse {
-  requestId: string;
-  tools: RoutedTool[];
-  fallbackUsed: boolean;
-  latencyMs: number;
-  modelVersion?: string;
-  // interfaces.RouteResult.no_match — not in SPEC §9 literal, present in the contract.
-  noMatch?: boolean;
-  // Wave 2 (budgets): sent snake_case (max_tools_applied, ...) like the rest
-  // of /route; camelised by the client. null maxServersApplied = unlimited.
-  maxToolsApplied?: number;
-  maxServersApplied?: number | null;
-  /** S2d item 2: skills routed separately from tools (never mixed into tools[]). */
-  skills?: RoutedSkill[];
-  maxSkillsApplied?: number | null;
-  cached?: boolean;
-}
-
 // ------------------------------------------------------------ models/health
-// CONTRACT: entire shape is a guess; SPEC only names the endpoint.
+// UI-side shape: client.mapModelsHealth builds it from GET /models/health.
 export interface LoadedModel {
   name: string;
   kind: string; // "embedding" | "decision"
@@ -227,14 +197,15 @@ export interface Healthz {
 }
 
 // ------------------------------------------------------------- executions
-// CONTRACT: GET /api/v1/executions?agentId=&outcome=&limit=&offset= → Page<ExecutionRecord>.
+// GET /executions?agentId=&outcome=&limit=&offset= → Page<ExecutionRecord> (query names: meta.test.ts).
 export interface ExecutionRecord {
   id: string;
   agentId: string;
   toolId?: string | null;
   serverId?: string | null;
-  toolName?: string | null; // CONTRACT: denormalised for display
-  serverName?: string | null; // CONTRACT: denormalised for display
+  // CONTRACT: tool/server names denormalised for display verified: meta.test.ts › executions.names
+  toolName?: string | null;
+  serverName?: string | null;
   outcome: ExecutionOutcome;
   detail: string;
   latencyMs?: number | null;
@@ -243,7 +214,8 @@ export interface ExecutionRecord {
   initiatedBy?: string | null; // "admin" = impersonated (admin-initiated) run
 }
 
-// CONTRACT: POST /api/v1/route/{requestId}/feedback {items:[{kind?, id|name, helpful, note?}]}
+// POST /route/{requestId}/feedback {items:[{kind?, id|name, helpful, note?}]}
+// CONTRACT: response {recorded, source} verified: meta.test.ts › feedback.result
 // → {recorded, source}; 404 unknown/foreign decision, 422 bad body, 429 rate-limited.
 export interface FeedbackItem {
   kind?: "tool" | "skill";
@@ -266,28 +238,49 @@ export interface ExecutionQuery {
 }
 
 // ----------------------------------------------------------------- policy
-// CONTRACT: /api/v1/principals and /api/v1/rules (prompt says "under /api/v1").
 export interface Principal {
   id: string;
   agentId: string;
   enabled: boolean;
   maxTools: number;
+  /** Distinct-server exposure cap; null = unlimited. */
+  maxServers?: number | null;
+  /** Routed-skill exposure cap (separate from maxTools). */
+  maxSkills?: number;
   createdAt: string;
 }
 
 export interface CreatePrincipalRequest {
   agentId: string;
   maxTools: number;
+  maxServers?: number | null;
+  maxSkills?: number;
 }
 
-// CONTRACT: create returns the principal plus `apiKey` exactly once.
+// CONTRACT: create returns the principal plus `apiKey` exactly once verified: meta.test.ts › principals.apiKey
 export interface CreatedPrincipal extends Principal {
+  apiKey: string;
+}
+
+export interface PrincipalPatch {
+  enabled?: boolean;
+  maxTools?: number;
+  /** null clears the cap (no limit). */
+  maxServers?: number | null;
+  maxSkills?: number;
+}
+
+export interface RotatedKey {
+  id: string;
+  agentId: string;
   apiKey: string;
 }
 
 export interface PolicyRule {
   id: string;
   agentId: string;
+  /** "skill": serverId is a skill source id and toolName a skill-name glob. Absent = tool. */
+  resourceKind?: "tool" | "skill";
   serverId: string | null;
   toolName: string | null;
   maxOperation: OperationCeiling;
@@ -299,6 +292,13 @@ export type CreateRuleRequest = Omit<PolicyRule, "id" | "createdAt"> & {
   /** "skill" re-targets serverId at a skill source id; immutable after create. */
   resourceKind?: "tool" | "skill";
 };
+
+export interface RulePatch {
+  serverId?: string | null;
+  toolName?: string | null;
+  maxOperation?: OperationCeiling;
+  requiresApproval?: boolean;
+}
 
 // -------------------------------------------------------------- execution
 /** execution/manager.py statuses (ExecutionResult.status). */
@@ -379,7 +379,7 @@ export interface BudgetClamp {
 }
 
 /** A tool removed before exposure, with the deterministic reason. Admin-only diagnostics. */
-// CONTRACT: diagnostics.policyFiltered[] = {server, tool, reason} (toolId optional).
+// CONTRACT: diagnostics.policyFiltered[] = {server, tool, reason, toolId?} verified: meta.test.ts › simulate.policyFiltered
 export interface FilteredTool {
   toolId?: string;
   serverName: string;
@@ -392,7 +392,7 @@ export interface FilteredTool {
 }
 
 /** Candidate counts through the pipeline. */
-// CONTRACT: diagnostics.stages[] = {stage, before, after}.
+// CONTRACT: diagnostics.stages[] = {stage, before, after} verified: meta.test.ts › simulate.stages
 export interface PipelineStage {
   stage: string;
   before: number;
@@ -410,10 +410,8 @@ export interface SimulateRequest {
   kinds?: RouteKind[];
 }
 
-// CONTRACT: POST /api/v1/route/simulate (admin) → RouteResponse fields plus
-// {agentId, maxToolsApplied, maxServersApplied (verified on A's branch),
-// clamps[] (BudgetClamp, verified), diagnostics:{candidates, stages[],
-// policyFiltered[]} (guessed)}. client.simulateAgent normalises.
+// POST /route/simulate (admin): the /route fields plus agentId, applied budgets, clamps[]
+// and diagnostics {candidates, stages[], policyFiltered[]}; client.simulateAgent normalises.
 export interface SimulateResponse {
   requestId?: string;
   agentId: string;
@@ -483,7 +481,7 @@ export interface MeasuredLatency {
   executionLatencyP95Ms: number | null;
 }
 
-// CONTRACT (guessed, parallel W5 executor): overview.feedback; all nullable until it lands.
+// Overview feedback rollup; every value is null until there is feedback.
 export interface FeedbackOverview {
   items: number | null;
   helpfulRate: number | null;
@@ -537,7 +535,7 @@ export interface AnalyticsOverview {
   /** analytics/wire.py SkillsOverviewOut. */
   skills: SkillsOverview;
   measured?: MeasuredLatency;
-  // CONTRACT (guessed, parallel W5 executor): absent until the feedback rollup lands.
+  // CONTRACT: overview.feedback verified: meta.test.ts › overview.feedback
   feedback?: FeedbackOverview | null;
 }
 
@@ -569,7 +567,7 @@ export interface ToolFunnel {
   successRate: number | null;
   avgRank: number | null;
   exposedTokens: number;
-  // CONTRACT (guessed, parallel W5 executor): human/agent feedback counts per row.
+  // CONTRACT: per-row feedback counts verified: meta.test.ts › funnel.feedback
   feedbackHelpful?: number | null;
   feedbackUnhelpful?: number | null;
   helpfulRate?: number | null;
@@ -641,9 +639,9 @@ export interface WastedTool {
   selected: number;
   selectionRate: number | null;
   exposedTokens: number;
-  // CONTRACT (guessed, S2f): rows gain kind.
+  // CONTRACT: rows carry kind verified: meta.test.ts › wasted.kind
   kind?: "tool" | "skill";
-  // CONTRACT (guessed, parallel W5 executor): count of unhelpful feedback on the row.
+  // CONTRACT: unhelpful feedback count verified: meta.test.ts › wasted.unhelpful
   unhelpful?: number | null;
 }
 
@@ -731,6 +729,14 @@ export interface SkillResource {
   sha256?: string;
   kind: string;
   oversize?: boolean;
+}
+/** One row of GET /skills/{id}/versions. */
+export interface SkillVersionRow {
+  version: number;
+  changeKind: string;
+  contentHash: string;
+  manifestHash?: string | null;
+  recordedAt: string;
 }
 export interface SkillVersion {
   version?: string | null;

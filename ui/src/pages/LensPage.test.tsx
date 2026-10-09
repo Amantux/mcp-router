@@ -129,7 +129,7 @@ describe("LensPage", () => {
       "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-10-01T00:00:00Z" }] }),
       "POST /api/v1/route/simulate": () => ({ json: SIM }),
     });
-    renderWithProviders(<LensPage debounceMs={10} />);
+    renderWithProviders(<LensPage debounceMs={10} />, { route: "/lens" });
     await user.click(screen.getByRole("button", { name: "Show agent's view" }));
     expect(screen.getByText("Choose the agent whose view you want to see.")).toBeTruthy();
 
@@ -149,7 +149,7 @@ describe("LensPage", () => {
 
   it("explains the empty state when no agents exist", async () => {
     mockFetch({ "GET /api/v1/principals": () => ({ json: [] }) });
-    renderWithProviders(<LensPage />);
+    renderWithProviders(<LensPage />, { route: "/lens" });
     expect(await screen.findByText("No agents yet")).toBeTruthy();
   });
   it("renders tools and skills sections, kind badges and the maxSkills clamp", () => {
@@ -184,7 +184,7 @@ describe("LensPage", () => {
       "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-10-01T00:00:00Z" }] }),
       "POST /api/v1/route/simulate": () => ({ json: SIM }),
     });
-    renderWithProviders(<LensPage debounceMs={10} />);
+    renderWithProviders(<LensPage debounceMs={10} />, { route: "/lens" });
     await waitFor(() => expect(screen.getByRole("option", { name: /billing-bot/ })).toBeTruthy());
     await user.selectOptions(screen.getByRole("combobox", { name: /Agent/ }), "billing-bot");
     await user.type(screen.getByRole("textbox", { name: /Task query/ }), "fill pdf");
@@ -193,6 +193,26 @@ describe("LensPage", () => {
     fireEvent.change(screen.getByRole("slider", { name: "Requested max skills" }), { target: { value: "2" } });
     const sims = () => calls.filter((c) => c.url === "/api/v1/route/simulate");
     await waitFor(() => expect(sims().at(-1)!.body).toEqual({ agentId: "billing-bot", query: "fill pdf", maxTools: 8, maxSkills: 2 }));
+  });
+});
+
+describe("LensPage deep link from an execution", () => {
+  it("prefills the agent from ?agentId= and rates against ?routeRequestId=", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-10-01T00:00:00Z" }] }),
+      "POST /api/v1/route/simulate": () => ({ json: SIM }),
+      "POST /api/v1/route/r1/feedback": () => ({ json: { recorded: 1 } }),
+    });
+    renderWithProviders(<LensPage debounceMs={10} />, { route: "/lens?routeRequestId=r1&agentId=billing-bot" });
+    await screen.findByRole("option", { name: /billing-bot/ });
+    expect((screen.getByRole("combobox", { name: /Agent/ }) as HTMLSelectElement).value).toBe("billing-bot");
+    await user.type(screen.getByRole("textbox", { name: /Task query/ }), "review open PRs");
+    await user.click(screen.getByRole("button", { name: "Show agent's view" }));
+    await user.click(await screen.findByRole("button", { name: "Helpful: list_prs" }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === "/api/v1/route/r1/feedback")?.body).toEqual({ items: [{ kind: "tool", name: "list_prs", helpful: true }] }),
+    );
   });
 });
 

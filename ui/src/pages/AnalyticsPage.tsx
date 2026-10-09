@@ -32,9 +32,11 @@ import {
   WindowPicker,
 } from "../components/analytics";
 import type { Estimate } from "../components/analytics";
-import { EmptyState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
+import { EmptyState, ErrorState, fmtInt, fmtMs, fmtTime, LoadingRow, PageHeader, Pager, useCommonStyles } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
 import { ToolDetailDrawer } from "./ToolDetailDrawer";
+import { SkillDrawer } from "./SkillsPage";
+import { kindOfId } from "../components/FeedbackThumbs";
 
 const useStyles = makeStyles({
   cards: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: tokens.spacingHorizontalS },
@@ -175,6 +177,9 @@ export function AnalyticsPage() {
   const [offset, setOffset] = useState(0);
   const [kind, setKind] = useState<AnalyticsKind>("all");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [openSkillId, setOpenSkillId] = useState<string | null>(null);
+  // Funnel rows carry "skill:<id>" for skills: those open the skill drawer, not the tool one.
+  const open = (id: string) => (kindOfId(id) === "skill" ? setOpenSkillId(id.slice("skill:".length)) : setOpenId(id));
 
   const overview = useLoader("Load analytics overview", (sig) => getAnalyticsOverview(win, sig), [win]);
   const suggestions = useLoader("Load analytics suggestions", (sig) => getAnalyticsSuggestions(win, sig), [win]);
@@ -203,7 +208,7 @@ export function AnalyticsPage() {
     return (
       <>
         {header}
-        <Caption1>Analytics couldn't be loaded.</Caption1>
+        <ErrorState what="Analytics" onRetry={overview.reload} />
       </>
     );
   if (o.routing.decisions === 0)
@@ -223,7 +228,7 @@ export function AnalyticsPage() {
   return (
     <>
       {header}
-      {sg && <WastedExposure items={sg.wastedExposure} minSurfaced={sg.minSurfaced} maxSelectionRate={sg.maxSelectionRate} onOpen={setOpenId} />}
+      {sg && <WastedExposure items={sg.wastedExposure} minSurfaced={sg.minSurfaced} maxSelectionRate={sg.maxSelectionRate} onOpen={open} />}
 
       <div className={s.cards} aria-label="Overview">
         <div className={s.savings}>
@@ -331,6 +336,8 @@ export function AnalyticsPage() {
         </div>
         {tools.loading && !tools.data ? (
           <LoadingRow label="Loading tool funnels…" />
+        ) : tools.failed && !tools.data ? (
+          <ErrorState what="Tool funnels" onRetry={tools.reload} />
         ) : (tools.data?.items.length ?? 0) === 0 ? (
           <Caption1 className={c.muted}>No tool was surfaced in this window.</Caption1>
         ) : (
@@ -353,7 +360,7 @@ export function AnalyticsPage() {
                 {tools.data!.items.map((t) => (
                   <TableRow key={t.toolId}>
                     <TableCell>
-                      <ToolName id={t.toolId} name={t.toolName} onOpen={setOpenId} />
+                      <ToolName id={t.toolId} name={t.toolName} onOpen={open} />
                     </TableCell>
                     <TableCell>{t.serverName ?? "—"}</TableCell>
                     <TableCell>
@@ -436,7 +443,7 @@ export function AnalyticsPage() {
                   {sg.staleTools.map((t) => (
                     <TableRow key={t.toolId}>
                       <TableCell>
-                        <ToolName id={t.toolId} name={t.toolName} onOpen={setOpenId} />
+                        <ToolName id={t.toolId} name={t.toolName} onOpen={open} />
                       </TableCell>
                       <TableCell>{t.serverName}</TableCell>
                       <TableCell>{fmtTime(t.lastSurfacedAt)}</TableCell>
@@ -467,6 +474,7 @@ export function AnalyticsPage() {
         )}
       </section>
       <ToolDetailDrawer toolId={openId} onClose={() => setOpenId(null)} onChanged={() => tools.refresh()} />
+      <SkillDrawer skillId={openSkillId} onClose={() => setOpenSkillId(null)} />
     </>
   );
 }

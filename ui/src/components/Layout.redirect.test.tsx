@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { mockFetch } from "../test/render";
@@ -55,3 +55,31 @@ describe("Layout first-run redirect", () => {
     expect(screen.getByText("servers page")).toBeTruthy();
   });
 });
+
+describe("Layout Connect panel on the setup wizard", () => {
+  afterEach(() => clearCredentials());
+  it("warns that saving credentials restarts the wizard step only while on /setup", async () => {
+    mockFetch({ "GET /api/v1/setup/status": () => ({ json: { ...STATUS, needsSetup: false } }) });
+    const router = mount("/setup");
+    await screen.findByText("setup page");
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(await screen.findByTestId("connect-remount-warning")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await act(() => router.navigate("/servers"));
+    await screen.findByText("servers page");
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("form", { name: "Connect" })).toBeTruthy();
+    expect(screen.queryByTestId("connect-remount-warning")).toBeNull();
+  });
+});
+
+describe("Layout version", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("shows the build's VITE_APP_VERSION in the nav", async () => {
+    vi.stubEnv("VITE_APP_VERSION", "1.2.3");
+    mockFetch({});
+    mount();
+    expect((await screen.findByTestId("app-version")).textContent).toBe("v1.2.3");
+  });
+});
+
