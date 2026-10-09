@@ -27,6 +27,7 @@ import type { SkillSource, SkillSourceKind, SyncReport } from "../api/types";
 import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
+import { Link } from "react-router";
 
 /** Client-side guard only; the server re-validates. Git sources must be https (no ssh/http/file). */
 export function validateSourceLocation(kind: SkillSourceKind, location: string): string | null {
@@ -321,7 +322,8 @@ export function SkillSourcesPage() {
         body={
           <>
             Its {confirmDelete?.skillCount != null ? `${fmtInt(confirmDelete.skillCount)} ` : ""}skills leave the catalog with it. The files at the
-            source are not touched. The backend refuses while policy rules reference the source; delete or retarget those rules first.
+            source are not touched. The backend refuses while policy rules reference the source; delete or retarget those rules on the{" "}
+            <Link to="/policy">Policy</Link> page first.
           </>
         }
         confirmLabel="Delete source"

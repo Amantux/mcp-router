@@ -125,6 +125,23 @@ describe("Policy principal and rule actions", () => {
     );
   });
 
+  it("retargets a rule (HS-U-015): serverId is sent only when the target changed", async () => {
+    const user = userEvent.setup();
+    const { calls } = routes({ [`PATCH ${API}/policy-rules/r1`]: (b) => ({ json: { ...R, ...(b as object) } }) });
+    renderWithProviders(<PolicyPage />, { route: "/policy" });
+    await user.click(await screen.findByRole("button", { name: "Edit rule billing-bot · tool · github · list_*" }));
+    const dialog = await screen.findByRole("dialog");
+    const target = within(dialog).getByRole("combobox", { name: "Server" });
+    expect((target as HTMLSelectElement).value).toBe("srv1");
+    await user.selectOptions(target, "");
+    await user.click(within(dialog).getByRole("button", { name: "Save rule" }));
+    await waitFor(() =>
+      expect(sent(calls, "PATCH")).toEqual([
+        { path: `${API}/policy-rules/r1`, body: { serverId: null, toolName: "list_*", maxOperation: "read", requiresApproval: false } },
+      ]),
+    );
+  });
+
   it("deletes a rule after a confirmation", async () => {
     const user = userEvent.setup();
     const { calls } = routes({ [`DELETE ${API}/policy-rules/r1`]: () => ({ status: 204 }) });

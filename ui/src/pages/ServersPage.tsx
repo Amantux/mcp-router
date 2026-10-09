@@ -17,6 +17,7 @@ import type { MCPServer } from "../api/types";
 import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, StatusBadge, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
+import { Link } from "react-router";
 import { RegisterServerDialog } from "./RegisterServerDialog";
 
 function endpointLabel(s: MCPServer): string {
@@ -186,8 +187,8 @@ export function ServersPage() {
         body={
           <>
             This removes the server, its {confirmDelete?.toolCount != null ? `${fmtInt(confirmDelete.toolCount)} ` : ""}catalogued tools, their version
-            history and stored credentials. It can't be undone. The backend refuses while policy rules reference the server or it has execution
-            history; disable it instead to keep that history.
+            history and stored credentials. It can't be undone. The backend refuses while policy rules reference the server (delete or retarget them
+            on the <Link to="/policy">Policy</Link> page first) or while it has execution history (disable it instead to keep that history).
           </>
         }
         confirmLabel="Delete server"

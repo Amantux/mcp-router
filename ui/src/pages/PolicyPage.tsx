@@ -184,10 +184,27 @@ function EditLimitsDialog({ principal, onClose, onSaved }: { principal: Principa
   );
 }
 
-/** PATCH a rule's name glob, ceiling and approval. Its kind and target stay as created. */
-function EditRuleDialog({ rule, target, onClose, onSaved }: { rule: PolicyRule | null; target: string; onClose: () => void; onSaved: () => void }) {
+/**
+ * PATCH a rule's target, name glob, ceiling and approval. Its kind stays as created
+ * (the backend has no field for it). `targets` = the servers (tool rule) or skill
+ * sources (skill rule) it can point at; serverId is sent only when it changed.
+ */
+function EditRuleDialog({
+  rule,
+  target,
+  targets,
+  onClose,
+  onSaved,
+}: {
+  rule: PolicyRule | null;
+  target: string;
+  targets: { id: string; name: string }[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const s = useStyles();
   const notify = useNotify();
+  const [targetId, setTargetId] = useState(rule?.serverId ?? "");
   const [toolName, setToolName] = useState(rule?.toolName ?? "");
   const [ceiling, setCeiling] = useState<OperationCeiling>(rule?.maxOperation ?? "read");
   const [approval, setApproval] = useState(rule?.requiresApproval ?? false);
@@ -197,7 +214,8 @@ function EditRuleDialog({ rule, target, onClose, onSaved }: { rule: PolicyRule |
   const submit = async () => {
     setPending(true);
     try {
-      await updateRule(rule.id, { toolName: toolName.trim() || null, maxOperation: ceiling, requiresApproval: approval });
+      const retarget = targetId !== (rule.serverId ?? "") ? { serverId: targetId || null } : {};
+      await updateRule(rule.id, { ...retarget, toolName: toolName.trim() || null, maxOperation: ceiling, requiresApproval: approval });
       notify.success(`Updated the ${kind} rule for “${rule.agentId}” on ${target}`);
       onSaved();
       onClose();
@@ -222,6 +240,18 @@ function EditRuleDialog({ rule, target, onClose, onSaved }: { rule: PolicyRule |
               Edit {kind} rule for “{rule.agentId}” on {target}
             </DialogTitle>
             <DialogContent className={s.form}>
+              <Field label={kind === "skill" ? "Skill source" : "Server"}>
+                <Select value={targetId} onChange={(_, d) => setTargetId(d.value)}>
+                  <option value="">{kind === "skill" ? "Any source" : "Any server"}</option>
+                  {/* A target that is no longer listed stays selectable, so saving other fields can't move the rule. */}
+                  {rule.serverId && !targets.some((t) => t.id === rule.serverId) && <option value={rule.serverId}>{target}</option>}
+                  {targets.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
               <Field label={kind === "skill" ? "Skill name" : "Tool name"} hint="Blank = any; glob allowed">
                 <Input value={toolName} onChange={(_, d) => setToolName(d.value)} />
               </Field>
@@ -663,7 +693,14 @@ export function PolicyPage() {
       <KeyRevealDialog created={revealed} onClose={() => setRevealed(null)} />
       <RotateKeyDialog key={rotateFor?.id ?? "none"} principal={rotateFor} onClose={() => setRotateFor(null)} />
       <EditLimitsDialog key={limitsFor?.id ?? "none"} principal={limitsFor} onClose={() => setLimitsFor(null)} onSaved={() => principals.refresh()} />
-      <EditRuleDialog key={editRule?.id ?? "none"} rule={editRule} target={editRule ? ruleTarget(editRule) : ""} onClose={() => setEditRule(null)} onSaved={() => rules.refresh()} />
+      <EditRuleDialog
+        key={editRule?.id ?? "none"}
+        rule={editRule}
+        target={editRule ? ruleTarget(editRule) : ""}
+        targets={(editRule?.resourceKind === "skill" ? sources.data : servers.data) ?? []}
+        onClose={() => setEditRule(null)}
+        onSaved={() => rules.refresh()}
+      />
       <ConfirmDialog
         open={pAction !== null}
         title={pAction?.kind === "disable" ? `Disable “${pAction.p.agentId}”?` : `Delete “${pAction?.p.agentId ?? ""}”?`}
