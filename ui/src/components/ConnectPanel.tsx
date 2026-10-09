@@ -98,7 +98,7 @@ export function ConnectPanel({ open, onClose, warnRemount = false }: { open: boo
       parts.push(
         e instanceof ApiError && (e.status === 401 || e.status === 403)
           ? "The backend refused the admin token."
-          : "Couldn't verify the admin token: the backend didn't answer. Check it is running on port 8400.",
+          : "Couldn't verify the admin token: the backend didn't answer. Check that it is running and reachable from this browser.",
       );
     }
     if (checkAgent) {
@@ -201,7 +201,7 @@ export function ConnectPanel({ open, onClose, warnRemount = false }: { open: boo
               setVerdict(null);
             }}
           >
-            Disconnect
+            Disconnect (forget both)
           </Button>
         </div>
       </DrawerFooter>

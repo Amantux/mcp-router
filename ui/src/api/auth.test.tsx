@@ -168,7 +168,7 @@ describe("ConnectPanel", () => {
     const user = userEvent.setup();
     setCredentials({ adminToken: ADMIN, agentKey: AGENT });
     renderWithProviders(<ConnectPanel open onClose={() => {}} />);
-    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    await user.click(screen.getByRole("button", { name: "Disconnect (forget both)" }));
     expect(getAuthSnapshot()).toMatchObject({ hasAdminToken: false, hasAgentKey: false });
     expect(window.sessionStorage.length).toBe(0);
   });

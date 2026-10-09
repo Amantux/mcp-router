@@ -165,22 +165,22 @@ export function isAdminAuthError(err: unknown): boolean {
 /** Curated, user-facing explanation of a failure. Never includes a response body. */
 export function describeError(err: unknown): { status: string; advice: string } {
   if (!(err instanceof ApiError)) {
-    return { status: "", advice: "Something unexpected went wrong in the dashboard. Reload the page and try again." };
+    return { status: "", advice: "Something unexpected went wrong in the dashboard. Reload the page and try again. If it keeps happening, the browser console has the details." };
   }
   const s = err.status;
   if (s === 0)
-    return { status: "network error", advice: "Couldn't reach the MCP Router backend. Check it is running on port 8400, then retry." };
+    return { status: "network error", advice: "Couldn't reach the MCP Router backend. Check that it is running and reachable from this browser, then retry." };
   const status = `HTTP ${s}`;
   if ((s === 401 || s === 403) && err.identity === "agent")
     return {
       status,
       advice:
         s === 401
-          ? "The backend refused the agent key. Open Connect (gear icon) and paste a current agent key, or forget it to act as admin."
+          ? "The backend refused the agent key. Open Connect (bottom of the left menu) and paste a current agent key, or forget it to act as admin."
           : "The agent this key belongs to isn't allowed to do this.",
     };
   if (s === 401 || s === 403)
-    return { status, advice: "The backend refused these credentials. Open Connect (gear icon) and paste the admin token, then retry." };
+    return { status, advice: "The backend refused these credentials. Open Connect (bottom of the left menu) and paste the admin token, then retry." };
   if (s === 404)
     return { status, advice: "The item no longer exists, or this backend doesn't provide the endpoint yet. Refresh and retry." };
   if (s === 409)
