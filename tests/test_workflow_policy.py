@@ -19,11 +19,9 @@ WF = ROOT / ".github" / "workflows"
 
 
 def load(name: str) -> dict[str, Any]:
-    data: dict[str, Any] = yaml.safe_load((WF / name).read_text(encoding="utf-8"))
+    raw: dict[Any, Any] = yaml.safe_load((WF / name).read_text(encoding="utf-8"))
     # PyYAML (YAML 1.1) reads the bare key `on` as boolean True.
-    if True in data:
-        data["on"] = data.pop(True)
-    return data
+    return {("on" if k is True else str(k)): v for k, v in raw.items()}
 
 
 def _release_verify() -> Any:

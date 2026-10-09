@@ -128,7 +128,7 @@ def test_runtime_embed_failure_is_typed(monkeypatch: pytest.MonkeyPatch) -> None
 
     be = BgeEmbeddingBackend(
         Broken(), model_id="BAAI/bge-small-en-v1.5", revision=None, device="cpu"
-    )  # type: ignore[arg-type]
+    )
     with pytest.raises(EmbeddingRuntimeError) as ei:
         be.embed(["x"])
     assert "secret" not in str(ei.value)

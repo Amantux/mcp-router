@@ -64,7 +64,10 @@ ignore = ["B008"]  # FastAPI Depends() in defaults — framework idiom
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/mcprouter", "bench"]
+# src + bench must be clean (strict). tests + testbed run under the relaxed
+# override below and are held to mypy-baseline.txt by
+# .github/scripts/mypy_baseline.py (fails on any error not in the baseline).
+files = ["src/mcprouter", "bench", "tests", "testbed"]
 mypy_path = "src"
 
 # The [inference] extra is OPTIONAL and CI runs without it. These modules are
@@ -74,6 +77,13 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = ["torch", "torch.*", "numpy", "numpy.*", "sentence_transformers", "sentence_transformers.*", "huggingface_hub", "huggingface_hub.*", "laya", "laya.*"]
 ignore_missing_imports = true
+
+# Relaxed for test code: untyped test functions/fixtures are idiomatic pytest.
+[[tool.mypy.overrides]]
+module = ["tests.*", "testbed.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

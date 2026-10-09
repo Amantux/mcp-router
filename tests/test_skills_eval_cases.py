@@ -102,7 +102,7 @@ def test_runner_skill_and_mixed_metrics_from_new_cases(monkeypatch: pytest.Monke
     outcomes = runner.run_cases(
         _FakeRoute(cases),  # type: ignore[arg-type]
         cases,
-        session_factory=lambda: nullcontext(None),  # type: ignore[arg-type,return-value]
+        session_factory=lambda: nullcontext(None),  # type: ignore[arg-type]
         scope_resolver=lambda agent_id: StaticScope(),
     )
     m = runner.compute_metrics(outcomes)

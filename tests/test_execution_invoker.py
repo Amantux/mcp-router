@@ -22,7 +22,7 @@ SPEC = generate_fleet(1)[0]  # "github"
 
 def _server(db, **kw: object) -> MCPServerRecord:  # noqa: ANN001
     with db() as s:
-        srv = MCPServerRecord(name=SPEC.name, **kw)  # type: ignore[arg-type]
+        srv = MCPServerRecord(name=SPEC.name, **kw)
         s.add(srv)
         s.commit()
         s.expunge(srv)

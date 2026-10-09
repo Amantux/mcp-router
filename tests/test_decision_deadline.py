@@ -125,7 +125,7 @@ def test_name_never_triggers_a_cold_load() -> None:
         time.sleep(1.0)
         return SleepingModel(delay=0)
 
-    eng = InferenceEngine(Settings(decision_backend="laya"), decision_loader=slow_loader)  # type: ignore[arg-type]
+    eng = InferenceEngine(Settings(decision_backend="laya"), decision_loader=slow_loader)
     m = DeadlineDecisionModel.for_engine(eng, timeout_s=5.0)
     t0 = time.perf_counter()
     assert m.name == "laya (not loaded)"
