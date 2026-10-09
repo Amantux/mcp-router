@@ -287,6 +287,12 @@ class _CuratedErrors:
             raise MCPError(types.INTERNAL_ERROR, INTERNAL_ERROR_MESSAGE) from None
 
 
+def _no_param_header_schema(name: str) -> None:
+    """``Server.get_tool_input_schema``: never a schema, so ``Mcp-Param-*``
+    headers are not validated (unsupported, D15) and no listing runs."""
+    del name
+
+
 def _text(text: str, *, is_error: bool) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)], is_error=is_error
@@ -444,6 +450,10 @@ class GatewayServer:
         self.server = _RouterMCPServer(
             "mcp-router",
             version=__version__,
+            # D15: no x-mcp-header (Mcp-Param-*) support. Without a lookup the
+            # SDK runs a FULL tools/list before every modern-era tools/call just
+            # to find a schema for header validation (2x DB load per call).
+            get_tool_input_schema=_no_param_header_schema,
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."

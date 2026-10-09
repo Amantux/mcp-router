@@ -113,3 +113,26 @@ async def test_concurrent_opens_never_overshoot_the_cap(live: dict[str, Any]) ->
     assert sorted(set(codes)) in ([200, 429], [429])
     assert codes.count(200) <= 2
     assert sum(o["client_id"] == "alice" for o in owners.values()) == codes.count(200)
+
+
+# ------------------------------------------------ P-305 no listing per call
+async def test_modern_tools_call_runs_no_tools_list(live: dict[str, Any]) -> None:
+    gw, inv = live["gw"], live["inv"]
+    add_rule(live["db"], "alice", max_operation="write")
+    calls: list[str] = []
+    real = gw.visible_tools
+
+    def spy(principal: Any) -> Any:
+        calls.append(principal.agent_id)
+        return real(principal)
+
+    gw.visible_tools = spy
+    async with mcp_session(live["url"], "alice", MODERN) as session:
+        res = await session.call_tool("github.list_issues", {"repo": "a/b"})
+    assert res.is_error is False
+    assert inv.calls == [("github", "list_issues", {"repo": "a/b"})]
+    # The client may list tools itself (output-schema lookup); every listing
+    # must be one the client asked for on the wire, none server-initiated.
+    wire = live["wire"].calls
+    assert len(calls) == wire.count((MODERN, "tools/list", None))
+    assert (MODERN, "tools/call", "github.list_issues") in wire
