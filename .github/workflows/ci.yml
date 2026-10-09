@@ -4,6 +4,8 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  # Manual re-runs on master (e.g. the consecutive-green determinism check).
+  workflow_dispatch:
 
 # Least privilege: read-only for every job. No job needs a write scope.
 permissions:

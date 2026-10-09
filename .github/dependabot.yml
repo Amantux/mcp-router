@@ -32,6 +32,12 @@ updates:
     groups:
       docker:
         update-types: ["minor", "patch"]
+    ignore:
+      # The Python base image is pinned by digest on 3.12 deliberately: the
+      # inference extra (CPU torch, laya, sentence-transformers) and the mcp SDK
+      # are validated on 3.12 only. A Python major is a planned upgrade, not a bot PR.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
