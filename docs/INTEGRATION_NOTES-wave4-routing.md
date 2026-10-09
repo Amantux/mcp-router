@@ -109,3 +109,93 @@ maxSkills clamp. The response shapes for S4b are therefore NOT yet fixed here.
   to `ensure_keyword_index`.
 - For item 2: `RouteResult.tools` is mixed and rank-ordered — split on
   `t.kind`; `max_skills_applied = pipeline.skills_budget(req, scope).applied`.
+
+## S2d — item 2: /route and /route/simulate wire shapes for skills
+
+Additive only: no existing field renamed or retyped. Code: `api/routes_route.py`
+(`_split` divides `RouteResult.tools` on `RoutedTool.kind`; `_skill_tokens` reads
+`SkillRecord.body_tokens_est` for the routed skills in ONE query, because neither
+`RoutedTool` nor the route cache carries it). Tests: `tests/test_route_skills_api.py`.
+
+**Request** (both endpoints; snake_case and camelCase accepted as before):
+
+```json
+{
+  "query": "fill pdf form",
+  "max_tools": 5, "max_servers": 2, "allowed_servers": ["docs"],
+  "max_skills": 1,
+  "kinds": ["tool", "skill"]
+}
+```
+`max_skills` (alias `maxSkills`): optional int 1..1000; may only LOWER the
+principal/global cap. `kinds`: optional, 1..2 items, each `"tool"|"skill"`.
+`kinds` only narrows: `["tool"]` -> `skills: []`; `["skill"]` -> `tools: []`.
+`[]`, `["prompt"]`, `["tool","bogus"]` -> 422 (curated body, input not echoed).
+
+**POST /api/v1/route response** (SPEC §9 snake_case top level; skill entries are
+camelCase `bodyTokensEst` as specified):
+
+```json
+{
+  "request_id": "6f1c…",
+  "tools":  [{"server": "docs", "tool": "fill_pdf_form", "score": 0.91}],
+  "skills": [{"source": "src-pdf-form-filler", "skill": "pdf-form-filler",
+              "score": 0.88, "bodyTokensEst": 100}],
+  "fallback_used": false, "latency_ms": 12.345, "no_match": false,
+  "max_tools_applied": 5, "max_servers_applied": null,
+  "max_skills_applied": 1,
+  "cached": false
+}
+```
+- `tools` is MCP tools ONLY (unchanged shape `{server, tool, score}`); skills never appear in it.
+- `skills[].source` = skill source name; `skill` = skill name; order = rank order.
+- `max_skills_applied` = `RoutePipeline.skills_budget(req, scope).applied` =
+  min(request, principal.max_skills, settings.max_exposed_skills); typed nullable
+  for parity with `max_servers_applied`, but always an int today (the global cap
+  `MCPR_MAX_EXPOSED_SKILLS` is an int, default 3; principal default 3).
+- `bodyTokensEst` = `SkillRecord.body_tokens_est` (chars/4 estimate set at ingest; 0 if unset).
+
+**POST /api/v1/route/simulate response** (camelCase throughout):
+`"…"` marks an elided value; `stages` shows only the new `maxSkills` stage
+(retrieval/score/policy/maxServers/maxTools stages unchanged and omitted).
+
+```json
+{
+  "requestId": "…", "agentId": "sk", "simulated": true,
+  "tools":  [{"toolId": "…", "server": "docs", "tool": "fill_pdf_form", "score": 0.91}],
+  "skills": [{"skillId": "…", "source": "src-pdf-form-filler", "skill": "pdf-form-filler",
+              "score": 0.88, "bodyTokensEst": 100}],
+  "noMatch": false, "fallbackUsed": false, "latencyMs": 15.2,
+  "modelVersion": "simulated/…",
+  "maxToolsApplied": 5, "maxServersApplied": null, "maxSkillsApplied": 1,
+  "diagnostics": {
+    "candidatesConsidered": [
+      {"toolId": "…", "server": "docs", "tool": "fill_pdf_form", "domain": null,
+       "operation": "read", "retrievalScore": 0.5, "matchedOn": ["keyword:pdf"], "kind": "tool"},
+      {"toolId": "<skill id>", "server": "src-pdf-form-filler", "tool": "pdf-form-filler",
+       "domain": null, "operation": "read", "retrievalScore": 0.4, "matchedOn": ["vector"],
+       "kind": "skill"}
+    ],
+    "stages": [
+      {"stage": "maxSkills", "before": 2, "after": 1,
+       "pruned": [{"toolId": "<skill id>", "server": "src-pdf-form-helper",
+                   "tool": "pdf-form-helper", "kind": "skill"}], "detail": {"…": "see item 1"}}
+    ],
+    "policyFiltered": [{"toolId": "…", "server": "slack", "tool": "search_messages",
+                        "kind": "tool", "operation": "read", "reason": "no matching policy rule"}],
+    "budgetClamps": [
+      {"budget": "maxTools",   "requested": 5,  "principal": 10, "globalCap": 20, "applied": 5,  "clampedBy": null},
+      {"budget": "maxServers", "requested": null, "principal": null, "globalCap": null, "applied": null, "clampedBy": null},
+      {"budget": "maxSkills",  "requested": 1,  "principal": 3,  "globalCap": 3,  "applied": 1,  "clampedBy": null}
+    ]
+  }
+}
+```
+- `kind` ("tool"|"skill") added to every `candidatesConsidered`, `stages[].pruned`
+  and `policyFiltered` entry. For a skill, `toolId` = skill id, `server` = source
+  name, `tool` = skill name (same mapping as `ToolCandidate`).
+- `budgetClamps` gains the `maxSkills` entry (same shape as the others), taken from
+  `RouteTrace.skill_budget`, falling back to `pipeline.skills_budget(...)` when the
+  pipeline returned before its budget stage. Stage `detail` contents are as in item 1.
+- Simulate `tools` entries keep exactly `{toolId, server, tool, score}` (no `kind`).
+- Gateway `apply_route` consumer is untouched (S3 owns it; it still receives the mixed list).

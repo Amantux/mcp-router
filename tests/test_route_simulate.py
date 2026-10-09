@@ -87,12 +87,14 @@ def test_simulate_shape_and_diagnostics(env: dict[str, Any]) -> None:
         "agentId",
         "simulated",
         "tools",
+        "skills",
         "noMatch",
         "fallbackUsed",
         "latencyMs",
         "modelVersion",
         "maxToolsApplied",
         "maxServersApplied",
+        "maxSkillsApplied",
         "diagnostics",
     }
     assert body["simulated"] is True and body["agentId"] == "ro"
@@ -113,7 +115,9 @@ def test_simulate_shape_and_diagnostics(env: dict[str, Any]) -> None:
         "operation",
         "retrievalScore",
         "matchedOn",
+        "kind",
     }
+    assert all(p["kind"] == "tool" for p in diag["policyFiltered"])  # S2d: kind on entries
     reasons = {(p["server"], p["tool"]): p["reason"] for p in diag["policyFiltered"]}
     assert reasons[("github", "create_issue")] == "operation 'write' exceeds policy ceiling"
     assert reasons[("slack", "search_messages")] == "no matching policy rule"
@@ -122,7 +126,7 @@ def test_simulate_shape_and_diagnostics(env: dict[str, Any]) -> None:
     for st in diag["stages"]:
         assert set(st) == {"stage", "before", "after", "pruned", "detail"}
     clamps = {c["budget"]: c for c in diag["budgetClamps"]}
-    assert set(clamps) == {"maxTools", "maxServers"}
+    assert set(clamps) == {"maxTools", "maxServers", "maxSkills"}
     assert set(clamps["maxTools"]) == {
         "budget",
         "requested",
