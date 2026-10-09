@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
@@ -69,4 +69,42 @@ describe("PolicyPage", () => {
     await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toEqual({ agentId: "triage-bot", maxTools: 8, maxServers: 2, maxSkills: 3 }));
     expect(await screen.findByRole("alertdialog")).toBeTruthy(); // the one-time key reveal
   });
+
+  it("first run: empty principals explain deny-by-default; Add rule refuses without an agent", async () => {
+    const user = userEvent.setup();
+    const { calls } = mockFetch({
+      "GET /api/v1/principals": () => ({ json: [] }),
+      "GET /api/v1/policy-rules": () => ({ json: [] }),
+      "GET /api/v1/servers": () => ({ json: [] }),
+      "GET /api/v1/skill-sources": () => ({ json: [] }),
+    });
+    renderWithProviders(<PolicyPage />, { route: "/policy" });
+    expect(await screen.findByText("No agent principals yet")).toBeTruthy();
+    expect(screen.getByText(/No allow rules — every agent is currently denied all tools/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Add rule" }));
+    expect(await screen.findByText("Choose the agent this rule allows.")).toBeTruthy();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("reveals the new key once, copies it, and forgets it on close", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    routes({ "POST /api/v1/principals": (b) => ({ json: { ...PRINCIPAL, ...(b as object), id: "p2", api_key: "key-once" } }) });
+    renderWithProviders(<PolicyPage />, { route: "/policy" });
+    await screen.findByRole("table", { name: "Principals" });
+    await user.click(screen.getAllByRole("button", { name: "Create principal" })[0]);
+    const dlg = await screen.findByRole("dialog");
+    await user.type(within(dlg).getByRole("textbox", { name: /Agent id/ }), "triage-bot{Enter}");
+    const reveal = await screen.findByRole("alertdialog");
+    expect(within(reveal).getByText("API key for “triage-bot”")).toBeTruthy();
+    expect((within(reveal).getByRole("textbox", { name: "API key" }) as HTMLInputElement).value).toBe("key-once");
+    await user.click(within(reveal).getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith("key-once");
+    expect(await within(reveal).findByRole("button", { name: "Copied" })).toBeTruthy();
+    await user.click(within(reveal).getByRole("button", { name: "I've stored the key" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByDisplayValue("key-once")).toBeNull();
+  });
 });
+

@@ -32,11 +32,14 @@ export function useLoader<T>(what: string, fn: (signal: AbortSignal) => Promise<
     fnRef
       .current(ctrl.signal)
       .then((d) => {
+        // A superseded call can still settle (abort only cancels a fetch still in
+        // flight, and loaders may do non-fetch work): never apply its result.
+        if (ctrl.signal.aborted) return;
         setData(d);
         setFailed(false);
       })
       .catch((e: unknown) => {
-        if (isAbort(e)) return;
+        if (isAbort(e) || ctrl.signal.aborted) return;
         setFailed(true);
         notify.error(what, e);
       })
