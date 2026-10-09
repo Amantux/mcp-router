@@ -16,6 +16,8 @@ dependencies = [
   "prometheus-client==0.24.1",
   "structlog==25.5.0",
   "jsonschema==4.26.0",
+  # SKILL.md frontmatter (wave-4 skills); only yaml.safe_load is used.
+  "pyyaml==6.0.3",
   # Imported directly by mcpclient for transport-error mapping (transitive via
   # mcp); declared so a resolver change cannot silently drop it.
   "httpx2==2.13.1",
@@ -29,6 +31,7 @@ dev = [
   "mypy==2.3.0",
   "types-requests",
   "types-jsonschema==4.26.0.20260408",
+  "types-PyYAML==6.0.12.20260906",
 ]
 # Inference extra: heavy, optional — the app must run (deterministic fallback)
 # without it. CPU-only torch on this dev box; CUDA wheels on the target laptop.
