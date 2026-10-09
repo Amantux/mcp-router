@@ -15,8 +15,14 @@ from sqlalchemy import text
 from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.settings import Settings
 
-# Shared fixture modules (tests/support/). sec_db lives in support.execution.
-pytest_plugins = ["tests.support.execution"]
+# Shared fixture modules (tests/support/). sec_db lives in support.execution;
+# db/settings/route_hits are W0-3 stubs (E5/E1/E2 fill them).
+pytest_plugins = [
+    "tests.support.execution",
+    "tests.support.db",
+    "tests.support.settings",
+    "tests.support.route_hits",
+]
 
 TEST_DB_URL = os.environ.get(
     "MCPR_DATABASE_URL",

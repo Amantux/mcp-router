@@ -31,10 +31,12 @@ import anyio.to_thread
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
+from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
-from mcprouter.api import routes_dedup, routes_skill_sources, routes_skills, routes_tools
+from mcprouter.api import hardening, routes_dedup, routes_skill_sources, routes_skills, routes_tools
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
+from mcprouter.api.errors import install_error_handlers
 from mcprouter.api.routes_analytics import install_analytics
 from mcprouter.api.routes_decision import router as decision_router
 from mcprouter.api.routes_execute import router as execute_router
@@ -60,12 +62,15 @@ from mcprouter.lifecycle import (
     run_due_skill_syncs,
     run_skill_post_sync,
 )
+from mcprouter.limits import make_limiters
+from mcprouter.logging import configure_logging
 from mcprouter.policy.scope import policy_scope_resolver
 from mcprouter.policy.skill_bridge import EngineSkillPolicy
 from mcprouter.registry.schema import init_registry
 from mcprouter.routing.pipeline import RoutePipeline
 from mcprouter.routing.retriever import HybridRetriever, ensure_skill_keyword_index
 from mcprouter.settings import Settings
+from mcprouter.singleton import claim_loop_owner
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +93,7 @@ def create_app(
     defaults to os.environ. Tests pass an explicit mapping (pure)."""
     settings = settings or Settings.from_env()
     env = os.environ if env is None else env
+    configure_logging(settings)
     _quiet_client_loggers()
 
     inference = InferenceEngine(
@@ -103,7 +109,9 @@ def create_app(
         loop: SyncLoop | None = None
         rollups: RollupLoop | None = None
         try:
-            if settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
+            # Only the loop owner runs background loops (E6; always True for now).
+            owner = claim_loop_owner(_app.state.engine)
+            if owner and settings.sync_enabled:  # MCPR_SYNC_ENABLED (integration gap 4)
                 attempts: dict[str, datetime] = {}
 
                 async def _skill_tick() -> object:
@@ -119,7 +127,7 @@ def create_app(
                 loop = SyncLoop(_app.state.discovery, skill_tick=_skill_tick)
                 await loop.start()
                 _app.state.sync_loop = loop
-            if settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
+            if owner and settings.analytics_rollup_enabled:  # MCPR_ANALYTICS_ROLLUP_ENABLED
                 rollups = RollupLoop(_app.state.session_factory)
                 await rollups.start()
                 _app.state.rollup_loop = rollups
@@ -132,7 +140,8 @@ def create_app(
                 await loop.stop()
             await anyio.to_thread.run_sync(inference.unload)
 
-    app = FastAPI(title="MCP Router", version="0.5.0", docs_url="/docs", lifespan=lifespan)
+    app = FastAPI(title="MCP Router", version=__version__, docs_url="/docs", lifespan=lifespan)
+    install_error_handlers(app)  # app-wide handlers (E2); /route 422 stays in routes_route
     engine = make_engine(settings)
     init_db(engine)  # Base + approval_requests + eval_results (Alembic deferred)
     init_registry(engine)  # FTS + dedup-pair indexes (idempotent)
@@ -141,6 +150,7 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory
+    app.state.limiters = make_limiters(settings)  # E6 fills the registry
 
     # Auth: dev mode only when agent keys, admin token AND principals are all
     # absent — deps_auth logs the per-request `auth.dev_mode` warning.
@@ -237,4 +247,6 @@ def create_app(
     mount_ui(app, settings.ui_dist)
     # Outermost: refuse oversized bodies before routing, auth or parsing.
     app.add_middleware(BodySizeLimitMiddleware)
+    # LAST = outermost middleware slot, reserved for HostGuard et al. (E1, D2).
+    hardening.install(app, settings)
     return app

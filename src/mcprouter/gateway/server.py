@@ -71,6 +71,7 @@ from starlette.datastructures import Headers
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from mcprouter import __version__
 from mcprouter.analytics import feedback as _fb
 from mcprouter.api.deps_auth import AuthenticationError, SecurityConfig, hash_key, resolve_principal
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
@@ -361,7 +362,7 @@ class GatewayServer:
         self._lock = threading.Lock()
         self.server = _RouterMCPServer(
             "mcp-router",
-            version="0.5.0",
+            version=__version__,
             instructions=(
                 "Tools are exposed per agent and change as you work. Call "
                 f"{META_TOOL} with a task description to get relevant tools."

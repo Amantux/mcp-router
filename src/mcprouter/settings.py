@@ -74,6 +74,16 @@ class Settings:
     # the /mcp gateway accepts beyond the localhost set (MCPR_ALLOWED_HOSTS).
     ui_dist: str = "./ui/dist"
     allowed_hosts: tuple[str, ...] = ()
+    # wave-6 W0-3 seams: plain-parsed stubs, NOT consumed yet (E1 validates and
+    # wires them; E3/E6 consume the limits). Defaults are the documented ones.
+    admin_token: str = field(default="", repr=False)  # MCPR_ADMIN_TOKEN (secret)
+    log_level: str = "INFO"
+    log_format: str = "console"  # console | json
+    allow_open_dev: bool = False
+    mcp_max_sessions: int = 1000
+    mcp_max_sessions_per_agent: int = 32
+    decision_rate_limit_per_min: int = 120
+    dedup_max_pairs: int = 5000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -142,6 +152,19 @@ class Settings:
             ),
             ui_dist=get("MCPR_UI_DIST", d.ui_dist),
             allowed_hosts=_host_list(get("MCPR_ALLOWED_HOSTS", "")),
+            # wave-6 W0-3 stubs (plain parse; E1 adds validation and _FILE)
+            admin_token=get("MCPR_ADMIN_TOKEN", d.admin_token),
+            log_level=get("MCPR_LOG_LEVEL", d.log_level),
+            log_format=get("MCPR_LOG_FORMAT", d.log_format),
+            allow_open_dev=_bool(get("MCPR_ALLOW_OPEN_DEV", "false"), "MCPR_ALLOW_OPEN_DEV"),
+            mcp_max_sessions=int(get("MCPR_MCP_MAX_SESSIONS", str(d.mcp_max_sessions))),
+            mcp_max_sessions_per_agent=int(
+                get("MCPR_MCP_MAX_SESSIONS_PER_AGENT", str(d.mcp_max_sessions_per_agent))
+            ),
+            decision_rate_limit_per_min=int(
+                get("MCPR_DECISION_RATE_LIMIT_PER_MIN", str(d.decision_rate_limit_per_min))
+            ),
+            dedup_max_pairs=int(get("MCPR_DEDUP_MAX_PAIRS", str(d.dedup_max_pairs))),
         )
 
 
