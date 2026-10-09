@@ -28,22 +28,22 @@ from __future__ import annotations
 
 # ---- façade (P-607): the auth core moved to mcprouter/auth/; every name this
 # module used to define or import is re-exported so old imports keep working.
-import hashlib  # noqa: F401
-import hmac  # noqa: F401
+import hashlib  # noqa: F401 -- façade re-export (P-607)
+import hmac  # noqa: F401 -- façade re-export (P-607)
 import logging
-import re  # noqa: F401
-import secrets  # noqa: F401
-import threading  # noqa: F401
+import re  # noqa: F401 -- façade re-export (P-607)
+import secrets  # noqa: F401 -- façade re-export (P-607)
+import threading  # noqa: F401 -- façade re-export (P-607)
 from collections.abc import Mapping
-from dataclasses import dataclass  # noqa: F401
+from dataclasses import dataclass  # noqa: F401 -- façade re-export (P-607)
 from typing import Any
 
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select  # noqa: F401
+from sqlalchemy import func, select  # noqa: F401 -- façade re-export (P-607)
 from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.auth import config as _config
-from mcprouter.auth.config import (  # noqa: F401
+from mcprouter.auth.config import (  # noqa: F401 -- façade re-export (P-607)
     ADMIN_TOKEN_ENV,
     DEV_AGENT_ID,
     SecurityConfig,
@@ -53,7 +53,7 @@ from mcprouter.auth.config import dev_mode_active as _dev_mode_active
 from mcprouter.auth.config import dev_warning_lock as _dev_lock
 from mcprouter.auth.config import reset_dev_warning as _reset_dev_warning_for_tests
 from mcprouter.auth.config import warn_dev_once as _warn_dev_once
-from mcprouter.auth.keys import (  # noqa: F401
+from mcprouter.auth.keys import (  # noqa: F401 -- façade re-export (P-607)
     AGENT_ID_RE as _AGENT_ID_RE,
 )
 from mcprouter.auth.keys import (
@@ -68,14 +68,14 @@ from mcprouter.auth.keys import (
     parse_agent_keys,
     parse_bearer,
 )
-from mcprouter.auth.principals import (  # noqa: F401
+from mcprouter.auth.principals import (  # noqa: F401 -- façade re-export (P-607)
     bootstrap_principals,
     check_admin,
     is_admin_bearer,
     resolve_principal,
 )
 from mcprouter.auth.principals import match_principal as _match_principal
-from mcprouter.models import AgentPrincipal  # noqa: F401
+from mcprouter.models import AgentPrincipal  # noqa: F401 -- façade re-export (P-607)
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)

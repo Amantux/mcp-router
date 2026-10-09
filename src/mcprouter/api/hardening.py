@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from mcprouter.api.deps_auth import hash_key
+from mcprouter.auth import hash_key
 from mcprouter.net_policy import LOOPBACK_HOSTS
 from mcprouter.settings import Settings
 

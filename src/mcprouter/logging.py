@@ -44,6 +44,8 @@ class _StderrHandler(logging.StreamHandler):  # type: ignore[type-arg]
 
     @stream.setter
     def stream(self, _value: TextIO) -> None:
+        # Deliberate no-op: StreamHandler.__init__ assigns self.stream; the
+        # getter above must keep resolving sys.stderr live instead.
         pass
 
 

@@ -54,7 +54,7 @@ from mcprouter.inference.errors import InferenceError, ModelUnavailableError
 from mcprouter.inference.hash_backend import HashEmbeddingBackend
 from mcprouter.inference.validation import ValidatedDecisionModel
 from mcprouter.interfaces import ChoiceResult, DecisionModel, EmbeddingBackend, ScoreResult
-from mcprouter.settings import Settings
+from mcprouter.settings import AoaiSettings, Settings
 
 log = logging.getLogger(__name__)
 
@@ -214,9 +214,7 @@ def _build_remote_decider(s: Settings) -> DecisionModel:
         ) from None
 
 
-def _aoai_settings() -> Any:
-    from mcprouter.settings import AoaiSettings
-
+def _aoai_settings() -> AoaiSettings:
     try:
         return AoaiSettings.from_env()
     except ValueError:

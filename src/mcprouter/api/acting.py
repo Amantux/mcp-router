@@ -20,7 +20,8 @@ import anyio.to_thread
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 
-from mcprouter.api.deps_auth import get_principal, is_admin_bearer, require_admin, security_of
+from mcprouter.api.deps_auth import get_principal, require_admin, security_of
+from mcprouter.auth import is_admin_bearer
 from mcprouter.execution.manager import INITIATED_BY_ADMIN
 from mcprouter.models import AgentPrincipal
 
