@@ -2,8 +2,10 @@
 
 > Project override: this is NOT the global CLAUDE.md's business web app.
 > Local-first MCP discovery + intelligent tool-routing platform targeting a
-> single-GPU laptop (RTX 4060 8GB). Full spec: docs/SPEC.md; binding scope
-> decisions: docs/scoping.md.
+> single-GPU laptop (RTX 4060 8GB). Human contributor guide (setup, gates,
+> test database, docs regeneration): CONTRIBUTING.md. Architecture:
+> docs/architecture.md. Design baseline: docs/SPEC.md and docs/scoping.md
+> (both amended; shipped behaviour wins where they differ).
 
 ## Environment
 - Python 3.12 venv at `.venv` (uv-managed). ALWAYS `.venv/bin/python`; never
@@ -35,12 +37,13 @@
   never widen access. Deny by default.
 
 ## Gates (all of them, before "done")
-- `.venv/bin/ruff check .` + `ruff format --check .` (pinned 0.15.22, pinned select)
-- `.venv/bin/mypy` (strict; new code adds zero errors)
-- `.venv/bin/pytest tests/ -q` green; integration tests against the compose db
+- The gate table in CONTRIBUTING.md §3 (`make check`), with `MCPR_REQUIRE_DB=1`
+  so a missing database fails instead of skipping.
 - Security guards mutation-checked: break the guard, named test fails, restore
 - Curated errors only at API boundaries; secret redaction before any log/model
   input; CR/LF-scrub attacker-controlled log fields
+- A new or changed `MCPR_*` setting: regenerate docs/reference/configuration.md
+  (`make docs-gen`) in the same commit.
 
 ## Conventions
 - camelCase on the wire, snake_case inside. UUID string ids. UTC aware datetimes.
