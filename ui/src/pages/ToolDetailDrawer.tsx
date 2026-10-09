@@ -22,7 +22,7 @@ import {
 } from "@fluentui/react-components";
 import { DismissRegular, PlayRegular } from "@fluentui/react-icons";
 import { Link } from "react-router";
-import { getTool, getToolAnalytics, setToolEnabled } from "../api/client";
+import { getTool, getToolAnalytics, setToolEnabled, updateClassification } from "../api/client";
 import { useNotify } from "../components/Notifications";
 import type { AnalyticsWindow, MCPTool, ToolVersion } from "../api/types";
 import { fmtPct, FunnelBars, PositionChart, StatCard, WindowPicker } from "../components/analytics";
@@ -240,7 +240,8 @@ function ToolDetailContent({ toolId, onClose, onChanged }: { toolId: string; onC
             </section>
             <section className={s.section}>
               <Subtitle2 as="h2">Classification</Subtitle2>
-              <ClassificationEditor
+              <ClassificationEditor<MCPTool>
+                save={updateClassification}
                 key={`${t.id}:${t.version}:${t.domain}:${t.operation}:${(t.tags ?? []).join()}:${(t.requiredScopes ?? []).join()}`}
                 tool={t}
                 onSaved={(u) => {

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { ClassificationEditor } from "./ClassificationEditor";
 import type { MCPTool, Skill } from "../api/types";
-import { updateSkillClassification } from "../api/client";
+import { updateClassification, updateSkillClassification } from "../api/client";
 
 const tool: MCPTool = {
   id: "t1",
@@ -25,7 +25,7 @@ const tool: MCPTool = {
 describe("ClassificationEditor", () => {
   it("is not saveable until something changes", () => {
     mockFetch({});
-    renderWithProviders(<ClassificationEditor tool={tool} onSaved={() => {}} />);
+    renderWithProviders(<ClassificationEditor tool={tool} save={updateClassification} onSaved={() => {}} />);
     expect((screen.getByRole("button", { name: "Save classification" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/AI-generated — not yet reviewed/)).toBeTruthy();
   });
@@ -41,7 +41,7 @@ describe("ClassificationEditor", () => {
       },
     });
     const onSaved = vi.fn();
-    renderWithProviders(<ClassificationEditor tool={tool} onSaved={onSaved} />);
+    renderWithProviders(<ClassificationEditor tool={tool} save={updateClassification} onSaved={onSaved} />);
 
     await user.selectOptions(screen.getByRole("combobox", { name: /Operation/ }), "execute");
     const tags = screen.getByRole("textbox", { name: /Tags/ });
@@ -64,7 +64,7 @@ describe("ClassificationEditor", () => {
     const user = userEvent.setup();
     const { calls } = mockFetch({ "PATCH /api/v1/tools/t1/classification": () => ({ status: 422, text: '{"detail":"raw validator dump"}' }) });
     const onSaved = vi.fn();
-    renderWithProviders(<ClassificationEditor tool={tool} onSaved={onSaved} />);
+    renderWithProviders(<ClassificationEditor tool={tool} save={updateClassification} onSaved={onSaved} />);
     await user.selectOptions(screen.getByRole("combobox", { name: /Domain/ }), "(unclassified)");
     await user.click(screen.getByRole("button", { name: "Save classification" }));
     await waitFor(() => expect(screen.getByText("Save classification for “run_query” failed (HTTP 422)")).toBeTruthy());

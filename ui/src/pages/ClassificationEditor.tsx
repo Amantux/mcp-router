@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Button, Caption1, Field, Input, makeStyles, Select, tokens } from "@fluentui/react-components";
-import { updateClassification } from "../api/client";
-import { DOMAINS, OPERATIONS, type ClassificationUpdate, type MCPTool, type Operation } from "../api/types";
+import { DOMAINS, OPERATIONS, type ClassificationUpdate, type Operation } from "../api/types";
 import { useNotify } from "../components/Notifications";
 
 const useStyles = makeStyles({
@@ -28,15 +27,19 @@ export interface Classifiable {
   classificationReviewed?: boolean;
 }
 
-/** `save` defaults to the tools PATCH; skills pass their own endpoint. */
-export function ClassificationEditor<T extends Classifiable = MCPTool>({
+/**
+ * `save` is the PATCH for this kind (updateClassification for tools,
+ * updateSkillClassification for skills). It is required: a default typed as
+ * returning T silently sent a skill to the tools endpoint (HS-U-058).
+ */
+export function ClassificationEditor<T extends Classifiable>({
   tool,
   onSaved,
-  save: saveFn = updateClassification as unknown as (id: string, body: ClassificationUpdate) => Promise<T>,
+  save: saveFn,
 }: {
   tool: T;
   onSaved: (t: T) => void;
-  save?: (id: string, body: ClassificationUpdate) => Promise<T>;
+  save: (id: string, body: ClassificationUpdate) => Promise<T>;
 }) {
   const s = useStyles();
   const notify = useNotify();
