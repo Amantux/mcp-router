@@ -82,7 +82,7 @@ def _zero_principals() -> None:
     eng.dispose()
 
 
-def test_dev_mode_first_principal_without_admin_token_is_409() -> None:
+def test_dev_mode_first_principal_without_admin_token_is_409(db: object) -> None:
     """D11 / P-205: fresh DB, no token -> 409 with the curated message, nothing
     created, and the admin API stays open (no lock-out)."""
     from mcprouter.api.routes_policy import FIRST_PRINCIPAL_NEEDS_ADMIN_TOKEN
@@ -101,7 +101,7 @@ def test_dev_mode_first_principal_without_admin_token_is_409() -> None:
         assert listed.status_code == 200 and listed.json() == []  # still open
 
 
-def test_first_principal_with_admin_token_is_201_and_admin_still_works() -> None:
+def test_first_principal_with_admin_token_is_201_and_admin_still_works(db: object) -> None:
     _clear_flag()
     _zero_principals()
     h = {"Authorization": f"Bearer {ADMIN}"}

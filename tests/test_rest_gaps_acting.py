@@ -95,6 +95,8 @@ def test_admin_naming_enabled_agent_passes_the_gate(
     skill / bundle of nothing) is not an identity error."""
     r = _call(client, method, path, ADMIN, "agent-a")
     assert r.status_code not in (400, 401, 403), r.text
+    if r.status_code == 404:  # a route's own 404 (unknown skill), never the identity one
+        assert r.json()["detail"] != acting.UNKNOWN_AGENT
 
 
 def test_admin_actor_names_the_audit_actor(client: TestClient) -> None:

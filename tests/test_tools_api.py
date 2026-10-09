@@ -248,6 +248,16 @@ def test_dedup_accept_empty_body_keeps_scanner_pick(
     assert _stored_preference(db, str(sug["id"])) == ids["a"]
 
 
+def test_dedup_accept_without_body_keeps_scanner_pick(
+    client: TestClient, ids: dict[str, str], db: sessionmaker[Session]
+) -> None:
+    """Pre-D12 clients send no body at all."""
+    sug = _open_suggestion(client)
+    r = client.post(f"/api/v1/dedup/suggestions/{sug['id']}/accept")
+    assert r.status_code == 200 and r.json()["preferredToolId"] == ids["a"]
+    assert _stored_preference(db, str(sug["id"])) == ids["a"]
+
+
 def test_dedup_run_reports_truncated_field(client: TestClient, ids: dict[str, str]) -> None:
     """P-201/P-603: `truncated` is on the wire (null until the detector reports it)."""
     body = client.post("/api/v1/dedup/suggestions", json={}).json()
