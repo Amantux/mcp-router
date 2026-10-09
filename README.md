@@ -42,6 +42,29 @@ and key. See [Backends](#backends).
   or timeout degrades to deterministic retrieval ranking, flagged
   `fallback_used`.
 
+### Skills (v0.4)
+
+[Agent Skills](https://agentskills.io/specification) are routed like tools,
+through one pipeline and one policy engine:
+
+- **Sources:** register a local directory or an https git repo. Git sources
+  are shallow-cloned with hooks off and size and time caps. Ingest checks each
+  skill against the spec and flags secret-shaped or oversize content without
+  editing it.
+- **Risk class:** each skill is classed `read`, `write`, `execute` or `unknown`.
+  Shipping `scripts/` or exec-like `allowed-tools` makes a skill `execute`, and
+  policy treats `unknown` as `execute`. Human review is respected, but a content
+  change re-opens it.
+- **Routing:** `/route` returns `skills[]` under a separate `maxSkills` budget.
+  Policy rules use `resourceKind: "skill"`.
+- **Exposure:** a skill is exposed only if it was routed to the agent. Clients
+  receive it as MCP prompts and resources, through the meta-tools
+  `router.activate_skill` and `router.read_skill_resource`, or over REST
+  activate or bundle (a zip for `~/.claude/skills`). Every activation is
+  policy-checked and audited, and the funnel tracks it as
+  *surfaced → activated*.
+- Operator guide with flow diagram: [`docs/skills.md`](docs/skills.md).
+
 Target hardware: a single laptop GPU (RTX 4060 Laptop, 8GB) with full CPU
 fallback. Runs entirely offline; no external inference services.
 
@@ -147,6 +170,7 @@ spins up realistic MCP servers with overlapping tools across five domains.
 | Laya 0.4.0 loaded on CPU: choice/score/noul with calibrated probs | <150ms warm routing p95 |
 | 100 servers / 1,000 tools full refresh in 6.1s (target: <60s) | <4GB VRAM claim |
 | Zero unauthorized executions across the adversarial test battery | Laya candidate-count tuning (score top-5 vs top-20) |
+| Skills e2e (`tests/test_e2e_skills.py`): source sync → classify → route → MCP prompt → bundle → analytics; synthetic baseline (fallback): skills top-1 1.0 / top-5 1.0, mixed 0.75, 0 unauthorized skill exposures | |
 | 100+ security guards mutation-checked (break guard → named test fails) | |
 
 The GPU validation runbook is [`docs/hardware-validation.md`](docs/hardware-validation.md).
@@ -182,11 +206,13 @@ src/mcprouter/
   gateway/     per-agent MCP endpoint with dynamic tool exposure
   analytics/   funnel · attribution · context economy · profiles · rollups · metrics
   eval/        routing-quality framework + synthetic dataset (77 cases)
+  skills/      skill sources (directory · git) · ingest/validate · safe serving · bundle export
 ui/            React + Vite + Fluent UI v9 dashboard: catalog, playground,
                approvals, agent lens, analytics funnel
 testbed/       synthetic MCP server fleet with ground-truth labels
+  skills/      deterministic Agent Skills generator (near-duplicates, invalid cases, git)
 bench/         latency/VRAM benchmark harness + committed CPU baselines
-docs/          spec · scoping · security model · hardware validation runbook
+docs/          spec · scoping · security model · skills guide · hardware validation runbook
 ```
 
 ## License

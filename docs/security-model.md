@@ -239,3 +239,28 @@ agents. Posture:
   skills, ≤50 MiB total, per-file cap = resource cap; unreadable/escaping files
   are skipped and reported, never followed. SKILL.md frontmatter is rebuilt with
   JSON-quoted scalars so author text cannot inject YAML keys.
+- **Final wave-4 decisions** (as merged on `integrate/wave4`):
+  - *Unrouted access is audited as denied.* A request for an unknown skill, or
+    one outside the agent's routed set (including another agent's skill), writes
+    an `ExecutionRecord` with outcome `denied` and detail `not routed`. It
+    returns the same 404 "Unknown skill or resource." as a nonexistent skill,
+    so a caller cannot probe the catalog. The routed set comes from the server,
+    from the agent's latest `RoutingDecisionRecord`. It is never taken from the
+    client.
+  - *Bundle outcome.* A bundle ships bodies, so it counts as an activation:
+    each routed skill is policy-checked, denied ones are audited and left out,
+    and the rest are audited `ok`. A failed bundle (`too_many`, `too_large`,
+    `invalid_name`, `duplicate_name`) writes **one** `error` row
+    (`bundle: <code>`), and a rate-limited bundle writes **one** `rate_limited`
+    row. Neither writes a row per skill.
+  - *A disabled principal cannot be impersonated.* An admin acting as an agent
+    must name `agentId` (otherwise 400). An unknown agent gets 404, and a
+    **disabled** agent gets 403. An agent key that names a different agent
+    gets 403. Admin calls are audited `initiated_by="admin"`.
+  - *`routeRequestId` ownership.* An agent-supplied `routeRequestId` is used for
+    attribution only when it is one of **that agent's own** routing decisions
+    (`ExecutionManager.owned_route_request_id`). A malformed, unknown or
+    other-agent id is stored as NULL rather than raising an error. For admin
+    calls the id is ignored, because an admin trial is not the agent choosing
+    the skill.
+  - Operator guide: [`skills.md`](skills.md).
