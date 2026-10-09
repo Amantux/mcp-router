@@ -126,13 +126,23 @@ async def _acting_agent(request: Request, named: str | None) -> tuple[str, str |
     return acting.agent_id, acting.initiated_by
 
 
-async def _call(request: Request, fn: Any, *args: Any, **kw: Any) -> Any:
+async def _call(
+    request: Request,
+    fn: Any,
+    agent_id: str,
+    *args: Any,
+    initiated_by: str | None,
+    **kw: Any,
+) -> Any:
+    """Run SkillExposure `fn(agent_id, *args, routed_ids=..., initiated_by=...)`
+    off the event loop, with the agent's routed set derived server-side."""
     _, factory = security_of(request)
-    agent_id, initiated_by = args[0], kw.pop("initiated_by")
     routed = await anyio.to_thread.run_sync(routed_skill_ids, factory, agent_id)
     try:
         return await anyio.to_thread.run_sync(
-            functools.partial(fn, *args, routed_ids=routed, initiated_by=initiated_by, **kw)
+            functools.partial(
+                fn, agent_id, *args, routed_ids=routed, initiated_by=initiated_by, **kw
+            )
         )
     except SkillAccessError as exc:
         raise _http_error(exc) from None
