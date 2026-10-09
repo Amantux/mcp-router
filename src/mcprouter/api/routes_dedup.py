@@ -23,6 +23,7 @@ from mcprouter.registry.api_deps import curated_errors, get_session, require_adm
 from mcprouter.registry.audit import audit
 from mcprouter.registry.catalog import MAX_LIMIT
 from mcprouter.registry.wire import (
+    AcceptIn,
     DedupRunIn,
     DedupRunOut,
     DismissIn,
@@ -67,13 +68,18 @@ def run_suggestions(
         created=result.created,
         refreshed=result.refreshed,
         skipped_decided=result.skipped_decided,
+        truncated=getattr(result, "truncated", None),  # E6 P-603 adds the field
     )
 
 
 @router.post("/suggestions/{suggestion_id}/accept", response_model=SuggestionOut)
-def accept(suggestion_id: str, session: SessionDep, admin: AdminDep) -> SuggestionOut:
+def accept(
+    suggestion_id: str, session: SessionDep, admin: AdminDep, body: AcceptIn | None = None
+) -> SuggestionOut:
+    """Empty body keeps the scanner's preferred tool (D12, backward compatible)."""
+    preferred = body.preferred_tool_id if body is not None else None
     with curated_errors():
-        sug = accept_suggestion(session, suggestion_id, actor=admin)
+        sug = accept_suggestion(session, suggestion_id, actor=admin, preferred_tool_id=preferred)
         session.commit()
         return to_out(session, sug)
 
