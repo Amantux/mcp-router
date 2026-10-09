@@ -58,3 +58,14 @@ def test_changed_content_unreviewed_gets_no_stale_flag(db) -> None:  # noqa: ANN
     assert _apply(db, _seed(db, "read", reviewed=False), "write", True) == (
         True, "write", False, [],
     )  # fmt: skip
+
+
+def test_json_null_flags_become_stale_array(db) -> None:  # noqa: ANN001
+    """A JSON 'null' (not SQL NULL) in ingest_flags must not yield [null, ...]."""
+    from sqlalchemy import text
+
+    sid = _seed(db, "read")
+    with db() as s:
+        s.execute(text("UPDATE skills SET ingest_flags = 'null'::json WHERE id = :i"), {"i": sid})
+        s.commit()
+    assert _apply(db, sid, "execute", True)[3] == ["review_stale"]

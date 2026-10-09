@@ -338,8 +338,13 @@ def apply_skill_classification(
 
 
 def _coalesce_jsonb(expr: Any) -> Any:
-    """COALESCE(expr, '[]'::jsonb) — a NULL ingest_flags reads as empty."""
-    from sqlalchemy import cast, func, literal
+    """Non-array ingest_flags (SQL NULL or JSON 'null') read as '[]'::jsonb.
+
+    The JSON column stores Python None as JSON 'null', which COALESCE does not
+    catch; 'null' || '["x"]' would yield [null, "x"]. jsonb_typeof guards both.
+    """
+    from sqlalchemy import case, cast, func, literal
     from sqlalchemy.dialects.postgresql import JSONB
 
-    return func.coalesce(expr, cast(literal("[]"), JSONB))
+    empty = cast(literal("[]"), JSONB)
+    return case((func.jsonb_typeof(expr) == "array", expr), else_=empty)
