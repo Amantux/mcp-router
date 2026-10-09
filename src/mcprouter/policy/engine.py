@@ -26,7 +26,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
-from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
+from mcprouter.models import (
+    AgentPrincipal,
+    MCPServerRecord,
+    MCPToolRecord,
+    PolicyRule,
+    SkillRecord,
+    SkillSourceRecord,
+)
 
 OPERATION_RANK: dict[str, int] = {"read": 0, "write": 1, "execute": 2}
 MOST_RESTRICTED = "execute"
@@ -47,7 +54,18 @@ def effective_operation(operation: str | None) -> str:
     return MOST_RESTRICTED
 
 
-def rule_matches(rule: PolicyRule, agent_id: str, server_id: str, tool_name: str) -> bool:
+def rule_kind(rule: PolicyRule) -> str:
+    """A rule's resource kind. NULL (a transient, unflushed rule) is "tool"."""
+    return rule.resource_kind or "tool"
+
+
+def rule_matches(
+    rule: PolicyRule, agent_id: str, server_id: str, tool_name: str, kind: str = "tool"
+) -> bool:
+    """Kind-separated: a tool rule never matches a skill and vice versa. For a
+    skill, `server_id` is the skill SOURCE id and `tool_name` the skill name."""
+    if rule_kind(rule) != kind:
+        return False
     if rule.agent_id != agent_id:
         return False
     if rule.server_id is not None and rule.server_id != server_id:
@@ -66,9 +84,37 @@ def evaluate(
     if tool.server_id != server.id:
         return Decision(False, False, "tool/server mismatch")
 
-    op = effective_operation(tool.operation)
+    return _decide(principal, tool.operation, tool.server_id, tool.name, "tool", rules)
+
+
+def evaluate_skill(
+    principal: AgentPrincipal,
+    source: SkillSourceRecord,
+    skill: SkillRecord,
+    rules: Sequence[PolicyRule],
+) -> Decision:
+    """`evaluate` for an Agent Skill: only `resource_kind="skill"` rules match,
+    keyed on the source id + skill-name glob; the ceiling applies to the
+    skill's risk class (`operation`), with unknown escalated to execute.
+    Score-free by construction, like `evaluate`."""
+    if not principal.enabled:
+        return Decision(False, False, "principal disabled")
+    if skill.source_id != source.id:
+        return Decision(False, False, "skill/source mismatch")
+    return _decide(principal, skill.operation, skill.source_id, skill.name, "skill", rules)
+
+
+def _decide(
+    principal: AgentPrincipal,
+    operation: str | None,
+    container_id: str,
+    name: str,
+    kind: str,
+    rules: Sequence[PolicyRule],
+) -> Decision:
+    op = effective_operation(operation)
     needed = OPERATION_RANK[op]
-    matched = [r for r in rules if rule_matches(r, principal.agent_id, tool.server_id, tool.name)]
+    matched = [r for r in rules if rule_matches(r, principal.agent_id, container_id, name, kind)]
     if not matched:
         return Decision(False, False, "no matching policy rule")
 
