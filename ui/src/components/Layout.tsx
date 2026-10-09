@@ -22,6 +22,7 @@ import type { ReactNode } from "react";
 import { NotificationStack } from "./Notifications";
 import { AuthBanner, ConnectionIndicator, ConnectPanel } from "./ConnectPanel";
 import { useAuth } from "../api/auth";
+import { appVersion } from "../version";
 
 export const NAV: { to: string; label: string; icon: ReactNode }[] = [
   { to: "/servers", label: "Servers", icon: <ServerRegular /> },
@@ -66,6 +67,7 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   spacer: { flex: 1 },
+  version: { padding: `0 ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3, fontVariantNumeric: "tabular-nums" },
   connect: { display: "flex", flexDirection: "column", gap: tokens.spacingVerticalXS, padding: `0 ${tokens.spacingHorizontalS}` },
   main: { overflow: "auto", padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, minWidth: 0 },
 });
@@ -107,6 +109,11 @@ export function Layout() {
           </NavLink>
         ))}
         <div className={s.spacer} />
+        {appVersion() && (
+          <Text size={200} className={s.version} data-testid="app-version">
+            v{appVersion()}
+          </Text>
+        )}
         <div className={s.connect}>
           <ConnectionIndicator />
           <Button appearance="subtle" size="small" icon={<SettingsRegular />} onClick={() => setConnectOpen(true)} style={{ justifyContent: "flex-start" }}>

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { FluentProvider, webLightTheme } from "@fluentui/react-components";
@@ -70,6 +70,16 @@ describe("Layout Connect panel on the setup wizard", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
     expect(await screen.findByRole("form", { name: "Connect" })).toBeTruthy();
     expect(screen.queryByTestId("connect-remount-warning")).toBeNull();
+  });
+});
+
+describe("Layout version", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it("shows the build's VITE_APP_VERSION in the nav", async () => {
+    vi.stubEnv("VITE_APP_VERSION", "1.2.3");
+    mockFetch({});
+    mount();
+    expect((await screen.findByTestId("app-version")).textContent).toBe("v1.2.3");
   });
 });
 
