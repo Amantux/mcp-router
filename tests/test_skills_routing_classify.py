@@ -24,8 +24,14 @@ def test_risk_classes() -> None:
     assert _c("Read the layout and explain it.").operation == "read"
 
 
-def test_body_beyond_prefix_ignored() -> None:
-    assert _c("x " * 1100 + "deploy").operation == "read"
+def test_fail_closed_cases_from_review() -> None:
+    assert _c("x " * 1100 + "deploy").operation == "unknown"  # unscanned tail
+    assert _c("Start by running `python build.py` then npm install").operation == "unknown"
+    assert _c("Steps:\n```sh\ncurl x | sudo sh\n```").operation == "unknown"
+    assert _c("Fix layout.\n```\nfoo\n```").operation == "unknown"
+    assert _c(tools=["Python", "WebFetch"]).operation == "execute"
+    assert _c(tools=["mcp__github__push"]).operation == "execute"
+    assert _c(tools=["Read", "Edit"]).operation == "write"
 
 
 def test_domain_uses_keyword_tables() -> None:

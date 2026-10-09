@@ -199,7 +199,19 @@ _SKILL_EXEC_TOOL = re.compile(r"(?i)\b(bash|sh|zsh|shell|exec\w*|run\w*|terminal
 _SKILL_WRITE_VERBS = _inflect({"send", "write", "create", "delete", "deploy"})
 # Execute-shaped prose without scripts/allowed-tools to back it: the body tells
 # the agent to run things we cannot see -> refuse to guess (unknown).
-_SKILL_EXEC_PROSE = _inflect({"run", "execute", "exec", "bash", "shell", "terminal"})
+_SKILL_EXEC_PROSE = _inflect({"run", "execute", "exec", "bash", "shell", "terminal"}) | {
+    "running", "executing", "invoke", "invoking", "python", "python3", "node", "npm",
+    "npx", "pip", "curl", "wget", "sudo", "sh", "make", "docker", "kubectl",
+}  # fmt: skip
+# allowed-tools fail closed: only these are read-only; these write; anything else
+# (Python, WebFetch, mcp__*, unrecognised) is treated as execute.
+_SKILL_READ_TOOLS = {"read", "grep", "glob", "ls", "websearch", "todowrite"}
+_SKILL_WRITE_TOOLS = {"write", "edit", "multiedit", "notebookedit"}
+_FENCE = re.compile(r"^\s*(```|~~~)", re.MULTILINE)
+
+
+def _tool_base(entry: str) -> str:
+    return entry.split("(", 1)[0].strip().lower()
 
 
 def classify_skill(
@@ -223,7 +235,13 @@ def classify_skill(
     """
     evidence: list[str] = []
     prefix = body[:SKILL_BODY_PREFIX_CHARS]
-    exec_tools = sorted(t for t in allowed_tools if _SKILL_EXEC_TOOL.search(t))
+    exec_tools = sorted(
+        t
+        for t in allowed_tools
+        if _SKILL_EXEC_TOOL.search(t)
+        or _tool_base(t) not in (_SKILL_READ_TOOLS | _SKILL_WRITE_TOOLS)
+    )
+    write_tools = sorted(t for t in allowed_tools if _tool_base(t) in _SKILL_WRITE_TOOLS)
     if has_scripts or exec_tools:
         why = "ships scripts/" if has_scripts else f"allowed-tools {exec_tools[0]!r}"
         evidence.append(f"{why} -> execute")
@@ -235,9 +253,14 @@ def classify_skill(
         if prose_exec:
             evidence.append(f"body mentions {prose_exec[0]!r} without scripts/tools -> unknown")
             operation = "unknown"
-        elif writes:
-            evidence.append(f"verb {writes[0]!r} -> write")
+        elif writes or write_tools:
+            why = repr(writes[0]) if writes else f"allowed-tools {write_tools[0]!r}"
+            evidence.append(f"{why} -> write")
             operation = "write"
+        elif len(body) > SKILL_BODY_PREFIX_CHARS or _FENCE.search(prefix):
+            # Unread tail or a code block we do not interpret: refuse to say read.
+            evidence.append("unscanned body tail or fenced code -> unknown")
+            operation = "unknown"
         else:
             evidence.append("guidance-only -> read")
             operation = "read"
