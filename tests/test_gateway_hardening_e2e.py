@@ -523,3 +523,60 @@ async def test_revocation_hook_closes_streams_without_a_route_change(
         await _set_principal(db, "bob", enabled=False)
         await gw.end_stale_streams("bob")  # what an admin disable should call
         assert bob_sid not in sessions
+
+
+ADMIN_H = {"Authorization": "Bearer admin_" + "z" * 30}  # tests/support/gateway.world
+
+
+@pytest.fixture()
+def live_admin(world: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """``world`` plus the REST policy router, served over real HTTP."""
+    from mcprouter.api.routes_policy import router as policy_router
+
+    world["app"].include_router(policy_router)
+    port, stop = run_app(world["app"])
+    try:
+        yield {**world, "base": f"http://127.0.0.1:{port}", "url": f"http://127.0.0.1:{port}/mcp"}
+    finally:
+        stop()
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "body"),
+    [
+        ("POST", "/rotate-key", None),
+        ("PATCH", "", {"enabled": False}),
+        ("DELETE", "", None),
+    ],
+    ids=["rotate-key", "disable", "delete"],
+)
+async def test_admin_revocation_closes_open_listen_streams(
+    live_admin: dict[str, Any], method: str, suffix: str, body: dict[str, Any] | None
+) -> None:
+    """Integration (E2 x E3): a REST rotate/disable/delete closes the agent's
+    open modern listen stream at once (no re-route needed); bob is untouched."""
+    import httpx
+    from mcp.client.subscriptions import listen
+    from sqlalchemy import select
+
+    from mcprouter.models import AgentPrincipal
+
+    db = live_admin["db"]
+    add_rule(db, "alice")
+    add_rule(db, "bob")
+    with db() as s:
+        pid = s.scalars(select(AgentPrincipal.id).where(AgentPrincipal.agent_id == "alice")).one()
+    async with contextlib.AsyncExitStack() as stack:
+        alice = await stack.enter_async_context(mcp_session(live_admin["url"], "alice", MODERN))
+        bob = await stack.enter_async_context(mcp_session(live_admin["url"], "bob", MODERN))
+        a_sub = await stack.enter_async_context(listen(alice, tools_list_changed=True))
+        await stack.enter_async_context(listen(bob, tools_list_changed=True))
+        async with httpx.AsyncClient(base_url=live_admin["base"]) as http:
+            r = await http.request(
+                method, f"/api/v1/principals/{pid}{suffix}", json=body, headers=ADMIN_H
+            )
+        assert r.status_code in (200, 204), r.text
+        with anyio.fail_after(5):
+            leftovers = [e async for e in a_sub]
+        assert leftovers == []  # closed, never notified
+        await alive(bob, MODERN)  # the other agent keeps its session

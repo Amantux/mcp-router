@@ -266,6 +266,15 @@ def get_principal_by_id(principal_id: str, request: Request) -> PrincipalOut:
         return _p_out(_get_principal_row(s, principal_id))
 
 
+def _end_stale_streams(request: Request, agent_id: str) -> None:
+    """After a committed rotate/disable/delete: close the agent's MCP streams
+    opened with a credential that is no longer current (E3 P-310 hook). Sync
+    routes run on an anyio worker thread, so the threadsafe entry applies."""
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is not None:  # apps built without the MCP gateway (tests)
+        gateway.end_stale_streams_threadsafe(agent_id)
+
+
 @router.patch("/principals/{principal_id}", response_model=PrincipalOut, dependencies=[Admin])
 def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -> PrincipalOut:
     with _session(request) as s:
@@ -280,7 +289,10 @@ def patch_principal(principal_id: str, body: PrincipalPatch, request: Request) -
             p.max_skills = body.max_skills
         s.commit()
         bump_policy()  # route cache (wave 2)
-        return _p_out(p)
+        out = _p_out(p)
+    if body.enabled is False:
+        _end_stale_streams(request, out.agent_id)
+    return out
 
 
 @router.post(
@@ -292,7 +304,9 @@ def rotate_key(principal_id: str, request: Request) -> KeyRotated:
         p = _get_principal_row(s, principal_id)
         p.key_hash = hash_key(key)
         s.commit()
-        return KeyRotated(id=p.id, agent_id=p.agent_id, api_key=key)
+        out = KeyRotated(id=p.id, agent_id=p.agent_id, api_key=key)
+    _end_stale_streams(request, out.agent_id)
+    return out
 
 
 @router.delete("/principals/{principal_id}", status_code=204, dependencies=[Admin])
@@ -302,9 +316,11 @@ def delete_principal(principal_id: str, request: Request) -> Response:
         # Delete the agent's rules too: a later principal re-using this
         # agent_id must not silently inherit old grants.
         s.execute(delete(PolicyRule).where(PolicyRule.agent_id == p.agent_id))
+        agent_id = p.agent_id
         s.delete(p)
         s.commit()
         bump_policy()  # route cache (wave 2)
+    _end_stale_streams(request, agent_id)
     return Response(status_code=204)
 
 
