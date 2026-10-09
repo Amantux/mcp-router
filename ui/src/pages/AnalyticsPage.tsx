@@ -169,6 +169,13 @@ function EstimateCard({ label, est, env, testId }: { label: string; est: Estimat
   return <StatCard testId={testId} label={label} value={est.value} sub={`estimate ${est.basis}`} />;
 }
 
+/** The backend's token estimator id (analytics/tokens.py ESTIMATOR) in words; an unknown id is shown as given. */
+function estimatorText(id: string): string {
+  return id.startsWith("chars/4")
+    ? "Estimate: about 4 characters per token, over each tool's name, description and input schema."
+    : `Estimate: ${id}.`;
+}
+
 export function AnalyticsPage() {
   const s = useStyles();
   const c = useCommonStyles();
@@ -218,7 +225,7 @@ export function AnalyticsPage() {
         <EmptyState
           icon={<DataBarVerticalRegular />}
           title="No routing data in this window yet"
-          body="Analytics accrue once agents start routing. Every /route call and MCP tools/list exposure is counted, so connect an agent (or run the agent lens) and check back."
+          body="Analytics accrue once agents start routing. Every routing decision and every tool listing an agent receives is counted, so connect an agent (or run the agent lens) and check back."
         />
       </>
     );
@@ -236,7 +243,17 @@ export function AnalyticsPage() {
             testId="card-savings"
             label="Context savings"
             value={fmtPct(e.savings)}
-            sub={`${fmtInt(e.tokensNotSent)} tokens not sent: ${fmtInt(e.exposedTokens)} exposed of ${fmtInt(e.catalogTokens)} in authorized catalogs, over ${fmtInt(e.servedDecisions)} served decisions (${fmtInt(e.unscoredDecisions)} unscored, ${fmtInt(e.noMatchDecisions)} no-match excluded). Estimate: ${e.estimator}.${o.skills && o.skills.bodyTokensNotSent > 0 ? ` Plus ${fmtInt(o.skills.bodyTokensNotSent)} skill-body tokens not sent (bodies load only on activation).` : ""}`}
+            sub={
+              <>
+                {fmtInt(e.tokensNotSent)} tokens not sent: {fmtInt(e.exposedTokens)} exposed of {fmtInt(e.catalogTokens)} in authorized catalogs.
+                {o.skills && o.skills.bodyTokensNotSent > 0 && ` Plus ${fmtInt(o.skills.bodyTokensNotSent)} skill-body tokens not sent (bodies load only on activation).`}
+                <br />
+                Over {fmtInt(e.servedDecisions)} served decisions; {fmtInt(e.unscoredDecisions)} unscored and {fmtInt(e.noMatchDecisions)} no-match decisions
+                are left out.
+                <br />
+                {estimatorText(e.estimator)}
+              </>
+            }
           />
         </div>
         {o.skills && (
@@ -251,7 +268,10 @@ export function AnalyticsPage() {
         <StatCard testId="card-nomatch" label="No-match rate" value={fmtPct(o.routing.noMatchRate)} sub={`${fmtInt(o.routing.noMatch)} of ${fmtInt(o.routing.decisions)} decisions`} />
         <StatCard testId="card-fallback" label="Fallback rate" value={fmtPct(o.routing.fallbackRate)} sub={`${fmtInt(o.routing.fallback)} deterministic fallback rankings`} />
         <StatCard testId="card-denial" label="Denial rate" value={fmtPct(o.executions.denialRate)} sub={`${fmtInt(o.executions.denied)} of ${fmtInt(o.executions.attempts)} calls`} />
-        <StatCard testId="card-latency" label="Routing latency" value={`${fmtMs(o.routing.latencyP50Ms)}`} sub={`p50 · p95 ${fmtMs(o.routing.latencyP95Ms)}`} />
+        {/* The same numbers as "Measured route latency" (analytics/service.py), so shown here only when that card is absent (HS-U-042). */}
+        {!o.measured && (
+          <StatCard testId="card-latency" label="Routing latency" value={`${fmtMs(o.routing.latencyP50Ms)}`} sub={`p50 · p95 ${fmtMs(o.routing.latencyP95Ms)}`} />
+        )}
         <EstimateCard testId="card-time-saved" label="Est. time saved" est={timeSavedEstimate(e)} env={TIME_RATE_ENV} />
         <EstimateCard testId="card-cost-saved" label="Est. cost saved" est={costSavedEstimate(e)} env={PRICE_RATE_ENV} />
         {o.feedback && (
@@ -339,7 +359,7 @@ export function AnalyticsPage() {
         ) : tools.failed && !tools.data ? (
           <ErrorState what="Tool funnels" onRetry={tools.reload} />
         ) : (tools.data?.items.length ?? 0) === 0 ? (
-          <Caption1 className={c.muted}>No tool was surfaced in this window.</Caption1>
+          <Caption1 className={c.muted}>No {kind === "skill" ? "skill" : kind === "tool" ? "tool" : "tool or skill"} was surfaced in this window.</Caption1>
         ) : (
           <>
             <Table size="small" aria-label="Tool funnels">

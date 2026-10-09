@@ -94,7 +94,7 @@ describe("AnalyticsPage", () => {
     const savings = await screen.findByTestId("card-savings");
     expect(savings.textContent).toContain("87.5%");
     expect(savings.textContent).toContain("210,000 tokens not sent: 30,000 exposed of 240,000");
-    expect(savings.textContent).toContain("Estimate: chars/4");
+    expect(savings.textContent).toContain("Estimate: about 4 characters per token"); // the estimator id in words (HS-U-043)
     expect(screen.getByTestId("card-selection").textContent).toContain("15.0%");
     expect(screen.getByTestId("card-nomatch").textContent).toContain("4.8%");
     expect(screen.getByTestId("card-fallback").textContent).toContain("2.4%");
@@ -255,6 +255,8 @@ describe("AnalyticsPage estimates, measured latency and feedback", () => {
     expect(within(measured).getByTestId("card-measured-route").textContent).toContain("measured");
     expect(within(measured).getByTestId("card-measured-exec").textContent).toContain("p95 900 ms");
     expect(within(measured).queryByTestId("card-time-saved")).toBeNull();
+    // Route latency appears once: the overview card duplicated the measured one (HS-U-042).
+    expect(screen.queryByTestId("card-latency")).toBeNull();
     const fb = screen.getByTestId("card-feedback");
     expect(fb.textContent).toContain("75.0%");
     expect(fb.textContent).toContain("40 items");
