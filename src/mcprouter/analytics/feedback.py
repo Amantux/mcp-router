@@ -13,13 +13,14 @@ Trust rules:
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -56,10 +57,15 @@ class FeedbackItem:
     note: str | None = None
 
 
+# Bidi overrides/isolates (U+202A-202E, U+2066-2069) can visually reorder a
+# note in the UI ("trojan source"); strip at write so every reader is safe.
+_BIDI = re.compile("[\u202a-\u202e\u2066-\u2069]")
+
+
 def clean_note(note: str | None) -> str | None:
     if note is None or not note.strip():
         return None
-    return scrub_log(note.strip())[:NOTE_MAX]
+    return _BIDI.sub("", scrub_log(note.strip()))[:NOTE_MAX]
 
 
 class RateLimiter:
@@ -151,7 +157,13 @@ def record_feedback(
         session.execute(
             stmt.on_conflict_do_update(
                 constraint="uq_route_feedback_target",
-                set_={"helpful": stmt.excluded.helpful, "note": stmt.excluded.note},
+                # created_at is refreshed on upsert: it means "when this verdict was
+                # last given", so a changed vote counts in the window it was changed.
+                set_={
+                    "helpful": stmt.excluded.helpful,
+                    "note": stmt.excluded.note,
+                    "created_at": func.now(),
+                },
             )
         )
     session.commit()

@@ -119,3 +119,45 @@ def test_note_secret_redacted(env: tuple[TestClient, sessionmaker[Session]]) -> 
     c.post(_url(d), json={"items": [{"id": "t.a", "helpful": True, "note": note}]}, headers=ALICE)
     row = _rows(f, d)[0]
     assert row.note is not None and "abcdefghijklmnopqrstuvwxyz0123456789" not in row.note
+
+
+def test_resolve_by_name_and_kind() -> None:
+    surfaced = ["t.a", "skill:s1", "t.b"]
+    names = {"t.a": "search", "skill:s1": "search", "t.b": "fetch"}
+    item = fb.FeedbackItem
+    assert fb._resolve(item(name="fetch", helpful=True), surfaced, names) == "t.b"
+    assert fb._resolve(item(name="search", kind="skill", helpful=True), surfaced, names) == (
+        "skill:s1"
+    )
+    assert fb._resolve(item(name="search", kind="tool", helpful=True), surfaced, names) == "t.a"
+    with pytest.raises(fb.FeedbackInvalid, match="ambiguous"):
+        fb._resolve(item(name="search", helpful=True), surfaced, names)
+    with pytest.raises(fb.FeedbackInvalid, match="not surfaced"):
+        fb._resolve(item(name="nope", helpful=True), surfaced, names)
+
+
+def test_admin_post_nonexistent_id_404(env: tuple[TestClient, sessionmaker[Session]]) -> None:
+    c, _ = env
+    r = c.post(
+        _url("00000000-0000-0000-0000-000000000000"),
+        json={"items": [{"id": "t.a", "helpful": True}]},
+        headers=H,
+    )
+    assert r.status_code == 404 and "decision not found" in r.text
+
+
+def test_upsert_refreshes_created_at_and_bidi_stripped(
+    env: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    c, f = env
+    d = add_decision(f, "alice", NOW, ["t.a"])
+    c.post(_url(d), json={"items": [{"id": "t.a", "helpful": True}]}, headers=ALICE)
+    first = _rows(f, d)[0].created_at
+    with f() as s:  # backdate so a refresh is observable inside one transaction clock
+        s.execute(RouteFeedback.__table__.update().values(created_at=NOW))
+        s.commit()
+    note = "ok‮gnp.exe⁦x⁩"
+    c.post(_url(d), json={"items": [{"id": "t.a", "helpful": False, "note": note}]}, headers=ALICE)
+    row = _rows(f, d)[0]
+    assert row.created_at > NOW and row.created_at >= first
+    assert row.note == "okgnp.exex"

@@ -195,3 +195,19 @@ def test_aoai_settings_reject_bad_values(
     monkeypatch.setenv("MCPR_AOAI_API_KEY_FILE", str(empty))
     with pytest.raises(ValueError):
         AoaiSettings.from_env()
+
+
+@pytest.mark.parametrize("key", ["MCPR_PREFILL_MS_PER_1K_TOKENS", "MCPR_PRICE_PER_1K_INPUT_TOKENS"])
+@pytest.mark.parametrize("raw", ["nan", "inf", "-1", "abc"])
+def test_rate_settings_reject_nonfinite_negative(
+    monkeypatch: pytest.MonkeyPatch, key: str, raw: str
+) -> None:
+    monkeypatch.setenv(key, raw)
+    with pytest.raises(ValueError, match=key) as ei:
+        Settings.from_env()
+    assert raw not in str(ei.value) or raw == "inf"  # curated, never echoes the value
+
+
+def test_rate_settings_accept_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCPR_PREFILL_MS_PER_1K_TOKENS", "0")
+    assert Settings.from_env().prefill_ms_per_1k_tokens == 0.0

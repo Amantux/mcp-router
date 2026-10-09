@@ -4,6 +4,7 @@ pure function so tests can build differently-configured apps in one process)."""
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from collections.abc import Callable
@@ -106,11 +107,13 @@ class Settings:
             analytics_rollup_enabled=_bool(
                 get("MCPR_ANALYTICS_ROLLUP_ENABLED", "false"), "MCPR_ANALYTICS_ROLLUP_ENABLED"
             ),
-            prefill_ms_per_1k_tokens=float(
-                get("MCPR_PREFILL_MS_PER_1K_TOKENS", str(d.prefill_ms_per_1k_tokens))
+            prefill_ms_per_1k_tokens=_rate(
+                get("MCPR_PREFILL_MS_PER_1K_TOKENS", str(d.prefill_ms_per_1k_tokens)),
+                "MCPR_PREFILL_MS_PER_1K_TOKENS",
             ),
-            price_per_1k_input_tokens=float(
-                get("MCPR_PRICE_PER_1K_INPUT_TOKENS", str(d.price_per_1k_input_tokens))
+            price_per_1k_input_tokens=_rate(
+                get("MCPR_PRICE_PER_1K_INPUT_TOKENS", str(d.price_per_1k_input_tokens)),
+                "MCPR_PRICE_PER_1K_INPUT_TOKENS",
             ),
             currency=get("MCPR_CURRENCY", d.currency).strip().upper(),
             default_tool_timeout_s=float(
@@ -202,6 +205,18 @@ def _printable_key(key: str, name: str) -> str:
 
 _MAX_KEY_FILE_BYTES = 64 * 1024
 _MAX_DECISION_RETRIES = 10
+
+
+def _rate(raw: str, name: str) -> float:
+    """A non-negative finite rate. nan/inf/negative would silently poison every
+    estimate downstream (nan compares false everywhere), so refuse at startup."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{name}: must be a number") from None
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name}: must be a finite number >= 0")
+    return value
 
 
 def _bounded_retries(raw: str, name: str) -> int:
