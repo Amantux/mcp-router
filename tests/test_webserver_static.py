@@ -116,6 +116,28 @@ def test_allowed_host_vs_refused() -> None:
     # ... accepted once the operator allows it (authenticated, so 421 is the guard).
     assert _mcp_status("router.lan:8400", ("router.lan",)) != 421
     assert _mcp_status("other.lan:8400", ("router.lan",)) == 421
+    # behind a reverse proxy on 443 the Host header carries no port
+    assert _mcp_status("router.lan", ("router.lan",)) != 421
+    assert _mcp_status("other.lan", ("router.lan",)) == 421
+
+
+def test_portless_origin_accepted_unlisted_refused() -> None:
+    def status(origin: str) -> int:
+        with edge_client(allowed_hosts=("router.lan",)) as (_app, c):
+            r = c.post(
+                "/mcp",
+                headers={
+                    **AUTH,
+                    "Host": "router.lan",
+                    "Origin": origin,
+                    "Accept": "application/json, text/event-stream",
+                },
+                json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            )
+            return r.status_code
+
+    assert status("https://router.lan") not in (403, 421)
+    assert status("https://evil.lan") in (403, 421)
 
 
 def test_transport_security_shape() -> None:
@@ -124,3 +146,6 @@ def test_transport_security_shape() -> None:
     assert "router.lan:*" in ts.allowed_hosts and "10.0.0.5:8400" in ts.allowed_hosts
     assert "localhost:*" in ts.allowed_hosts
     assert "https://router.lan:*" in ts.allowed_origins
+    assert "router.lan" in ts.allowed_hosts
+    assert {"http://router.lan", "https://router.lan"} <= set(ts.allowed_origins)
+    assert "10.0.0.5" not in ts.allowed_hosts
