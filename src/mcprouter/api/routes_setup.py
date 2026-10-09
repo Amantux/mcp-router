@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import String, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from mcprouter.api.deps_auth import SecurityConfig, require_admin
@@ -68,13 +69,18 @@ def status(request: Request) -> dict[str, Any]:
 def complete(request: Request) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     with _session(request) as session:
-        row = session.get(AppSetting, SETUP_COMPLETED_KEY)
-        if row is None:  # idempotent: first completion time wins
-            session.add(AppSetting(key=SETUP_COMPLETED_KEY, value=now))
-            session.commit()
-        else:
-            now = row.value
-    return {"completed": True, "completedAt": now}
+        # Atomic and idempotent: the first completion time wins, and a concurrent
+        # POST no-ops on the PK instead of a read-then-insert IntegrityError.
+        session.execute(
+            pg_insert(AppSetting)
+            .values(key=SETUP_COMPLETED_KEY, value=now)
+            .on_conflict_do_nothing(index_elements=[AppSetting.key])
+        )
+        session.commit()
+        stored = session.scalar(
+            select(AppSetting.value).where(AppSetting.key == SETUP_COMPLETED_KEY)
+        )
+    return {"completed": True, "completedAt": stored or now}
 
 
 __all__ = ["SETUP_COMPLETED_KEY", "AppSetting", "router"]

@@ -108,3 +108,22 @@ def test_routes_do_not_create_tables_per_request(client: TestClient) -> None:
         m.setattr(AppSetting.metadata, "create_all", boom)
         assert client.get("/api/v1/setup/status", headers=A).status_code == 200
         assert client.post("/api/v1/setup/complete", headers=A).status_code == 200
+
+
+def test_complete_survives_a_concurrent_winner(client: TestClient) -> None:
+    """A racing POST that read 'not completed' must not IntegrityError-500."""
+    from sqlalchemy.orm import Session
+
+    first = client.post("/api/v1/setup/complete", headers=A).json()
+    real_get = Session.get
+
+    def stale_get(self: Session, entity: object, ident: object, **kw: object) -> object:
+        if entity is AppSetting:  # simulate the loser's stale "row absent" read
+            return None
+        return real_get(self, entity, ident, **kw)  # type: ignore[call-overload]
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(Session, "get", stale_get)
+        r = client.post("/api/v1/setup/complete", headers=A)
+    assert r.status_code == 200
+    assert r.json()["completedAt"] == first["completedAt"]  # first completion wins
