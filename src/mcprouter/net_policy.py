@@ -1,8 +1,10 @@
 """Outbound network policy shared by every point of use (P-109).
 
-One place for: the loopback host set, URL -> host, URL redaction for logs,
-the link-local/metadata refusal, and DNS resolution of a host name before a
-connection is made to it.
+One place for: the loopback host set, URL -> host, `redact_url` (the
+structural `scheme://host[:port]` form for any log line or message that must
+name an endpoint; free-text secret masking and control-character escaping
+are `execution.redaction`'s job), the link-local/metadata refusal, and DNS
+resolution of a host name before a connection is made to it.
 
 Users (all at the point of USE, because endpoints also arrive via env and
 config import that bypass API validation):

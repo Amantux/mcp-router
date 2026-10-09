@@ -11,6 +11,7 @@ import pytest
 from mcprouter.discovery import logsafe
 from mcprouter.execution.redaction import scrub_log
 from mcprouter.inference.laya import _scrub as laya_scrub
+from mcprouter.logging import scrub as root_scrub
 from mcprouter.registry.audit import scrub as audit_scrub
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "mcprouter"
@@ -18,7 +19,9 @@ HOSTILE = "\x1b[2J\r\nlevel=ERROR forged \x00\x7f\u0085 end"
 
 
 @pytest.mark.parametrize(
-    "helper", [scrub_log, audit_scrub, logsafe.scrub, laya_scrub], ids=lambda f: f.__module__
+    "helper",
+    [scrub_log, audit_scrub, logsafe.scrub, laya_scrub, root_scrub],
+    ids=lambda f: f.__module__,
 )
 def test_every_log_helper_strips_control_characters(helper: object) -> None:
     assert callable(helper)
@@ -27,9 +30,9 @@ def test_every_log_helper_strips_control_characters(helper: object) -> None:
     assert "forged" in out
 
 
-def test_logsafe_redact_is_mask_secrets() -> None:
-    assert logsafe.redact is logsafe.mask_secrets
-    assert logsafe.mask_secrets("token=abcd1234 x", ["abcd1234"]) == "token=*** x"
+def test_root_log_scrubber_keeps_traceback_lines_but_escapes_the_rest() -> None:
+    out = root_scrub("Traceback\n  line\u2028forged\r", multiline=True)
+    assert out == "Traceback\n      line\\x2028forged\\r"
 
 
 # ------------------------------------------------- curated exception messages

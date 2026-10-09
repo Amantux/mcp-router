@@ -20,19 +20,18 @@ Named ``mcprouter.logging``; absolute imports mean it never shadows the stdlib
 from __future__ import annotations
 
 import logging
-import re
 import sys
 from collections.abc import Iterable, MutableMapping
 from typing import Any, TextIO
 
 import structlog
 
+from mcprouter.execution.redaction import escape_controls
 from mcprouter.settings import Settings
 
 _HANDLER_MARK = "_mcpr_handler"
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 _MIN_SECRET_LEN = 8  # shorter values would redact ordinary words
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 REDACTED = "[REDACTED]"
 
 
@@ -64,20 +63,15 @@ def secret_values(settings: Settings) -> tuple[str, ...]:
     return tuple(sorted((s for s in found if len(s) >= _MIN_SECRET_LEN), key=len, reverse=True))
 
 
-def _escape_controls(text: str) -> str:
-    return _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", text)
-
-
 def scrub(text: str, secrets: Iterable[str] = (), *, multiline: bool = False) -> str:
-    """Redact `secrets`, then neutralise CR/LF/control characters."""
+    """Redact `secrets`, then neutralise CR/LF/control characters with the
+    shared `execution.redaction.escape_controls` class. `multiline` (rendered
+    tracebacks) keeps each newline but indents every continuation line."""
     for s in secrets:
         text = text.replace(s, REDACTED)
-    text = text.replace("\r", "\\r")
     if multiline:
-        text = "\n    ".join(text.split("\n"))
-    else:
-        text = text.replace("\n", "\\n")
-    return _escape_controls(text)
+        return "\n    ".join(escape_controls(line) for line in text.split("\n"))
+    return escape_controls(text)
 
 
 def _make_scrubber(secrets: tuple[str, ...]) -> structlog.types.Processor:

@@ -133,8 +133,14 @@ def redact_value(value: Any, *, max_str: int = 200) -> Any:
     return value
 
 
+def escape_controls(text: str) -> str:
+    """CR/LF, tabs, ANSI escapes, NEL and the Unicode line/paragraph separators
+    become visible escapes: the ONE control-character class for log lines."""
+    return _CONTROL_RE.sub(
+        lambda m: _CONTROL_NAMES.get(m.group(0), f"\\x{ord(m.group(0)):02x}"), text
+    )
+
+
 def scrub_log(text: str) -> str:
     """Redact, then neutralize CR/LF and other control characters (log forging)."""
-    return _CONTROL_RE.sub(
-        lambda m: _CONTROL_NAMES.get(m.group(0), f"\\x{ord(m.group(0)):02x}"), redact(text)
-    )
+    return escape_controls(redact(text))
