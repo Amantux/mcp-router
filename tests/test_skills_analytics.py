@@ -46,7 +46,9 @@ def _skill(db: sessionmaker[Session], name: str = "pdf-fill", sid: str | None = 
         return sk.id
 
 
-def _activate(db: sessionmaker[Session], agent: str, skill_id: str, rrid: str | None) -> None:
+def _activate(
+    db: sessionmaker[Session], agent: str, skill_id: str, rrid: str | None, outcome: str = "ok"
+) -> None:
     with db() as s:
         s.add(
             ExecutionRecord(
@@ -54,7 +56,7 @@ def _activate(db: sessionmaker[Session], agent: str, skill_id: str, rrid: str | 
                 tool_id=None,
                 resource_kind="skill",
                 skill_id=skill_id,
-                outcome="ok",
+                outcome=outcome,
                 detail="",
                 latency_ms=1.0,
                 created_at=NOW - timedelta(minutes=3),
@@ -80,6 +82,15 @@ def test_skill_surfaced_and_activated(db: sessionmaker[Session]) -> None:
     with db() as s:
         curve = fn.position_curve(s, parse_window("7d", NOW), key)
     assert [(p.rank, p.shown, p.selected) for p in curve] == [(2, 1, 1)]
+
+
+def test_bundle_inclusion_counts_as_activation(db: sessionmaker[Session]) -> None:
+    """A skill delivered in a bundle (outcome "bundle") is selected, not lost."""
+    sid = _skill(db)
+    key = f"skill:{sid}"
+    r1 = add_decision(db, "alice", NOW - timedelta(minutes=5), [key])
+    _activate(db, "alice", sid, r1, outcome="bundle")
+    assert (_funnel(db)[key].surfaced, _funnel(db)[key].selected) == (1, 1)
 
 
 def test_other_agents_skill_activation_never_counts(db: sessionmaker[Session]) -> None:

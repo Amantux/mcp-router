@@ -273,7 +273,8 @@ class SkillExposure:
     ) -> tuple[bytes, list[str]]:
         """Zip of the caller's routed skills: visibility -> limiter (one token per
         bundle) -> policy per skill (denied ones are audited and left out) ->
-        one audit row (outcome "ok", detail "bundle") per included skill ->
+        one audit row (outcome "bundle") per included skill -- delivery in a
+        bundle is not an activation, so activation_count is never bumped ->
         bytes. Returns (zip bytes, skipped resource paths)."""
         routed = self.load_routed(routed_ids)  # 1. visibility
         if not routed:
@@ -319,6 +320,6 @@ class SkillExposure:
             ) from None
         for sk, _ in allowed:  # 4. audit before the bytes leave
             self._manager.record_skill_activation(
-                agent_id, sk.id, "ok", "bundle", route_request_id, initiated_by
+                agent_id, sk.id, "bundle", "bundle", route_request_id, initiated_by
             )
         return data, skipped

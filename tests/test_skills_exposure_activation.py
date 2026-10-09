@@ -216,7 +216,9 @@ def test_bundle_is_gated_and_audited(db: sessionmaker[Session], tmp_path: Path) 
     assert "pdf-tools/SKILL.md" in names and "pdf-tools/guide.md" in names
     assert not any(n.startswith("other-skill/") for n in names)  # visibility
     assert skipped == []
-    assert [(r.skill_id, r.outcome, r.detail) for r in _rows(db)] == [(a, "ok", "bundle")]
+    assert [(r.skill_id, r.outcome, r.detail) for r in _rows(db)] == [(a, "bundle", "bundle")]
+    with db() as s:  # bundle inclusion is not an activation of the skill
+        assert s.get(SkillRecord, a).activation_count in (0, None)  # type: ignore[union-attr]
 
 
 def test_bundle_unrouted_is_not_found(db: sessionmaker[Session], tmp_path: Path) -> None:
