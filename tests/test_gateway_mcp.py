@@ -249,7 +249,9 @@ async def test_list_changed_bus_is_per_agent(world: dict[str, Any]) -> None:
     gw, route = world["gw"], world["route"]
     seen: dict[str, int] = {"alice": 0, "bob": 0}
     for agent in seen:
-        bus, _ = gw._bus(agent)
+        subject = gw._current_subject(agent)
+        assert subject is not None
+        bus, _ = gw._bus(agent, subject)
         bus.subscribe(lambda _e, a=agent: seen.__setitem__(a, seen[a] + 1))
     await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
     assert seen == {"alice": 1, "bob": 0}

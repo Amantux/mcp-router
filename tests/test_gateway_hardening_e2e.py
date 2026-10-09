@@ -15,6 +15,8 @@ from typing import Any
 import anyio
 import mcp_types as types
 import pytest
+from mcp.client.session import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
@@ -457,3 +459,66 @@ async def test_rotated_key_session_is_closed_at_fan_out(live: dict[str, Any]) ->
         await bob.list_tools()
         await gw.apply_route("bob", route(RouteRequest("q", "bob", 8)))
         assert list(gw._legacy["bob"])
+
+
+ROTATED = "key_alice_rotated_" + "r" * 30
+
+
+async def test_listen_streams_are_bound_to_the_credential(live: dict[str, Any]) -> None:
+    """Re-review B-1: a rotated-away key's modern listen streams neither
+    exhaust the new key's 16-stream budget nor get notified; they close at
+    the next fan-out while the new key's stream is notified."""
+    from mcp.client.subscriptions import listen
+
+    from mcprouter.api.deps_auth import hash_key
+    from mcprouter.interfaces import RouteRequest
+
+    gw, route, db = live["gw"], live["route"], live["db"]
+    add_rule(db, "alice")
+    async with contextlib.AsyncExitStack() as stack:
+        old = await stack.enter_async_context(mcp_session(live["url"], "alice", MODERN))
+        old_subs = [
+            await stack.enter_async_context(listen(old, tools_list_changed=True)) for _ in range(16)
+        ]
+        await _set_principal(db, "alice", key_hash=hash_key(ROTATED))
+        async with (
+            create_mcp_http_client(headers={"Authorization": f"Bearer {ROTATED}"}) as http,
+            streamable_http_client(live["url"], http_client=http) as (r, w),
+            ClientSession(r, w) as new,
+        ):
+            await new.discover()
+            async with listen(new, tools_list_changed=True) as sub:  # not locked out
+                await gw.apply_route("alice", route(RouteRequest("q", "alice", 8)))
+                with anyio.fail_after(5):
+                    event = await sub.__anext__()
+                assert type(event).__name__ == "ToolsListChanged"
+                with anyio.fail_after(5):
+                    leftovers = [[e async for e in s] for s in old_subs]
+        assert leftovers == [[]] * 16  # closed, never told about the change
+
+
+async def test_revocation_hook_closes_streams_without_a_route_change(
+    live: dict[str, Any],
+) -> None:
+    """Re-review SF-A: rotation followed by an UNCHANGED route, and the
+    admin-side end_stale_streams hook, both close the old key's session."""
+    from mcprouter.api.deps_auth import hash_key
+    from mcprouter.interfaces import RouteRequest
+
+    gw, route, db = live["gw"], live["route"], live["db"]
+    add_rule(db, "alice")
+    result = route(RouteRequest("q", "alice", 8))
+    await gw.apply_route("alice", result)
+    sessions = gw.server.session_manager._server_instances
+    async with mcp_session(live["url"], "alice", HANDSHAKE) as first:
+        await first.list_tools()
+        (sid,) = list(gw._legacy["alice"])
+        await _set_principal(db, "alice", key_hash=hash_key(ROTATED))
+        assert await gw.apply_route("alice", result) is False  # unchanged set
+        assert sid not in sessions
+    async with mcp_session(live["url"], "bob", HANDSHAKE) as bob:
+        await bob.list_tools()
+        (bob_sid,) = list(gw._legacy["bob"])
+        await _set_principal(db, "bob", enabled=False)
+        await gw.end_stale_streams("bob")  # what an admin disable should call
+        assert bob_sid not in sessions

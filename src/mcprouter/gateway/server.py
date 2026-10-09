@@ -326,6 +326,16 @@ def _no_param_header_schema(name: str) -> None:
     del name
 
 
+def _request_subject(ctx: ServerRequestContext[Any, Any]) -> str:
+    """The credential subject _AuthASGI put on this request; fail closed."""
+    request = ctx.request
+    user = getattr(request, "scope", {}).get("user") if request else None
+    subject = user.access_token.subject if isinstance(user, AuthenticatedUser) else None
+    if not subject:
+        raise MCPError(types.INVALID_REQUEST, "unauthenticated")
+    return subject
+
+
 def _text(text: str, *, is_error: bool) -> types.CallToolResult:
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)], is_error=is_error
@@ -510,7 +520,9 @@ class GatewayServer:
         # ADAPTER (E6 P-606): becomes the D10 registry's ("find_tools", agent)
         # limiter (app.state.limiters, passed in by build_gateway) on rebase.
         self._route_limiter = SlidingWindowLimiter(settings.rate_limit_per_agent_per_min)
-        self._buses: dict[str, tuple[InMemorySubscriptionBus, ListenHandler]] = {}
+        # One subscription bus per (agent, credential subject): a modern-era
+        # listen stream is bound to the key that opened it, like a session.
+        self._buses: dict[tuple[str, str], tuple[InMemorySubscriptionBus, ListenHandler]] = {}
         self._legacy: dict[str, OrderedDict[str, ServerSession]] = {}
         self._lock = threading.Lock()
         # Session-opening requests in flight per agent (see _reserve_open).
@@ -654,10 +666,10 @@ class GatewayServer:
             return subject_for_key_hash(row.key_hash) if row.enabled else None
 
     async def _end_stale_streams(self, agent_id: str, subject: str | None) -> None:
-        """Close what outlived a revocation: every handshake session of the
-        agent not created with ``subject`` (all of them when None), and, when
-        the agent is gone/disabled, its modern listen streams. Per-request
-        auth already refuses new requests; this ends LONG-LIVED streams."""
+        """Close what outlived a revocation: every handshake session and every
+        modern listen stream of the agent not opened with ``subject`` (all of
+        them when None: agent deleted/disabled). Per-request auth already
+        refuses new requests; this ends LONG-LIVED streams."""
         manager = self.server.session_manager
         stale = [
             sid
@@ -673,24 +685,39 @@ class GatewayServer:
             for sid in stale:
                 if sessions is not None:
                     sessions.pop(sid, None)
-        if subject is None:
-            _, handler = self._bus(agent_id)
-            handler.close()
-            with self._lock:
+        with self._lock:
+            stale_buses = [k for k in self._buses if k[0] == agent_id and k[1] != subject]
+            handlers = [self._buses.pop(k)[1] for k in stale_buses]
+            if subject is None:
                 self._legacy.pop(agent_id, None)
-        if stale or subject is None:
+        for handler in handlers:
+            handler.close()  # graceful end of every stream on that bus
+        if stale or stale_buses or subject is None:
             log.info(
                 "gateway.revoked_streams agent=%s sessions=%d", scrub_log(agent_id), len(stale)
             )
 
-    def _bus(self, agent_id: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
+    def _bus(self, agent_id: str, subject: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
         with self._lock:
-            pair = self._buses.get(agent_id)
+            pair = self._buses.get((agent_id, subject))
             if pair is None:
                 bus = InMemorySubscriptionBus()
                 pair = (bus, ListenHandler(bus, max_subscriptions=16))
-                self._buses[agent_id] = pair
+                self._buses[(agent_id, subject)] = pair
             return pair
+
+    async def end_stale_streams(self, agent_id: str) -> None:
+        """Revocation hook: re-read the agent's principal and close every
+        long-lived stream not opened with its CURRENT credential (all of them
+        if the agent is deleted/disabled). Runs on every re-route; admin
+        paths that rotate/disable/delete a principal should call
+        :meth:`end_stale_streams_threadsafe` after commit."""
+        subject = await anyio.to_thread.run_sync(self._current_subject, agent_id)
+        await self._end_stale_streams(agent_id, subject)
+
+    def end_stale_streams_threadsafe(self, agent_id: str) -> None:
+        """For sync callers on an anyio worker thread (REST admin routes)."""
+        anyio.from_thread.run(self.end_stale_streams, agent_id)
 
     # ------------------------------------------------------------ exposure
     def _cap(self, principal: AgentPrincipal) -> int:
@@ -840,7 +867,7 @@ class GatewayServer:
         self, ctx: ServerRequestContext[Any, Any], params: types.SubscriptionsListenRequestParams
     ) -> types.SubscriptionsListenResult:
         principal = self._principal(ctx)
-        _, handler = self._bus(principal.agent_id)
+        _, handler = self._bus(principal.agent_id, _request_subject(ctx))
         return await handler(ctx, params)
 
     async def _find_tools(
@@ -1099,6 +1126,8 @@ class GatewayServer:
         changed = self.exposure.set(agent_id, tool_ids, result.request_id, skill_ids=skill_ids)
         if changed:
             await self.notify_tools_changed(agent_id)
+        else:
+            await self.end_stale_streams(agent_id)  # revocation check even without a change
         return changed
 
     def apply_route_threadsafe(self, agent_id: str, result: RouteResult) -> bool:
@@ -1113,11 +1142,14 @@ class GatewayServer:
         await self._end_stale_streams(agent_id, subject)
         if subject is None:
             return
-        bus, _ = self._bus(agent_id)
-        await bus.publish(ToolsListChanged())
-        if self._skills is not None:
-            await bus.publish(PromptsListChanged())
-            await bus.publish(ResourcesListChanged())
+        with self._lock:
+            pair = self._buses.get((agent_id, subject))
+        if pair is not None:  # only the current credential's listen streams
+            bus = pair[0]
+            await bus.publish(ToolsListChanged())
+            if self._skills is not None:
+                await bus.publish(PromptsListChanged())
+                await bus.publish(ResourcesListChanged())
         with self._lock:
             sessions = list(self._legacy.get(agent_id, {}).items())
         dead: list[str] = []
