@@ -58,6 +58,7 @@ from mcprouter.models import (
     MCPServerRecord,
     MCPToolRecord,
     PolicyRule,
+    SkillRecord,
     utcnow,
 )
 from mcprouter.policy.engine import effective_operation, evaluate
@@ -240,6 +241,42 @@ class ExecutionManager:
                 initiated_by=prov.initiated_by,
             )
             s.add(rec)
+            s.commit()
+            return rec.id
+
+    def record_skill_activation(
+        self,
+        agent_id: str,
+        skill_id: str,
+        outcome: str,
+        detail: str,
+        route_request_id: str | None = None,
+        initiated_by: str | None = None,
+    ) -> str:
+        """Wave-4 S3: audit a skill activation/resource read. Written BEFORE the
+        body is returned. On outcome=ok the skill's activation_count is bumped in
+        the same transaction. `detail` must be curated (a path or a reason)."""
+        prov = _provenance(initiated_by, agent_id)
+        with self._factory() as s:
+            rec = ExecutionRecord(
+                agent_id=agent_id,
+                tool_id=None,
+                server_id=None,
+                outcome=outcome,
+                detail=_curate(prov.note + detail),
+                created_at=self._clock(),
+                route_request_id=route_request_id,
+                initiated_by=prov.initiated_by,
+                resource_kind="skill",
+                skill_id=skill_id,
+            )
+            s.add(rec)
+            if outcome == "ok":
+                s.execute(
+                    update(SkillRecord)
+                    .where(SkillRecord.id == skill_id)
+                    .values(activation_count=SkillRecord.activation_count + 1)
+                )
             s.commit()
             return rec.id
 
