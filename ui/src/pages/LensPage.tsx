@@ -24,7 +24,7 @@ import {
 } from "@fluentui/react-components";
 import { EyeRegular } from "@fluentui/react-icons";
 import { isAbort, listPrincipals, simulateAgent } from "../api/client";
-import type { BudgetClamp, SimulateRequest, SimulateResponse } from "../api/types";
+import { DEFAULT_MAX_TOOLS, type BudgetClamp, type SimulateRequest, type SimulateResponse } from "../api/types";
 import { EmptyState, fmtMs, fmtScore, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { FeedbackThumbs } from "../components/FeedbackThumbs";
@@ -313,7 +313,7 @@ export function LensPage({ debounceMs = 300 }: { debounceMs?: number }) {
     if (linkedAgent) setAgentId(linkedAgent);
   }, [linkedAgent]);
   const [query, setQuery] = useState("");
-  const [maxTools, setMaxTools] = useState(8);
+  const [maxTools, setMaxTools] = useState(DEFAULT_MAX_TOOLS);
   const [maxServers, setMaxServers] = useState(0); // 0 = don't request a server cap
   const [maxSkills, setMaxSkills] = useState(0); // 0 = don't request a skills cap
   const [showFiltered, setShowFiltered] = useState(true);

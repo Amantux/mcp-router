@@ -40,6 +40,9 @@ export type DedupStatus = "open" | "accepted" | "dismissed";
 export const DOMAINS = ["development", "communication", "files", "databases", "productivity"] as const;
 export const OPERATIONS: Operation[] = ["read", "write", "execute", "unknown"];
 export const CEILINGS: OperationCeiling[] = ["read", "write", "execute"];
+/** New-agent defaults: api/routes_policy.py PrincipalIn (max_tools=8, max_skills=3). */
+export const DEFAULT_MAX_TOOLS = 8;
+export const DEFAULT_MAX_SKILLS = 3;
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 export type JsonObject = { [k: string]: JsonValue };

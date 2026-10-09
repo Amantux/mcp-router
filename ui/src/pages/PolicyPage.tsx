@@ -28,7 +28,7 @@ import {
 } from "@fluentui/react-components";
 import { AddRegular, CopyRegular, DeleteRegular, EditRegular, KeyResetRegular, ShieldKeyholeRegular } from "@fluentui/react-icons";
 import { createPrincipal, createRule, deletePrincipal, deleteRule, listPrincipals, listRules, listServers, listSkillSources, rotatePrincipalKey, updatePrincipal, updateRule } from "../api/client";
-import { CEILINGS, type CreatedPrincipal, type OperationCeiling, type PolicyRule, type Principal } from "../api/types";
+import { CEILINGS, DEFAULT_MAX_SKILLS, DEFAULT_MAX_TOOLS, type CreatedPrincipal, type OperationCeiling, type PolicyRule, type Principal } from "../api/types";
 import { ConfirmDialog, EmptyState, ErrorState, fmtInt, fmtTime, LoadingRow, PageHeader, useCommonStyles } from "../components/common";
 import { useNotify } from "../components/Notifications";
 import { useLoader } from "../hooks/useLoader";
@@ -44,8 +44,8 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
   const s = useStyles();
   const notify = useNotify();
   const [agentId, setAgentId] = useState("");
-  const [maxTools, setMaxTools] = useState(8);
-  const [maxSkills, setMaxSkills] = useState(3);
+  const [maxTools, setMaxTools] = useState(DEFAULT_MAX_TOOLS);
+  const [maxSkills, setMaxSkills] = useState(DEFAULT_MAX_SKILLS);
   const [maxServers, setMaxServers] = useState("");
   const [error, setError] = useState<string>();
   const [serversError, setServersError] = useState<string>();
@@ -121,8 +121,8 @@ function CreatePrincipalDialog({ open, onClose, onCreated }: { open: boolean; on
 function EditLimitsDialog({ principal, onClose, onSaved }: { principal: Principal | null; onClose: () => void; onSaved: () => void }) {
   const s = useStyles();
   const notify = useNotify();
-  const [maxTools, setMaxTools] = useState(principal?.maxTools ?? 8);
-  const [maxSkills, setMaxSkills] = useState(principal?.maxSkills ?? 3);
+  const [maxTools, setMaxTools] = useState(principal?.maxTools ?? DEFAULT_MAX_TOOLS);
+  const [maxSkills, setMaxSkills] = useState(principal?.maxSkills ?? DEFAULT_MAX_SKILLS);
   const [maxServers, setMaxServers] = useState(principal?.maxServers != null ? String(principal.maxServers) : "");
   const [error, setError] = useState<string>();
   const [pending, setPending] = useState(false);

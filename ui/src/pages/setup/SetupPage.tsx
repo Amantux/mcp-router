@@ -35,7 +35,7 @@ import {
 } from "./snippets";
 import { STEP_KEY, skipSetup } from "./redirect";
 import { RegisterServerDialog } from "../RegisterServerDialog";
-import type { CreateRuleRequest } from "../../api/types";
+import { DEFAULT_MAX_TOOLS, type CreateRuleRequest } from "../../api/types";
 
 type Target = { kind: "tool" | "skill"; id: string; name: string };
 
@@ -296,7 +296,7 @@ export function SetupPage() {
       <Button
         disabled={apiKey !== null}
         onClick={() =>
-          void createPrincipal({ agentId, maxTools: 8 }).then(
+          void createPrincipal({ agentId, maxTools: DEFAULT_MAX_TOOLS }).then(
             (p) => {
               setCreatedAgent(p.agentId);
               setApiKey(p.apiKey);
