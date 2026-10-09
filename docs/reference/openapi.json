@@ -4116,14 +4116,7 @@
             "title": "Skippeddecided"
           },
           "truncated": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "boolean",
             "title": "Truncated"
           }
         },
@@ -4132,7 +4125,8 @@
           "pairsConsidered",
           "created",
           "refreshed",
-          "skippedDecided"
+          "skippedDecided",
+          "truncated"
         ],
         "title": "DedupRunOut"
       },

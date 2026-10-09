@@ -74,7 +74,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcprouter import __version__
 from mcprouter.analytics import feedback as _fb
-from mcprouter.api.deps_auth import (
+from mcprouter.auth import (
     DEV_AGENT_ID,
     AuthenticationError,
     SecurityConfig,

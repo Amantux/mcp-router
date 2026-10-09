@@ -70,7 +70,7 @@ def run_suggestions(
         created=result.created,
         refreshed=result.refreshed,
         skipped_decided=result.skipped_decided,
-        truncated=getattr(result, "truncated", None),  # E6 P-603 adds the field
+        truncated=result.truncated,
     )
 
 

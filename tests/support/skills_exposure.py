@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -24,6 +25,11 @@ class FakePolicy:
     ) -> tuple[bool, str]:
         self.calls += 1
         return self.allow, "rule r1"
+
+    def check_many(
+        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
+    ) -> list[tuple[bool, str]]:
+        return [self.check(agent_id, sk, src) for sk, src in items]
 
 
 def _seed(factory: sessionmaker[Session], root: Path) -> tuple[str, str]:

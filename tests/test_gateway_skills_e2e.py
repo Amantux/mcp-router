@@ -8,7 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,11 @@ class OnlyAlice:
         self, agent_id: str, skill: SkillRecord, source: SkillSourceRecord
     ) -> tuple[bool, str]:
         return agent_id == "alice", "rule e2e"
+
+    def check_many(
+        self, agent_id: str, items: Sequence[tuple[SkillRecord, SkillSourceRecord]]
+    ) -> list[tuple[bool, str]]:
+        return [self.check(agent_id, sk, src) for sk, src in items]
 
 
 class SkillRoute:

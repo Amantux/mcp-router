@@ -13,10 +13,9 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "mcprouter"
 # Pending switches owned by other fences; each entry is a debt with an owner.
 # Delete the entry when the owner switches the import (the test then guards it).
 PENDING: dict[str, str] = {
-    "gateway/server.py": "E3: import auth core from mcprouter.auth (AuthenticationError, "
-    "SecurityConfig, hash_key, resolve_principal)",
-    "registry/api_deps.py": "E2 (P-206): FastAPI deps belong in api/deps.py; this module "
-    "becomes a re-export façade there",
+    # Permanent by design (P-206): a re-export façade over mcprouter.api so old
+    # imports keep resolving (pinned by test_rest_gaps_acting); no src imports it.
+    "registry/api_deps.py": "E2 (P-206): deprecated re-export façade of api/deps.py",
 }
 
 # The composition root is allowed to import the API layer by definition.

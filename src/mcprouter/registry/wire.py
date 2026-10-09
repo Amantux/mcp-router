@@ -240,9 +240,8 @@ class DedupRunOut(Wire):
     created: int
     refreshed: int
     skipped_decided: int
-    # D9/P-603: True when the scan hit MCPR_DEDUP_MAX_PAIRS. None until the
-    # detector reports it (E6 adds `DedupRun.truncated`); read via getattr.
-    truncated: bool | None = None
+    # D9/P-603: True when the scan hit MCPR_DEDUP_MAX_PAIRS (DedupRun.truncated).
+    truncated: bool
 
 
 class AcceptIn(Wire):

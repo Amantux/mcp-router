@@ -295,9 +295,9 @@ def test_bundle_too_many_is_413(env: Env, monkeypatch: pytest.MonkeyPatch) -> No
     import functools
 
     from mcprouter.gateway import skills as gw
-    from mcprouter.skills.bundle import _build_bundle
+    from mcprouter.skills.bundle import build_bundle
 
-    monkeypatch.setattr(gw, "_build_bundle", functools.partial(_build_bundle, max_skills=1))
+    monkeypatch.setattr(gw, "build_bundle", functools.partial(build_bundle, max_skills=1))
     env.route("alice", env.a, env.b)
     r = env.client.get("/api/v1/skills/bundle", headers=H_ALICE)
     assert r.status_code == 413, r.text
