@@ -127,6 +127,15 @@ Any model exception or deadline overrun falls back to deterministic retrieval
 ranking; a sub-threshold "does anything fit?" probability returns an honest
 `no_match` instead of garbage.
 
+## Run it (Docker)
+
+```bash
+cp .env.example .env    # add MCPR_ADMIN_TOKEN=... and MCPR_AGENT_KEYS=agent:key
+docker compose up -d --build --wait
+curl -fsS localhost:8400/healthz && open http://localhost:8400/
+```
+Non-root image, internal-only Postgres, `scripts/smoke.sh` end-to-end check; flavors and GPU: [docs/deploy.md](docs/deploy.md).
+
 ## Quickstart
 
 ```bash

@@ -1,0 +1,15 @@
+# Inference flavor: the base image + the [inference] extra (torch, transformers,
+# sentence-transformers, laya) on the CPU torch wheel index.
+# Build the base first:  docker build -t mcp-router:local .
+# then:                  docker build -f Dockerfile.inference -t mcp-router:local-inference .
+# For CUDA, pass --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+# (the CUDA wheel is several GB; UNPROVEN in CI — no GPU there).
+ARG BASE_IMAGE=mcp-router:local
+FROM ${BASE_IMAGE}
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+USER root
+RUN pip install --no-cache-dir --index-url "${TORCH_INDEX_URL}" torch \
+ && pip install --no-cache-dir "/srv[inference]"
+USER app
+ENV MCPR_EMBEDDING_BACKEND=bge \
+    MCPR_DECISION_BACKEND=laya
