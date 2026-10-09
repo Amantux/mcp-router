@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
@@ -279,7 +280,8 @@ def test_rotate_key_survives_a_failing_stream_hook(
             raise RuntimeError("password=hunter2 must never be logged")
 
     c, _, cat = env
-    c.app.state.gateway = _BrokenGateway()
+    app = cast(Any, c.app)  # TestClient.app is typed as a bare ASGI callable
+    app.state.gateway = _BrokenGateway()
     try:
         pid = cat.principals["alice"].id
         with caplog.at_level("WARNING"):
@@ -292,4 +294,4 @@ def test_rotate_key_survives_a_failing_stream_hook(
         assert "revoke_streams_failed" in caplog.text
         assert "hunter2" not in caplog.text
     finally:
-        del c.app.state.gateway
+        del app.state.gateway
