@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, sessionmaker
 
 from mcprouter.execution.manager import ExecutionManager
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
+from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.models import SkillRecord, SkillSourceRecord
 from mcprouter.skills.bundle import BundleError, _build_bundle
 from mcprouter.skills.serve import (
@@ -81,7 +81,7 @@ class SkillExposure:
         session_factory: sessionmaker[Session],
         manager: ExecutionManager,
         policy: SkillPolicy,
-        limiter: SlidingWindowLimiter,
+        limiter: KeyedLimiter,
         *,
         cache_dir: str,
         body_max_bytes: int,

@@ -143,3 +143,23 @@ def test_each_app_gets_its_own_registry(settings: Settings) -> None:
     a, b = create_app(settings, env={}), create_app(settings, env={})
     assert isinstance(a.state.limiters, LimiterRegistry)
     assert a.state.limiters is not b.state.limiters
+
+
+@requires_db
+def test_app_wires_every_surface_to_its_registry(settings: Settings) -> None:
+    """Integration (wave 6): manager, skills, gateway route/feedback all draw
+    from app.state.limiters - no private limiter survives in create_app."""
+    from mcprouter.api.app import create_app
+
+    app = create_app(settings, env={})
+    reg = app.state.limiters
+    gw = app.state.gateway
+    wired = {
+        "execute": app.state.execution_manager._limiter,
+        "skills": app.state.skill_exposure._limiter,
+        "route": gw._route_limiter,
+        "feedback": gw._feedback_limiter,
+    }
+    for surface, lim in wired.items():
+        assert isinstance(lim, SurfaceLimiter), surface
+        assert lim._registry is reg and lim.surface == surface

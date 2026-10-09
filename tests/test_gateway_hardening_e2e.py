@@ -278,6 +278,7 @@ def lan(world: dict[str, Any]) -> Iterator[dict[str, Any]]:
     app.state.settings = world["app"].state.settings
     app.state.session_factory = world["db"]
     app.state.security = world["app"].state.security
+    app.state.limiters = world["app"].state.limiters
     gw = build_gateway(
         app,
         manager=world["gw"]._manager,

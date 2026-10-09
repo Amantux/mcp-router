@@ -26,7 +26,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from mcprouter.api.deps_auth import get_principal
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.inference import serve
 from mcprouter.inference.adapters import DeadlineDecisionModel
 from mcprouter.inference.errors import InferenceError
@@ -78,17 +77,6 @@ def parse_hop(raw: str | None) -> int:
     return 1
 
 
-def _limiter(request: Request) -> SlidingWindowLimiter:
-    """ADAPTER (E6 P-606): when the D10 registry lands, this body becomes
-    ``request.app.state.limiters.get("decision", ...)``. Until then a per-app
-    shim with the W0 budget ``settings.decision_rate_limit_per_min``."""
-    lim = getattr(request.app.state, "decision_edge_limiter", None)
-    if lim is None:
-        lim = SlidingWindowLimiter(request.app.state.settings.decision_rate_limit_per_min, 60.0)
-        request.app.state.decision_edge_limiter = lim
-    return lim
-
-
 @router.post("/systemone")
 def systemone(
     body: SystemOneRequest, request: Request, principal: AgentPrincipal = Depends(get_principal)
@@ -100,7 +88,8 @@ def systemone(
     if hop >= 1 and settings.decision_backend == "remote":
         raise HTTPException(503, "decision edge refused: request already forwarded by a router")
     DECISION_HOP.set(hop)
-    if not _limiter(request).try_acquire(f"principal:{principal.id}"):
+    # D10: the app registry's "decision" surface (pruned; one budget per principal).
+    if not request.app.state.limiters.try_acquire("decision", f"principal:{principal.id}"):
         raise HTTPException(429, "decision edge rate limit exceeded; retry later")
     try:
         parsed = serve.parse_questions(body.questions)

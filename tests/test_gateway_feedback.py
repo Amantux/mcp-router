@@ -20,11 +20,6 @@ from .conftest import requires_db
 pytestmark = requires_db
 
 
-@pytest.fixture(autouse=True)
-def _clear_limiter() -> None:
-    fb.LIMITER._hits.clear()
-
-
 async def _call(w: dict[str, Any], agent: str, args: dict[str, Any]) -> types.CallToolResult:
     p = types.CallToolRequestParams(name=FEEDBACK_TOOL, arguments=args)
     return await w["gw"]._on_call_tool(_ctx(w["gw"], w["cat"], agent), p)

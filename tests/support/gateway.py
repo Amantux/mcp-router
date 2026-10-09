@@ -31,6 +31,7 @@ from mcprouter.gateway.server import (
     build_gateway,
 )
 from mcprouter.interfaces import RoutedTool, RouteRequest, RouteResult
+from mcprouter.limits import make_limiters
 from mcprouter.settings import Settings
 from tests.conftest import TEST_DB_URL
 from tests.support.execution import (
@@ -89,6 +90,7 @@ def world(sec_db: sessionmaker[Session]) -> Iterator[dict[str, Any]]:
     app.state.settings = settings
     app.state.engine = sec_db.kw["bind"]
     app.state.session_factory = sec_db
+    app.state.limiters = make_limiters(settings)
     configure_security(app, {"MCPR_ADMIN_TOKEN": "admin_" + "z" * 30})
     inv = FakeInvoker()
     mgr = ExecutionManager(sec_db, inv, timeout_s=2.0, limiter=SlidingWindowLimiter(1000))

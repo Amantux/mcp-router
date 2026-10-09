@@ -83,7 +83,6 @@ from mcprouter.api.deps_auth import (
     resolve_principal,
 )
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import redact, scrub_log
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
 from mcprouter.gateway.exposure import ExposureStore
@@ -95,6 +94,7 @@ from mcprouter.gateway.skills import (
     resource_uri,
 )
 from mcprouter.interfaces import RouteFn, RouteRequest, RouteResult
+from mcprouter.limits import LimiterRegistry, make_limiters
 from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from mcprouter.policy.engine import evaluate
 from mcprouter.routing.budgets import effective_budgets
@@ -508,6 +508,7 @@ class GatewayServer:
         transport_security: TransportSecuritySettings | None = None,
         host: str = "127.0.0.1",
         skills: SkillExposure | None = None,
+        limiters: LimiterRegistry | None = None,
     ) -> None:
         self._factory = session_factory
         self._skills = skills
@@ -517,9 +518,11 @@ class GatewayServer:
         self._manager_takes_route_id = _accepts_kwarg(manager.execute, ROUTE_REQUEST_ID_KWARG)
         self._route_fn = route_fn
         self.exposure = ExposureStore()
-        # ADAPTER (E6 P-606): becomes the D10 registry's ("find_tools", agent)
-        # limiter (app.state.limiters, passed in by build_gateway) on rebase.
-        self._route_limiter = SlidingWindowLimiter(settings.rate_limit_per_agent_per_min)
+        # D10: the app's registry (app.state.limiters, via build_gateway); a
+        # private one only for a standalone gateway (tests).
+        registry = limiters if limiters is not None else make_limiters(settings)
+        self._route_limiter = registry.surface("route")
+        self._feedback_limiter = registry.surface("feedback")
         # One subscription bus per (agent, credential subject): a modern-era
         # listen stream is bound to the key that opened it, like a session.
         self._buses: dict[tuple[str, str], tuple[InMemorySubscriptionBus, ListenHandler]] = {}
@@ -964,6 +967,7 @@ class GatewayServer:
                     source="agent",
                     agent_id=principal.agent_id,
                     principal=f"agent:{principal.agent_id}",
+                    limiter=self._feedback_limiter,
                 )
 
         try:
@@ -1223,6 +1227,7 @@ def build_gateway(
         transport_security=transport_security,
         host=host,
         skills=skills,
+        limiters=app.state.limiters,
     )
     gw.mount(app)
     app.state.gateway = gw

@@ -67,6 +67,7 @@ def post_feedback(request_id: str, body: FeedbackIn, request: Request) -> Feedba
                 source=source,
                 agent_id=agent_id,
                 principal=principal,
+                limiter=request.app.state.limiters.surface("feedback"),
             )
     except FeedbackNotFound as exc:
         raise HTTPException(404, str(exc)) from None

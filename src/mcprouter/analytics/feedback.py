@@ -22,9 +22,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from mcprouter.analytics._common import meta
-from mcprouter.execution.ratelimit import KeyedLimiter, SlidingWindowLimiter
+from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.execution.redaction import scrub_log
-from mcprouter.limits import FEEDBACK_LIMIT_PER_MIN
 from mcprouter.models import RouteFeedback, RoutingDecisionRecord
 
 NOTE_MAX = 500
@@ -68,12 +67,9 @@ def clean_note(note: str | None) -> str | None:
     return _BIDI.sub("", scrub_log(note.strip()))[:NOTE_MAX]
 
 
-# The second limiter implementation is gone (P-606): feedback uses the app's
+# The second limiter implementation is gone (P-606): callers pass the app's
 # registry surface ``app.state.limiters.surface("feedback")`` (30/min per
-# principal), passed in by the callers. LIMITER is only the fallback for a
-# caller that passes none yet (routes_feedback / gateway until E2/E3 adopt
-# the registry); it is a plain SlidingWindowLimiter with the same budget.
-LIMITER = SlidingWindowLimiter(FEEDBACK_LIMIT_PER_MIN, 60.0)
+# principal); there is no module-level fallback (no state shared across apps).
 
 
 def _resolve(item: FeedbackItem, surfaced: list[str], names: dict[str, str]) -> str:
@@ -102,14 +98,14 @@ def record_feedback(
     source: Literal["agent", "human"],
     agent_id: str | None,
     principal: str,
-    limiter: KeyedLimiter | None = None,
+    limiter: KeyedLimiter,
 ) -> int:
     """Validate + upsert; returns rows written. agent_id is required for
     source=agent (the ownership check) and ignored for human."""
     if not items or len(items) > MAX_ITEMS:
         raise FeedbackInvalid(f"items must contain 1..{MAX_ITEMS} entries")
     # Before any lookup: 404 probing is rate-limited too.
-    if not (LIMITER if limiter is None else limiter).try_acquire(principal):
+    if not limiter.try_acquire(principal):
         raise FeedbackRateLimited("too many feedback posts; retry in a minute")
     if len(request_id) > 36:
         raise FeedbackNotFound("decision not found")

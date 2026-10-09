@@ -54,7 +54,6 @@ from mcprouter.db import init_db, make_engine, make_session_factory
 from mcprouter.discovery import DiscoveryService, SyncLoop
 from mcprouter.execution.invoker import ConnectorToolInvoker
 from mcprouter.execution.manager import ExecutionManager
-from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.gateway.server import build_gateway, gateway_transport_security
 from mcprouter.gateway.skills import SkillExposure
 from mcprouter.inference.adapters import DeadlineDecisionModel, EngineEmbedder
@@ -158,7 +157,7 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory
-    app.state.limiters = make_limiters(settings)  # E6 fills the registry
+    app.state.limiters = make_limiters(settings)  # D10: one registry per app
 
     # Auth: dev mode only when agent keys, admin token AND principals are all
     # absent — deps_auth logs the per-request `auth.dev_mode` warning.
@@ -212,7 +211,9 @@ def create_app(
         # The gateway redacts the query before calling this (find_tools).
         return pipeline.route(request, scope_resolver(request.agent_id))
 
-    manager = ExecutionManager.from_settings(settings, factory, ConnectorToolInvoker(factory))
+    manager = ExecutionManager.from_settings(
+        settings, factory, ConnectorToolInvoker(factory), limiters=app.state.limiters
+    )
     app.state.execution_manager = manager
     app.include_router(policy_router)
     # REST execution (playground): a thin route over the SAME manager.
@@ -224,7 +225,7 @@ def create_app(
         factory,
         manager,
         EngineSkillPolicy(factory),
-        SlidingWindowLimiter(settings.rate_limit_per_agent_per_min, 60.0),
+        app.state.limiters.surface("skills"),
         cache_dir=settings.skills_cache_dir,
         body_max_bytes=settings.skill_body_max_bytes,
         resource_max_bytes=settings.skill_resource_max_bytes,
