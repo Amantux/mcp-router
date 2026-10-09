@@ -15,6 +15,7 @@ import mcp_types as types
 import pytest
 from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.shared.exceptions import MCPError
+from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
 from mcprouter.gateway.server import INTERNAL_ERROR_MESSAGE, TOO_MANY_SESSIONS
 from tests.support.execution import add_rule
@@ -83,6 +84,7 @@ async def test_per_agent_session_cap_refuses_only_that_agent(live: dict[str, Any
         async with _client("alice") as http:
             third = await http.post(url, json=INIT, headers=ACCEPT)
         assert third.status_code == 429
+        assert third.headers["retry-after"] == "60"
         assert third.json()["error"]["message"] == TOO_MANY_SESSIONS
         assert sum(o["client_id"] == "alice" for o in owners.values()) == 2  # none minted
         # Another agent is unaffected, and alice's open sessions keep working.
@@ -111,8 +113,8 @@ async def test_concurrent_opens_never_overshoot_the_cap(live: dict[str, Any]) ->
             for _ in range(8):
                 tg.start_soon(open_one)
     owners = gw.server.session_manager._session_owners
-    assert sorted(set(codes)) in ([200, 429], [429])
-    assert codes.count(200) <= 2
+    assert sorted(set(codes)) == [200, 429]
+    assert 1 <= codes.count(200) <= 2
     assert sum(o["client_id"] == "alice" for o in owners.values()) == codes.count(200)
 
 
@@ -163,3 +165,63 @@ async def test_rotated_key_cannot_reuse_the_old_session(live: dict[str, Any]) ->
     assert r.status_code == 404
     async with _client("alice") as http:  # the old key is gone altogether
         assert (await http.post(url, json=ping, headers=same)).status_code == 401
+
+
+@pytest.mark.parametrize("version", [*HANDSHAKE_PROTOCOL_VERSIONS, None])
+async def test_cap_applies_to_every_session_opening_version(
+    live: dict[str, Any], version: str | None
+) -> None:
+    """Review SF-3: an initialize CARRYING a handshake protocol-version header
+    also mints a session, so it is capped like a header-less one."""
+    gw, url = live["gw"], live["url"]
+    gw._settings = dataclasses.replace(gw._settings, mcp_max_sessions_per_agent=1)
+    headers = {**ACCEPT, **({"mcp-protocol-version": version} if version else {})}
+    async with _client("alice") as http:
+        assert (await http.post(url, json=INIT, headers=headers)).status_code == 200
+        assert (await http.post(url, json=INIT, headers=headers)).status_code == 429
+
+
+async def test_modern_version_never_mints_a_session(live: dict[str, Any]) -> None:
+    gw, url = live["gw"], live["url"]
+    gw._settings = dataclasses.replace(gw._settings, mcp_max_sessions_per_agent=1)
+    for _ in range(3):
+        async with mcp_session(url, "alice", MODERN) as session:
+            await alive(session, MODERN)
+    assert (MODERN, "server/discover", None) in live["wire"].calls
+    assert not gw.server.session_manager._session_owners
+    assert all(code != 429 for _m, code in live["wire"].statuses)
+
+
+async def test_sessions_of_a_rotated_key_do_not_use_the_new_keys_budget(
+    live: dict[str, Any],
+) -> None:
+    """Review SF-1: the cap is per credential; a leaked key holding the
+    agent's budget cannot lock the agent out after rotation."""
+    from mcprouter.api.deps_auth import hash_key
+    from mcprouter.models import AgentPrincipal
+
+    gw, url, db = live["gw"], live["url"], live["db"]
+    gw._settings = dataclasses.replace(gw._settings, mcp_max_sessions_per_agent=1)
+    new_key = "key_alice_rotated_" + "r" * 30
+    async with _client("alice") as http:
+        assert (await http.post(url, json=INIT, headers=ACCEPT)).status_code == 200
+        assert (await http.post(url, json=INIT, headers=ACCEPT)).status_code == 429
+    with db() as s:
+        s.query(AgentPrincipal).filter_by(agent_id="alice").one().key_hash = hash_key(new_key)
+        s.commit()
+    async with create_mcp_http_client(headers={"Authorization": f"Bearer {new_key}"}) as http:
+        assert (await http.post(url, json=INIT, headers=ACCEPT)).status_code == 200
+
+
+async def test_bearer_scheme_case_is_one_credential(live: dict[str, Any]) -> None:
+    """Review N-1: `Bearer k` and `bearer k` are the same key, so the same session."""
+    from tests.support.execution import KEYS
+
+    url = live["url"]
+    async with create_mcp_http_client(headers={"Authorization": f"Bearer {KEYS['alice']}"}) as h:
+        opened = await h.post(url, json=INIT, headers=ACCEPT)
+    sid = opened.headers["mcp-session-id"]
+    ping = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+    same = {**ACCEPT, "mcp-session-id": sid, "mcp-protocol-version": "2025-11-25"}
+    async with create_mcp_http_client(headers={"Authorization": f"bearer {KEYS['alice']}"}) as h:
+        assert (await h.post(url, json=ping, headers=same)).status_code == 200

@@ -74,7 +74,13 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from mcprouter import __version__
 from mcprouter.analytics import feedback as _fb
-from mcprouter.api.deps_auth import AuthenticationError, SecurityConfig, hash_key, resolve_principal
+from mcprouter.api.deps_auth import (
+    AuthenticationError,
+    SecurityConfig,
+    hash_key,
+    parse_bearer,
+    resolve_principal,
+)
 from mcprouter.execution.manager import ExecutionManager, ExecutionResult, stable_tool_id
 from mcprouter.execution.ratelimit import SlidingWindowLimiter
 from mcprouter.execution.redaction import redact, scrub_log
@@ -385,7 +391,7 @@ class _AuthASGI:
         # session is bound to the KEY that created it: after a key rotation
         # the old session id answers 404 and the client re-initializes. The
         # raw key never sits in request state.
-        credential = hash_key(authorization or "dev")
+        credential = session_subject(authorization)
         token = AccessToken(
             token=credential, client_id=principal.agent_id, scopes=[], subject=credential
         )
@@ -395,10 +401,11 @@ class _AuthASGI:
         if not _opens_session(scope):
             await self._inner(scope, receive, send)
             return
-        if not self._gw._reserve_open(principal.agent_id):
+        if not self._gw._reserve_open(principal.agent_id, credential):
             await _json_response(
                 send,
                 429,
+                [(b"retry-after", str(SESSION_RETRY_AFTER_S).encode())],
                 {
                     "jsonrpc": "2.0",
                     "id": None,
@@ -409,7 +416,19 @@ class _AuthASGI:
         try:
             await self._inner(scope, receive, send)
         finally:
-            self._gw._release_open(principal.agent_id)
+            self._gw._release_open(principal.agent_id, credential)
+
+
+SESSION_RETRY_AFTER_S = 60
+
+
+def session_subject(authorization: str | None) -> str:
+    """The session-binding subject: a hash of the presented KEY (scheme case
+    and spacing normalised by ``parse_bearer``, so ``Bearer k``/``bearer k``
+    are one credential), domain-separated so it never equals the stored
+    ``key_hash``. Dev mode (no header) is one constant subject. Only called
+    after authentication succeeded, so ``parse_bearer`` cannot raise here."""
+    return hash_key("mcp-session:" + (parse_bearer(authorization) or "dev"))
 
 
 TOO_MANY_SESSIONS = "Too many open sessions for this agent; close one and retry."
@@ -419,7 +438,10 @@ def _opens_session(scope: Scope) -> bool:
     """A request the SDK would answer by minting a NEW handshake-era session:
     a POST without ``Mcp-Session-Id`` whose protocol-version header is absent
     or a handshake version (mcp 2.3.0 ``StreamableHTTPSessionManager.
-    _handle_request``: any other version goes to the stateless modern path)."""
+    _handle_request``: any other version goes to the stateless modern path).
+    Non-POST requests without a session id are briefly registered by the SDK
+    and then refused (400/405); they are not counted here (bounded, never
+    established)."""
     if scope.get("method") != "POST":
         return False
     headers = Headers(scope=scope)
@@ -429,7 +451,9 @@ def _opens_session(scope: Scope) -> bool:
     return version is None or version in HANDSHAKE_PROTOCOL_VERSIONS
 
 
-async def _json_response(send: Send, status: int, payload: dict[str, Any]) -> None:
+async def _json_response(
+    send: Send, status: int, extra_headers: list[tuple[bytes, bytes]], payload: dict[str, Any]
+) -> None:
     body = json.dumps(payload).encode()
     await send(
         {
@@ -438,6 +462,7 @@ async def _json_response(send: Send, status: int, payload: dict[str, Any]) -> No
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode()),
+                *extra_headers,
             ],
         }
     )
@@ -472,7 +497,7 @@ class GatewayServer:
         self._legacy: dict[str, OrderedDict[str, ServerSession]] = {}
         self._lock = threading.Lock()
         # Session-opening requests in flight per agent (see _reserve_open).
-        self._opening: dict[str, int] = {}
+        self._opening: dict[tuple[str, str], int] = {}
         self.server = _RouterMCPServer(
             "mcp-router",
             version=__version__,
@@ -541,40 +566,50 @@ class GatewayServer:
             sessions = self._legacy.setdefault(agent_id, OrderedDict())
             sessions[sid] = ctx.session
             sessions.move_to_end(sid)
-            while len(sessions) > MAX_TRACKED_SESSIONS_PER_AGENT:
+            tracked = max(MAX_TRACKED_SESSIONS_PER_AGENT, self._settings.mcp_max_sessions_per_agent)
+            while len(sessions) > tracked:
                 sessions.popitem(last=False)
 
-    def _live_sessions(self, agent_id: str) -> int:
-        """Open handshake-era sessions created by ``agent_id``. Reads the SDK
-        session manager's owner map (mcp 2.3.0 ``_session_owners``: session id
-        -> (client_id, issuer, subject) of the creating credential); entries
-        leave it on DELETE, idle timeout or crash."""
+    def _live_sessions(self, agent_id: str, subject: str) -> int:
+        """Open handshake-era sessions created by ``agent_id`` with the
+        credential ``subject``. Reads the SDK session manager's owner map
+        (mcp 2.3.0 ``_session_owners``: session id -> (client_id, issuer,
+        subject) of the creating credential); entries leave it on DELETE, idle
+        timeout or crash. Counted per CREDENTIAL, so sessions opened with a
+        rotated-away key never use up the new key's budget."""
         owners = self.server.session_manager._session_owners
-        return sum(1 for owner in list(owners.values()) if owner["client_id"] == agent_id)
+        return sum(
+            1
+            for owner in list(owners.values())
+            if owner["client_id"] == agent_id and owner["subject"] == subject
+        )
 
-    def _reserve_open(self, agent_id: str) -> bool:
-        """Admit a session-opening request unless the agent is at its cap.
+    def _reserve_open(self, agent_id: str, subject: str) -> bool:
+        """Admit a session-opening request unless the agent's credential is at
+        its cap.
 
         Counts live sessions PLUS opening requests in flight, so concurrent
         initializes can never overshoot ``mcp_max_sessions_per_agent`` (an
         in-flight open that the SDK already registered is briefly counted
         twice: the error is toward refusing, never toward exceeding)."""
         cap = self._settings.mcp_max_sessions_per_agent
+        key = (agent_id, subject)
         with self._lock:
-            pending = self._opening.get(agent_id, 0)
-            if self._live_sessions(agent_id) + pending >= cap:
+            pending = self._opening.get(key, 0)
+            if self._live_sessions(agent_id, subject) + pending >= cap:
                 log.warning("gateway.session_cap agent=%s", scrub_log(agent_id))
                 return False
-            self._opening[agent_id] = pending + 1
+            self._opening[key] = pending + 1
             return True
 
-    def _release_open(self, agent_id: str) -> None:
+    def _release_open(self, agent_id: str, subject: str) -> None:
+        key = (agent_id, subject)
         with self._lock:
-            left = self._opening.get(agent_id, 1) - 1
+            left = self._opening.get(key, 1) - 1
             if left > 0:
-                self._opening[agent_id] = left
+                self._opening[key] = left
             else:
-                self._opening.pop(agent_id, None)
+                self._opening.pop(key, None)
 
     def _bus(self, agent_id: str) -> tuple[InMemorySubscriptionBus, ListenHandler]:
         with self._lock:
