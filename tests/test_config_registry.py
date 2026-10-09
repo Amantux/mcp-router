@@ -3,6 +3,7 @@ code agree. No database, no network."""
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import fields
 from pathlib import Path
@@ -195,3 +196,64 @@ def test_enum_values_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCPR_LOG_LEVEL", "debug")
     s = Settings.from_env()
     assert (s.embedding_backend, s.log_level) == ("bge", "DEBUG")
+
+
+# --- P-111 (MT-5): no config drift ---------------------------------------------
+
+# MCPR_* names in code that are deliberately NOT settings (each with a reason).
+NON_ROUTER = {
+    "MCPR_AGENT_KEY": "scripts/smoke.sh input: the key part of one MCPR_AGENT_KEYS entry",
+    "MCPR_AOAI": "prefix in messages/f-strings (MCPR_AOAI_*), not a variable",
+}
+# Every os.environ / os.getenv use under src/, as file::function. A new env
+# read must be added here deliberately (and almost always belongs in settings).
+ENVIRON_ALLOWLIST = {
+    "settings.py::from_env",  # Settings.from_env and AoaiSettings.from_env
+    "settings.py::_entrypoint_main",
+    "api/app.py::create_app",  # the env mapping deps_auth reads the token from
+    "skills/gitsource.py::_default_runner",  # PATH only, for the git child
+}
+SRC = ROOT / "src" / "mcprouter"
+_NAME_RE = re.compile(r"MCPR_[A-Z0-9_]*[A-Z0-9]")
+
+
+def _code_names() -> dict[str, str]:
+    found: dict[str, str] = {}
+    paths = [
+        *SRC.rglob("*.py"),
+        *(ROOT / "scripts").glob("*"),
+        *ROOT.glob("Dockerfile*"),
+        *ROOT.glob("docker-compose*.yml"),
+    ]
+    for p in paths:
+        if p.is_file() and "__pycache__" not in p.parts:
+            for name in _NAME_RE.findall(p.read_text(errors="replace")):
+                found.setdefault(name, str(p.relative_to(ROOT)))
+    return found
+
+
+def test_every_mcpr_name_in_code_is_registered() -> None:
+    declared = registry_vars()
+    stray = {n: f for n, f in _code_names().items() if n not in declared and n not in NON_ROUTER}
+    assert not stray, f"MCPR_* used in code but not in SETTINGS_SPEC/ENV_ONLY_SPEC: {stray}"
+
+
+def _environ_sites(node: ast.AST, rel: str, fn: str, out: set[str]) -> None:
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        fn = node.name
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in ("environ", "getenv", "environb")
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    ):
+        out.add(f"{rel}::{fn}")
+    for child in ast.iter_child_nodes(node):
+        _environ_sites(child, rel, fn, out)
+
+
+def test_environ_reads_only_at_allowlisted_sites() -> None:
+    sites: set[str] = set()
+    for p in SRC.rglob("*.py"):
+        _environ_sites(ast.parse(p.read_text()), str(p.relative_to(SRC)), "<module>", sites)
+    assert sites == ENVIRON_ALLOWLIST
