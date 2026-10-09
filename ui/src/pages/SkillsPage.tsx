@@ -28,7 +28,7 @@ import { useDebounced } from "../hooks/useDebounced";
 import { useLoader } from "../hooks/useLoader";
 
 const PAGE_SIZE = 50;
-const FLAG_LABEL: Record<string, string> = { secret_like: "secret-like", body_truncated: "body truncated", oversize: "oversize" };
+const FLAG_LABEL: Record<string, string> = { secret_like: "secret-like", body_truncated: "body truncated", oversize: "oversize", resource_oversize: "resource oversize" };
 
 export function FlagChips({ flags }: { flags?: string[] }) {
   if (!flags?.length) return null;
