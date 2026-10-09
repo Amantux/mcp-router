@@ -273,15 +273,24 @@ SKILL_CLASSIFIER_NAME = "skill-rules-v1"
 _SKILL_WIDENING_RANK = {"read": 0, "write": 1, "execute": 2, "unknown": 3}
 
 
-def apply_skill_classification(session: Any, skill_id: str, c: Classification) -> bool:
+def apply_skill_classification(
+    session: Any, skill_id: str, c: Classification, *, content_changed: bool = False
+) -> bool:
     """Write an AUTOMATIC skill classification. Returns False (no change) when
     a human reviewed the skill, or when the write would WIDEN a previously
     auto-classified risk class (re-classification may only move toward
     execute/unknown). A skill never auto-classified (`classification_source`
     NULL) takes any value. Both guards live in the UPDATE's WHERE clause so a
     concurrent human review still wins.
+
+    `content_changed=True` (the skill's body/manifest changed since review):
+    a REVIEWED row may be re-classified, but only toward execute/unknown
+    (never toward read); it loses its reviewed mark and gains the
+    "review_stale" ingest flag. Unchanged content keeps the reviewed guard
+    absolute.
     """
-    from sqlalchemy import or_, update
+    from sqlalchemy import JSON, and_, case, cast, false, literal, or_, update
+    from sqlalchemy.dialects.postgresql import JSONB
 
     from mcprouter.models import SkillRecord
 
@@ -289,17 +298,48 @@ def apply_skill_classification(session: Any, skill_id: str, c: Classification) -
         raise ValueError("operation must be one of read, write, execute, unknown.")
     rank = _SKILL_WIDENING_RANK[c.operation]
     not_wider = [op for op, r in _SKILL_WIDENING_RANK.items() if r <= rank]
+    auto_ok = and_(
+        SkillRecord.classification_reviewed.is_(False),
+        or_(
+            SkillRecord.classification_source.is_(None),
+            SkillRecord.operation.in_(not_wider),
+        ),
+    )
+    values: dict[str, Any] = {
+        "operation": c.operation,
+        "domain": c.domain,
+        "classification_source": SKILL_CLASSIFIER_NAME,
+    }
+    if content_changed:
+        stale_ok = and_(
+            SkillRecord.classification_reviewed.is_(True),
+            SkillRecord.operation.in_(not_wider),
+        )
+        where = or_(auto_ok, stale_ok)
+        flags = _coalesce_jsonb(cast(SkillRecord.ingest_flags, JSONB))
+        stale = cast(literal('["review_stale"]'), JSONB)
+        values["ingest_flags"] = case(
+            (
+                and_(SkillRecord.classification_reviewed.is_(True), ~flags.contains(stale)),
+                cast(flags.op("||")(stale), JSON),
+            ),
+            else_=SkillRecord.ingest_flags,
+        )
+        values["classification_reviewed"] = false()
+    else:
+        where = auto_ok
     stmt = (
         update(SkillRecord)
-        .where(
-            SkillRecord.id == skill_id,
-            SkillRecord.classification_reviewed.is_(False),
-            or_(
-                SkillRecord.classification_source.is_(None),
-                SkillRecord.operation.in_(not_wider),
-            ),
-        )
-        .values(operation=c.operation, domain=c.domain, classification_source=SKILL_CLASSIFIER_NAME)
+        .where(SkillRecord.id == skill_id, where)
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
     return bool(session.execute(stmt).rowcount == 1)
+
+
+def _coalesce_jsonb(expr: Any) -> Any:
+    """COALESCE(expr, '[]'::jsonb) — a NULL ingest_flags reads as empty."""
+    from sqlalchemy import cast, func, literal
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    return func.coalesce(expr, cast(literal("[]"), JSONB))
