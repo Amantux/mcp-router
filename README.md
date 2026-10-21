@@ -78,6 +78,10 @@ The decision model is pluggable via `MCPR_DECISION_BACKEND` (default `determinis
 - `deterministic` (default) — no model; also the automatic fallback on any backend error.
 - `laya` — local model, GPU if available. Needs the `[inference]` extra or the inference image
   (`docker-compose.inference.yml`, plus `docker-compose.gpu.yml` for NVIDIA: [deploy.md § Flavors](docs/deploy.md#flavors)).
+- `lyla` — vendored catalog-selection engine (`Amantux/lyla`, MIT, stdlib-only — no
+  `[inference]` extra). Ranks the router's own tool+skill catalog (tags, operation, cost,
+  success rate, connectivity); knobs `MCPR_LYLA_K_COARSE`, `MCPR_LYLA_EPSILON`,
+  `MCPR_LYLA_MIN_CONFIDENCE`.
 - `remote` — hosted Jev (AIML API) or **another MCP Router's** `POST /api/v1/decision/systemone` edge endpoint.
 - `aoai` — Azure OpenAI v1 (decision), plus `MCPR_EMBEDDING_BACKEND=aoai` for embeddings.
 

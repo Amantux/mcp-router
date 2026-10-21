@@ -24,7 +24,7 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_LOG_FORMAT` | `console` | `console` \| `json` | Log format (compose sets `json`). |
 | `MCPR_EMBEDDING_BACKEND` | `hash` | `hash` \| `bge` \| `aoai` | Embedding backend. `bge` needs the `[inference]` extra; `aoai` needs the `MCPR_AOAI_*` variables. |
 | `MCPR_EMBEDDING_MODEL_ID` | `BAAI/bge-small-en-v1.5` | string | Hugging Face model id for `bge` embeddings. |
-| `MCPR_DECISION_BACKEND` | `deterministic` | `deterministic` \| `laya` \| `remote` \| `aoai` | Decision backend. `laya` needs the `[inference]` extra; any backend error falls back to `deterministic`. |
+| `MCPR_DECISION_BACKEND` | `deterministic` | `deterministic` \| `laya` \| `remote` \| `aoai` \| `lyla` | Decision backend. `laya` needs the `[inference]` extra; any backend error falls back to `deterministic`. |
 | `MCPR_LAYA_MODEL_ID` | `convaiinnovations/laya` | string | Hugging Face model id for the Laya decision model. |
 | `MCPR_DEVICE` | `auto` | `auto` \| `cpu` \| `cuda` \| `cuda:<index>` | Inference device: `auto`, `cpu`, `cuda` or `cuda:<index>`. |
 | `MCPR_OPERATING_MODE` | `balanced` | `performance` \| `balanced` \| `battery` | Inference concurrency profile (performance 4, balanced 2, battery 1 concurrent model calls). |
@@ -32,6 +32,9 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_IDLE_UNLOAD_S` | `300.0` | number | Battery mode only: unload models after this many idle seconds. |
 | `MCPR_EMBED_BATCH_SIZE` | `32` | integer | Embedding batch size during catalog sync. |
 | `MCPR_LAYA_NOUL_MODE` | `choice` | `choice` \| `native` | How the Laya no-match question is asked. |
+| `MCPR_LYLA_K_COARSE` | `100` | integer | `lyla` backend: cap on the coarse-retrieval shortlist before fine scoring. |
+| `MCPR_LYLA_EPSILON` | `0.03` | number | `lyla` backend: score gap treated as a near tie (tie-break or ranked-list mode). |
+| `MCPR_LYLA_MIN_CONFIDENCE` | `0.4` | number | `lyla` backend: abstain when the best score is below this. |
 | `MCPR_DECISION_TIMEOUT_S` | `2.0` | number | Per-question deadline for the decision model; on overrun the route falls back to deterministic ranking. |
 | `MCPR_MAX_EXPOSED_TOOLS` | `8` | integer | Global cap on tools exposed per route (requests and principals can lower it, never raise it). |
 | `MCPR_MAX_EXPOSED_SERVERS` | unset | integer (optional) | Optional global cap on distinct servers per route. Unset means no cap. |

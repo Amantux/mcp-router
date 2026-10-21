@@ -49,6 +49,11 @@ DOCS: dict[str, str] = {
     "MCPR_DECISION_BACKEND": "Decision backend. `laya` needs the `[inference]` extra; any "
     "backend error falls back to `deterministic`.",
     "MCPR_LAYA_MODEL_ID": "Hugging Face model id for the Laya decision model.",
+    "MCPR_LYLA_K_COARSE": "`lyla` backend: cap on the coarse-retrieval shortlist before "
+    "fine scoring.",
+    "MCPR_LYLA_EPSILON": "`lyla` backend: score gap treated as a near tie (tie-break or "
+    "ranked-list mode).",
+    "MCPR_LYLA_MIN_CONFIDENCE": "`lyla` backend: abstain when the best score is below this.",
     "MCPR_DEVICE": "Inference device: `auto`, `cpu`, `cuda` or `cuda:<index>`.",
     "MCPR_OPERATING_MODE": "Inference concurrency profile (performance 4, balanced 2, battery 1 "
     "concurrent model calls).",

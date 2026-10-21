@@ -27,8 +27,11 @@ class Settings:
     # Inference
     embedding_backend: str = "hash"  # hash | bge | aoai  (bge needs the [inference] extra)
     embedding_model_id: str = "BAAI/bge-small-en-v1.5"
-    decision_backend: str = "deterministic"  # deterministic | laya | remote | aoai
+    decision_backend: str = "deterministic"  # deterministic | laya | remote | aoai | lyla
     laya_model_id: str = "convaiinnovations/laya"
+    lyla_k_coarse: int = 100  # lyla: coarse-retrieval shortlist cap
+    lyla_epsilon: float = 0.03  # lyla: near-tie band for tie-break/abstain
+    lyla_min_confidence: float = 0.4  # lyla: abstain below this confidence
     device: str = "auto"  # auto | cpu | cuda | cuda:<index>
     operating_mode: str = "balanced"  # performance | balanced | battery
     models_cache_dir: str = "./models-cache"
@@ -223,7 +226,7 @@ _MAX_KEY_FILE_BYTES = 64 * 1024
 #   scope     app | entrypoint | compose
 
 EMBEDDING_BACKEND_CHOICES = ("hash", "bge", "aoai")
-DECISION_BACKEND_CHOICES = ("deterministic", "laya", "remote", "aoai")
+DECISION_BACKEND_CHOICES = ("deterministic", "laya", "remote", "aoai", "lyla")
 OPERATING_MODE_CHOICES = ("performance", "balanced", "battery")
 LAYA_NOUL_MODE_CHOICES = ("choice", "native")
 LOG_FORMAT_CHOICES = ("console", "json")
@@ -306,6 +309,15 @@ SETTINGS_SPEC: tuple[SettingSpec, ...] = (
     ),
     _s("embed_batch_size", "int", "Embedding batch size.", lo=1, hi=4096),
     _s("laya_noul_mode", "enum", "Laya no-UL question mode.", choices=LAYA_NOUL_MODE_CHOICES),
+    _s("lyla_k_coarse", "int", "lyla backend: coarse-retrieval shortlist cap.", lo=1, hi=10_000),
+    _s("lyla_epsilon", "float", "lyla backend: near-tie band.", lo=0, hi=1),
+    _s(
+        "lyla_min_confidence",
+        "float",
+        "lyla backend: abstain below this confidence.",
+        lo=0,
+        hi=1,
+    ),
     _s("decision_timeout_s", "float", "Deadline per decision-model call.", lo=0.01, hi=600),
     # routing
     _s("max_exposed_tools", "int", "Tools exposed per route.", lo=1, hi=1000),
