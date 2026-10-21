@@ -62,7 +62,7 @@ MODE_CONCURRENCY: dict[str, int] = {"performance": 4, "balanced": 2, "battery": 
 DEFAULT_IDLE_UNLOAD_S = 300.0
 DEFAULT_EMBED_BATCH = 32
 EMBEDDING_BACKENDS = ("hash", "bge", "aoai")
-DECISION_BACKENDS = ("deterministic", "laya", "remote", "aoai")
+DECISION_BACKENDS = ("deterministic", "laya", "remote", "aoai", "lyla")
 
 EmbeddingLoader = Callable[[Settings, str], EmbeddingBackend]
 DecisionLoader = Callable[[Settings, str, EmbeddingBackend], DecisionModel]
@@ -132,6 +132,14 @@ def _pkg_version(dist: str) -> str | None:
         return metadata.version(dist)
     except metadata.PackageNotFoundError:
         return None
+
+
+def _lyla_commit() -> str:
+    """The vendored lyla's upstream commit (lazy import: keeps the zero-ML
+    import surface of this module exact)."""
+    from mcprouter.inference.lyla_backend import LYLA_COMMIT
+
+    return LYLA_COMMIT
 
 
 class ConcurrencyLimiter:
@@ -258,6 +266,12 @@ def default_embedding_loader(settings: Settings, device: str) -> EmbeddingBacken
 def default_decision_loader(
     settings: Settings, device: str, embedder: EmbeddingBackend
 ) -> DecisionModel:
+    if settings.decision_backend == "lyla":
+        # Vendored Lyla: stdlib-only, `device` is irrelevant (embeddings come
+        # from the engine's LOCAL embedder; catalog failures degrade curated).
+        from mcprouter.inference.lyla_backend import build_lyla_decision_model
+
+        return build_lyla_decision_model(settings, embedder)
     from mcprouter.inference.laya import LayaDecisionModel
 
     return LayaDecisionModel.load(
@@ -266,6 +280,20 @@ def default_decision_loader(
         cache_dir=_hub_cache(settings),
         noul_mode=settings.laya_noul_mode,
     )
+
+
+def _local_decision_embedder(
+    embedder: EmbeddingBackend, ml_embedder: EmbeddingBackend | None
+) -> EmbeddingBackend:
+    """The embedder handed to the lyla backend: a LOCAL model backend (bge) or
+    the hash projection. A remote (aoai) embedder is substituted with the hash
+    backend — lyla's catalog build must not embed through the network (same
+    rule the deterministic decider applies)."""
+    if ml_embedder is not None:
+        return ml_embedder
+    if isinstance(embedder, HashEmbeddingBackend):
+        return embedder
+    return HashEmbeddingBackend()
 
 
 # ------------------------------------------------------------------ facades
@@ -383,10 +411,15 @@ class InferenceEngine:
                 ml_embedder = None
             decider: DecisionModel = DeterministicDecisionModel(embedder=ml_embedder)
             dec_reason: str | None = None
-            if s.decision_backend in ("laya", "remote", "aoai"):
+            if s.decision_backend in ("laya", "remote", "aoai", "lyla"):
                 try:
                     if s.decision_backend == "laya":
                         decider = self._decision_loader(s, device, embedder)
+                    elif s.decision_backend == "lyla":
+                        # lyla adapts a LOCAL embedder (see _local_decision_embedder).
+                        decider = self._decision_loader(
+                            s, device, _local_decision_embedder(embedder, ml_embedder)
+                        )
                     elif s.decision_backend == "remote":
                         decider = _build_remote_decider(s)
                     else:
@@ -605,5 +638,8 @@ class InferenceEngine:
                     "transformers": _pkg_version("transformers"),
                     "sentenceTransformers": _pkg_version("sentence-transformers"),
                     "laya": _pkg_version("laya"),
+                    # lyla is vendored (mcprouter.lyla), not a distribution: the
+                    # health output shows the upstream commit it was vendored at.
+                    "lyla": _lyla_commit(),
                 },
             }

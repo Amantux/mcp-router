@@ -10,6 +10,7 @@ and falls back to the deterministic model on any typed backend error.
 |---|---|---|---|
 | `deterministic` (default) | local | — | no model; always available; the fallback |
 | `laya` | local, in-process | — | needs the `[inference]` extra (or the inference image); GPU if present, CPU otherwise |
+| `lyla` | local, in-process | — | vendored [`Amantux/lyla`](https://github.com/Amantux/lyla) (MIT, stdlib-only); ranks the router's own catalog; no extra needed |
 | `remote` | hosted Jev (AIML API) **or** another MCP Router | `POST https://api.aimlapi.com/v1/decisions` / `POST https://<router>/api/v1/decision/systemone` | System One decision shape |
 | `aoai` | Azure OpenAI (v1 API) | `POST {endpoint}/openai/v1/chat/completions` | strict JSON-schema output |
 
@@ -20,6 +21,12 @@ Embeddings (`MCPR_EMBEDDING_BACKEND`): `hash` (default; zero-ML hash projection)
 ## Configuration
 
 ```bash
+# Lyla: vendored catalog-selection engine (no downloads, no extra)
+MCPR_DECISION_BACKEND=lyla
+MCPR_LYLA_K_COARSE=100        # coarse-retrieval shortlist cap before fine scoring
+MCPR_LYLA_EPSILON=0.03        # near-tie band (tie-break / ranked-list mode)
+MCPR_LYLA_MIN_CONFIDENCE=0.4  # abstain below this confidence
+
 # Remote: hosted Jev
 MCPR_DECISION_BACKEND=remote
 MCPR_DECISION_ENDPOINT=https://api.aimlapi.com/v1/decisions
@@ -43,6 +50,29 @@ MCPR_AOAI_MAX_RETRIES=2
 ```
 
 Prefer the `_FILE` variants: the key never appears in the process environment.
+
+## Lyla
+
+`MCPR_DECISION_BACKEND=lyla` runs the vendored [Lyla](https://github.com/Amantux/lyla)
+decision model (`mcprouter.lyla`, vendored verbatim at a pinned upstream commit, MIT,
+stdlib-only — no `[inference]` extra and no model download). It is a catalog
+selection/ranking engine: hard filter → coarse retrieval (ANN + lexical, RRF-fused)
+→ fine scoring → tie-break/abstain.
+
+- The router's tool+skill catalog is adapted into Lyla's `CatalogIndex`
+  (descriptions, capability/domain tags, operation, I/O types, latency/token cost
+  classes, success rates, connectivity), rebuilt when the catalog generation
+  changes; the engine's LOCAL embedding backend (hash or bge) supplies Lyla's
+  vectors through an adapter.
+- `choice` asks "which domain / operation" — the option whose best-matching
+  catalog entries score highest wins; `score`/`score_batch` map each asked-about
+  candidate's Lyla score onto the router's ordered relevance scale;
+  `noul` reads Lyla's abstention, inverted, on the same scale as
+  deterministic-v1's no-match gate (so `MCPR_ROUTE_CONFIDENCE_FLOOR` keeps its
+  meaning).
+- A catalog/DB failure raises a curated `ModelUnavailableError` and the engine
+  degrades to `deterministic-v1` like any other optional backend. Deadlines
+  (`MCPR_DECISION_TIMEOUT_S`) bound each call as usual.
 
 ## Verified wire shapes
 
