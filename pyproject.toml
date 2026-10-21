@@ -55,6 +55,9 @@ packages = ["src/mcprouter"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests", "testbed"]
+# Vendored verbatim from Amantux/lyla @ 013ff01 (MIT; see src/mcprouter/lyla/):
+# never re-formatted or auto-fixed here — change it upstream and re-vendor.
+extend-exclude = ["src/mcprouter/lyla"]
 
 [tool.ruff.lint]
 # Pinned select (house rule): no version-default drift.
@@ -77,6 +80,21 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = ["torch", "torch.*", "numpy", "numpy.*", "sentence_transformers", "sentence_transformers.*", "huggingface_hub", "huggingface_hub.*", "laya", "laya.*"]
 ignore_missing_imports = true
+
+# The vendored lyla package (mcprouter.lyla) is checked as-is but its upstream
+# style (typing.Dict/List, optional annotations, unused locals) is not held to
+# the strict profile; the adapter in inference/lyla_backend.py carries the
+# contract. Errors INSIDE the vendored modules are ignored.
+[[tool.mypy.overrides]]
+module = ["mcprouter.lyla", "mcprouter.lyla.*"]
+ignore_errors = true
+
+# The lyla adapter is the one module that CONSTRUCTS vendored lyla classes
+# (CatalogIndex's permissive upstream signature is unannotated): relax exactly
+# that flag, keep every other strict check.
+[[tool.mypy.overrides]]
+module = "mcprouter.inference.lyla_backend"
+disallow_untyped_calls = false
 
 # Relaxed for test code: untyped test functions/fixtures are idiomatic pytest.
 [[tool.mypy.overrides]]
