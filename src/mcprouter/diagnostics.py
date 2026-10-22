@@ -6,19 +6,17 @@ This module provides async-friendly check functions that each return a dict with
 All checks are non-blocking and never raise; infrastructure errors return ok=False
 with a plain-language detail (no SQL/DSN in the text).
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from mcprouter.inference.engine import InferenceEngine
-from mcprouter.interfaces import DecisionModel
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -131,7 +129,7 @@ def check_database(settings: Settings) -> dict[str, Any]:
     except SQLAlchemyError as exc:
         log.warning("health: database unreachable (%s)", type(exc).__name__)
         return make_check("database", False, f"Database unreachable: {type(exc).__name__}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a doctor probe reports any failure mode, never crashes
         log.warning("health: database check failed (%s)", type(exc).__name__)
         return make_check("database", False, f"Database check failed: {type(exc).__name__}")
 
@@ -186,7 +184,7 @@ def check_migrations(settings: Settings) -> dict[str, Any]:
                 False,
                 f"Database is at {current_rev}, head is {head_rev}",
             )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a doctor probe reports any failure mode, never crashes
         log.warning("health: migration check failed (%s)", type(exc).__name__)
         return make_check(
             "migrations",
@@ -211,11 +209,12 @@ def check_decision_backend(settings: Settings, inference: InferenceEngine | None
         backend = settings.decision_backend
 
         if backend == "deterministic":
-            return make_check("decisionBackend", True, "Deterministic backend (no external dependency)")
+            return make_check(
+                "decisionBackend", True, "Deterministic backend (no external dependency)"
+            )
 
         # For other backends, try a simple probe
         # Create a minimal decision model for probing
-        from mcprouter.inference.adapters import DeadlineDecisionModel
 
         # Build a simple probe question
         probe_question = "Is this a test?"
@@ -230,7 +229,7 @@ def check_decision_backend(settings: Settings, inference: InferenceEngine | None
                     False,
                     "Embedder not available (inference engine not loaded)",
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a doctor probe reports any failure mode, never crashes
             return make_check(
                 "decisionBackend",
                 False,
@@ -243,14 +242,14 @@ def check_decision_backend(settings: Settings, inference: InferenceEngine | None
             decision_model = getattr(inference, "decision_model", None)
             if decision_model is not None:
                 # Try a simple probe
-                result = decision_model(
+                decision_model(  # probe call; the OK status is the assertion
                     question=probe_question,
                     choices=probe_choices,
                     temperature=0.0,
                 )
                 # If we get here, the backend is reachable
                 return make_check("decisionBackend", True, f"{backend} backend reachable")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a doctor probe reports any failure mode, never crashes
             log.warning("health: decision backend probe failed (%s)", type(exc).__name__)
             return make_check(
                 "decisionBackend",
@@ -279,7 +278,7 @@ def check_decision_backend(settings: Settings, inference: InferenceEngine | None
             )
 
         return make_check("decisionBackend", False, f"Unknown decision backend: {backend}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a doctor probe reports any failure mode, never crashes
         log.warning("health: decision backend check failed (%s)", type(exc).__name__)
         return make_check(
             "decisionBackend",
@@ -311,7 +310,9 @@ def check_discovery(settings: Settings) -> dict[str, Any]:
 # ----------------------------------------------------------------- main diagnostics function
 
 
-async def run_diagnostics(settings: Settings, inference: InferenceEngine | None = None) -> dict[str, Any]:
+async def run_diagnostics(
+    settings: Settings, inference: InferenceEngine | None = None
+) -> dict[str, Any]:
     """Run all diagnostics checks and return aggregated results.
 
     Returns:

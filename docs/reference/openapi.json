@@ -2316,6 +2316,30 @@
         }
       }
     },
+    "/api/v1/diag": {
+      "get": {
+        "tags": [
+          "diagnostics"
+        ],
+        "summary": "Diagnostics",
+        "description": "Get comprehensive health status for all components.\n\nReturns a single status field (healthy|degraded|unhealthy) along with\nper-check details. This endpoint is admin-protected like /metrics.\n\nResponse shape:\n    {\n        \"status\": \"healthy\" | \"degraded\" | \"unhealthy\",\n        \"checks\": [\n            {\"name\": str, \"ok\": bool, \"detail\": str | None},\n            ...\n        ],\n        \"duration_ms\": float\n    }",
+        "operationId": "diagnostics_api_v1_diag_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Diagnostics Api V1 Diag Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/skill-sources": {
       "get": {
         "tags": [

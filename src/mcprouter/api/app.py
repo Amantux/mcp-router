@@ -36,7 +36,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
-from mcprouter.api import hardening, routes_dedup, routes_diag, routes_skill_sources, routes_skills, routes_tools
+from mcprouter.api import (
+    hardening,
+    routes_dedup,
+    routes_skill_sources,
+    routes_skills,
+    routes_tools,
+)
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.errors import install_error_handlers
