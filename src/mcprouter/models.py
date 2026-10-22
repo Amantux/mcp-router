@@ -73,6 +73,29 @@ class MCPServerRecord(Base):
     tools: Mapped[list[MCPToolRecord]] = relationship(
         back_populates="server", cascade="all, delete-orphan"
     )
+    health_events: Mapped[list[ServerHealthEvent]] = relationship(
+        back_populates="server", cascade="all, delete-orphan"
+    )
+
+
+class ServerHealthEvent(Base):
+    """One row per health status transition (FR-06)."""
+
+    __tablename__ = "server_health_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    server_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("mcp_servers.id", ondelete="CASCADE"), index=True
+    )
+    prev_status: Mapped[str] = mapped_column(String(16))  # healthy|degraded|offline|unknown
+    status: Mapped[str] = mapped_column(String(16))  # healthy|degraded|offline|unknown
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(16))  # sync|refresh|check
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+
+    server: Mapped[MCPServerRecord] = relationship(back_populates="health_events")
 
 
 class MCPToolRecord(Base):

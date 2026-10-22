@@ -64,6 +64,8 @@ import type {
   ToolDetail,
   ToolQuery,
   JsonObject,
+  ServerHealthEvent,
+  ServerHealthEventsPage,
 } from "./types";
 import { bearerFor, effectiveIdentity, noteResponse, setAgentId, type Identity } from "./auth";
 
@@ -301,6 +303,18 @@ export function setServerEnabled(id: string, enabled: boolean): Promise<MCPServe
 /** DELETE /servers/{id} (204). 409 while policy rules reference it or it has execution history. */
 export async function deleteServer(id: string): Promise<void> {
   await request("DELETE", `${API_BASE}/servers/${encodeURIComponent(id)}`);
+}
+
+/** GET /servers/{id}/health-events: admin-only, newest-first, paged. */
+export async function listServerHealthEvents(id: string, q: { limit?: number; offset?: number }, signal?: AbortSignal): Promise<ServerHealthEventsPage> {
+  const raw = await request<unknown>(`GET`, `${API_BASE}/servers/${encodeURIComponent(id)}/health-events`, {
+    signal,
+    query: {
+      limit: q.limit ?? 50,
+      offset: q.offset ?? 0,
+    },
+  });
+  return toPage<ServerHealthEvent>(raw, q.limit ?? 50, q.offset ?? 0);
 }
 
 // ------------------------------------------------------------------- tools

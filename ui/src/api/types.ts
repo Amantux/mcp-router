@@ -72,6 +72,23 @@ export interface MCPServer {
   toolCount?: number;
 }
 
+export interface ServerHealthEvent {
+  id: string;
+  serverId: string;
+  prevStatus: ServerStatus;
+  status: ServerStatus;
+  latencyMs?: number | null;
+  source: "sync" | "refresh" | "check";
+  createdAt: string;
+}
+
+export interface ServerHealthEventsPage {
+  items: ServerHealthEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 /** POST /servers (ServerIn, extra keys refused): http/sse → endpoint; stdio → command [cmd, ...args]. */
 export type RegisterServerRequest =
   | { name: string; transport: "stdio"; command: string[] }
