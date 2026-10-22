@@ -215,9 +215,7 @@ def test_import_snapshot_is_idempotent(db) -> None:
         "servers": [
             {"name": "idempotent-server", "transport": "stdio", "command": ["echo", "one"]}
         ],
-        "principals": [
-            {"agent_id": "idempotent-agent", "enabled": True, "max_tools": 5}
-        ],
+        "principals": [{"agent_id": "idempotent-agent", "enabled": True, "max_tools": 5}],
         "policy_rules": [
             {
                 "agent_id": "idempotent-agent",
@@ -237,7 +235,7 @@ def test_import_snapshot_is_idempotent(db) -> None:
         headers={"Authorization": f"Bearer {ADMIN}"},
     )
     assert resp.status_code == 200, resp.json()
-    first_data = resp.json()
+    resp.json()
 
     # Second import (same data)
     resp = client.post(
@@ -294,9 +292,7 @@ def test_import_snapshot_returns_keys_only_once(db) -> None:
     export_payload = {
         "snapshot_version": 1,
         "servers": [],
-        "principals": [
-            {"agent_id": "once-only-agent", "enabled": True, "max_tools": 3}
-        ],
+        "principals": [{"agent_id": "once-only-agent", "enabled": True, "max_tools": 3}],
         "policy_rules": [],
         "skill_sources": [],
     }

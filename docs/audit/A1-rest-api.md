@@ -148,13 +148,17 @@ from starlette.testclient import TestClient
 HITS: dict[tuple[str, str], set[int]] = {}
 _real_request = TestClient.request
 
+
 def _template(app, method: str, path: str) -> str | None:
     scope = {"type": "http", "method": method, "path": path, "root_path": "", "headers": []}
-    for r in getattr(app, "routes", []):          # APIRoute.path is the template, e.g. /api/v1/servers/{server_id}
+    for r in getattr(
+        app, "routes", []
+    ):  # APIRoute.path is the template, e.g. /api/v1/servers/{server_id}
         m, _ = r.matches(scope)
         if m is Match.FULL:
             return getattr(r, "path", None)
     return None
+
 
 def _recording_request(self, method, url, *a, **kw):
     resp = _real_request(self, method, url, *a, **kw)
@@ -164,12 +168,18 @@ def _recording_request(self, method, url, *a, **kw):
         HITS.setdefault((method.upper(), tpl), set()).add(resp.status_code)
     return resp
 
+
 def pytest_configure(config):
     TestClient.request = _recording_request
 
+
 def pytest_sessionfinish(session, exitstatus):
     out = pathlib.Path(os.environ.get("MCPR_ROUTE_HITS", ".route_hits.json"))
-    prev = json.loads(out.read_text()) if out.exists() and os.environ.get("MCPR_ROUTE_HITS_MERGE") else {}
+    prev = (
+        json.loads(out.read_text())
+        if out.exists() and os.environ.get("MCPR_ROUTE_HITS_MERGE")
+        else {}
+    )
     for (m, p), codes in HITS.items():
         prev.setdefault(f"{m} {p}", [])
         prev[f"{m} {p}"] = sorted(set(prev[f"{m} {p}"]) | codes)
@@ -187,21 +197,31 @@ Notes:
 @requires_db
 def test_openapi_route_snapshot_is_current():
     app = create_app(Settings(database_url=TEST_DB_URL), env={})
-    spec = {(m.upper(), p) for p, ops in app.openapi()["paths"].items()
-            for m in ops if m in {"get","post","put","patch","delete"}}
+    spec = {
+        (m.upper(), p)
+        for p, ops in app.openapi()["paths"].items()
+        for m in ops
+        if m in {"get", "post", "put", "patch", "delete"}
+    }
     snap = {tuple(x) for x in json.loads(Path("docs/audit/openapi-routes.json").read_text())}
-    assert spec == snap, f"added={sorted(spec-snap)} removed={sorted(snap-spec)}"
+    assert spec == snap, f"added={sorted(spec - snap)} removed={sorted(snap - spec)}"
+
 
 # 2) Coverage gate (only meaningful after the whole suite). Runs last by filename (test_zz_*),
 #    skips unless the full suite ran (HITS non-empty AND >N files collected).
 EXEMPT = {  # (method, path): reason. Must stay tiny and justified.
 }
+
+
 def test_every_route_is_requested_at_least_once(request):
     from tests.conftest import HITS
-    if request.config.getoption("-k") or len(request.session.items) < 500:   # partial run: skip, don't false-fail
+
+    if (
+        request.config.getoption("-k") or len(request.session.items) < 500
+    ):  # partial run: skip, don't false-fail
         pytest.skip("coverage gate runs only on the full suite")
     snap = {tuple(x) for x in json.loads(Path("docs/audit/openapi-routes.json").read_text())}
-    hit  = set(HITS)
+    hit = set(HITS)
     missing = sorted(snap - hit - set(EXEMPT))
     assert not missing, f"routes never requested by any test: {missing}"
     # stronger invariants, still cheap:
@@ -217,9 +237,11 @@ With the current suite the gate would immediately flag: `GET /skill-sources/{sid
 **Part C — generated auth matrix (closes A1-006, A1-009).** Derive the matrix from the live route table instead of a hand-written list. Admin routes can be found by walking `route.dependant` recursively for `deps_auth.require_admin` (router-level `dependencies=[...]` are merged into each route's dependant by `include_router`). Routes using `is_admin_bearer` inside the handler (`execute`, `feedback`, `skills` agent routes) cannot be introspected, so list them in a small explicit `EITHER = {...}` map.
 
 ```python
-def _calls(dep):                       # flatten FastAPI Dependant
+def _calls(dep):  # flatten FastAPI Dependant
     yield dep.call
-    for d in dep.dependencies: yield from _calls(d)
+    for d in dep.dependencies:
+        yield from _calls(d)
+
 
 @requires_db
 @pytest.mark.parametrize("route", _admin_routes(), ids=lambda r: f"{sorted(r.methods)[0]} {r.path}")

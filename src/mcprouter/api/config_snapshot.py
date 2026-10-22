@@ -12,9 +12,7 @@ returned exactly once in the response.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,19 +24,17 @@ from mcprouter.api.deps_auth import require_admin
 from mcprouter.discovery.credentials import env_names
 from mcprouter.discovery.registry import ServerRegistration, register_server
 from mcprouter.generation import bump_catalog
+from mcprouter.mcpclient.targets import TRANSPORTS, Transport
 from mcprouter.models import (
     AgentPrincipal,
     MCPServerRecord,
     PolicyRule,
     SkillSourceRecord,
 )
-from mcprouter.mcpclient.targets import Transport, TRANSPORTS
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/api/v1/config", tags=["config"], dependencies=[Depends(require_admin)]
-)
+router = APIRouter(prefix="/api/v1/config", tags=["config"], dependencies=[Depends(require_admin)])
 
 SNAPSHOT_VERSION = 1
 
@@ -47,6 +43,7 @@ def _validate_transport(transport: str) -> Transport:
     if transport not in TRANSPORTS:
         raise ValueError(f"invalid transport: {transport}")
     return Transport(transport)
+
 
 # ------------------------------------------------------------------ export schemas
 
@@ -231,13 +228,9 @@ def export_snapshot(request: Request) -> SnapshotOut:
 
     with factory() as s:
         servers = s.scalars(select(MCPServerRecord).order_by(MCPServerRecord.name)).all()
-        principals = s.scalars(
-            select(AgentPrincipal).order_by(AgentPrincipal.agent_id)
-        ).all()
+        principals = s.scalars(select(AgentPrincipal).order_by(AgentPrincipal.agent_id)).all()
         policy_rules = s.scalars(select(PolicyRule).order_by(PolicyRule.agent_id)).all()
-        skill_sources = s.scalars(
-            select(SkillSourceRecord).order_by(SkillSourceRecord.name)
-        ).all()
+        skill_sources = s.scalars(select(SkillSourceRecord).order_by(SkillSourceRecord.name)).all()
 
         # Collect env variable NAMES per server (never values)
         server_ids = [s.id for s in servers]
@@ -247,7 +240,7 @@ def export_snapshot(request: Request) -> SnapshotOut:
 
     return SnapshotOut(
         snapshot_version=SNAPSHOT_VERSION,
-        exported_at=datetime.now(timezone.utc).isoformat(),
+        exported_at=datetime.now(UTC).isoformat(),
         servers=[_server_to_snapshot(s) for s in servers],
         principals=[_principal_to_snapshot(p) for p in principals],
         policy_rules=[_rule_to_snapshot(r) for r in policy_rules],
@@ -259,9 +252,7 @@ def export_snapshot(request: Request) -> SnapshotOut:
 # ------------------------------------------------------------------ import endpoint
 
 
-def _import_servers(
-    session: Session, servers: list[ServerImport]
-) -> list[ImportReportItem]:
+def _import_servers(session: Session, servers: list[ServerImport]) -> list[ImportReportItem]:
     """Import servers with upsert semantics (skip duplicates)."""
     results: list[ImportReportItem] = []
 
@@ -272,9 +263,7 @@ def _import_servers(
         )
         if existing:
             results.append(
-                ImportReportItem(
-                    name=item.name, status="skipped", reason="server already exists"
-                )
+                ImportReportItem(name=item.name, status="skipped", reason="server already exists")
             )
             continue
 
@@ -347,9 +336,7 @@ def _import_principals(
     return results, api_keys
 
 
-def _import_policy_rules(
-    session: Session, rules: list[PolicyRuleImport]
-) -> list[ImportReportItem]:
+def _import_policy_rules(session: Session, rules: list[PolicyRuleImport]) -> list[ImportReportItem]:
     """Import policy rules with upsert semantics (skip duplicates)."""
     results: list[ImportReportItem] = []
 

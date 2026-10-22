@@ -21,7 +21,8 @@ Add this after the management routers. It needs `app.state.session_factory`.
 
 ```python
 from mcprouter.api.routes_analytics import install_analytics
-install_analytics(app)   # /api/v1/analytics/* (admin) + Prometheus funnel collector
+
+install_analytics(app)  # /api/v1/analytics/* (admin) + Prometheus funnel collector
 ```
 
 The call is idempotent across app re-creation. The collector is registered
@@ -36,7 +37,11 @@ publishes through the existing `/metrics` mount.
   of the decision whose exposure contained the called tool. Feature-detect
   it like this:
   ```python
-  kw = {"route_request_id": rid} if "route_request_id" in inspect.signature(mgr.execute).parameters else {}
+  kw = (
+      {"route_request_id": rid}
+      if "route_request_id" in inspect.signature(mgr.execute).parameters
+      else {}
+  )
   ```
 * The value is recorded on every audit row of the attempt: refusals,
   `started` to final, and `pending_approval`. It is telemetry only and never

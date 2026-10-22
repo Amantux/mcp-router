@@ -8,6 +8,7 @@ no change to `app.py`, `models.py`, `interfaces.py`, `settings.py`, `db.py`,
 
 ```python
 from mcprouter.api.routes_servers import router as servers_router
+
 ...
 app.include_router(servers_router)
 ```
@@ -24,6 +25,7 @@ Background sync is OFF unless someone calls it. To enable in the app:
 
 ```python
 from mcprouter.discovery import DiscoveryService, SyncLoop
+
 svc = DiscoveryService(app.state.session_factory)
 app.state.discovery = svc
 loop = SyncLoop(svc, sync_interval_s=300, health_interval_s=60)

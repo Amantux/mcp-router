@@ -92,10 +92,15 @@ timeout is the existing `MCPR_DECISION_TIMEOUT_S`.
 
 ```python
 from mcprouter.inference.remote_systemone import RemoteSystemOneModel, resolve_endpoint
-m = RemoteSystemOneModel(endpoint=s.decision_endpoint, api_key=s.decision_api_key,
-                         model=s.decision_model, timeout_s=s.decision_timeout_s,
-                         max_retries=s.decision_max_retries)   # + transport=, sleep=, clock= for tests
-ValidatedDecisionModel(m)   # always wrap
+
+m = RemoteSystemOneModel(
+    endpoint=s.decision_endpoint,
+    api_key=s.decision_api_key,
+    model=s.decision_model,
+    timeout_s=s.decision_timeout_s,
+    max_retries=s.decision_max_retries,
+)  # + transport=, sleep=, clock= for tests
+ValidatedDecisionModel(m)  # always wrap
 from mcprouter.inference.urlcheck import validate_outbound_url, InvalidEndpointError
 ```
 
