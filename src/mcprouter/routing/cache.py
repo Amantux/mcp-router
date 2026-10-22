@@ -115,6 +115,23 @@ class RouteCache:
         with self._lock:
             self._data.pop(key, None)
 
+    def stats(self) -> dict[str, object]:
+        """Aggregate stats: entry count, counters snapshot, size/TTL config.
+
+        NEVER exposes per-entry keys, agent ids or queries.
+        """
+        with self._lock:
+            return {
+                "enabled": True,
+                "entryCount": len(self._data),
+                "size": self._size,
+                "ttl_s": self._ttl_s,
+                "hits": ROUTE_CACHE_HITS._value,
+                "misses": ROUTE_CACHE_MISSES._value,
+                "evictions_capacity": ROUTE_CACHE_EVICTIONS.labels(reason="capacity")._value,
+                "evictions_expired": ROUTE_CACHE_EVICTIONS.labels(reason="expired")._value,
+            }
+
 
 class QueryEmbeddingCache:
     """LRU of query vectors keyed by (text, backend name). Embeddings are a
@@ -142,3 +159,15 @@ class QueryEmbeddingCache:
             while len(self._data) > self._size:
                 self._data.popitem(last=False)
         return vec
+
+    def stats(self) -> dict[str, object]:
+        """Aggregate stats: entry count and size config.
+
+        NEVER exposes per-entry keys or queries.
+        """
+        with self._lock:
+            return {
+                "enabled": True,
+                "entryCount": len(self._data),
+                "size": self._size,
+            }

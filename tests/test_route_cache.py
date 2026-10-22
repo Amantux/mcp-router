@@ -428,3 +428,79 @@ def test_evaluate_never_serves_from_the_route_cache(db: SF) -> None:
     with factory() as s:
         versions = set(s.scalars(select(RoutingDecisionRecord.model_version)))
     assert versions and not any(v.startswith("cached/") for v in versions)
+
+
+# ------------------------------------------------------------- API: observability
+@requires_db
+def test_cache_stats_endpoint(db: SF) -> None:
+    from mcprouter.api.routes_route import install_routing
+    from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_scope_resolver
+
+    settings = Settings(database_url=TEST_DB_URL)
+    app = create_app(settings, env={})
+    factory = app.state.session_factory
+    emb = FakeHashEmbedder()
+    with factory() as s:
+        seed_synthetic_catalog(s, emb)
+        s.commit()
+    pipeline = RoutePipeline(
+        factory, HybridRetriever(factory, emb), ScriptedDecisionModel(), settings
+    )
+    install_routing(app, pipeline, scope_resolver=synthetic_scope_resolver(factory))
+    from mcprouter.api.routes_cache import router as cache_router
+    app.include_router(cache_router)
+
+    c = TestClient(app)
+    # Admin token required
+    resp = c.get("/api/v1/cache")
+    assert resp.status_code == 401
+
+    # With admin token
+    resp = c.get("/api/v1/cache", headers={"Authorization": "Bearer test-admin-token"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "enabled" in data
+    assert "entryCount" in data
+    assert "size" in data
+    assert "ttlS" in data
+    assert "hits" in data
+    assert "misses" in data
+    assert "evictionsCapacity" in data
+    assert "evictionsExpired" in data
+    assert "catalogGeneration" in data
+    assert "policyGeneration" in data
+
+
+@requires_db
+def test_cache_flush_endpoint(db: SF) -> None:
+    from mcprouter.api.routes_route import install_routing
+    from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_scope_resolver
+
+    settings = Settings(database_url=TEST_DB_URL)
+    app = create_app(settings, env={})
+    factory = app.state.session_factory
+    emb = FakeHashEmbedder()
+    with factory() as s:
+        seed_synthetic_catalog(s, emb)
+        s.commit()
+    pipeline = RoutePipeline(
+        factory, HybridRetriever(factory, emb), ScriptedDecisionModel(), settings
+    )
+    install_routing(app, pipeline, scope_resolver=synthetic_scope_resolver(factory))
+    from mcprouter.api.routes_cache import router as cache_router
+    app.include_router(cache_router)
+
+    c = TestClient(app)
+    # Admin token required
+    resp = c.post("/api/v1/cache/flush")
+    assert resp.status_code == 401
+
+    # With admin token
+    resp = c.post("/api/v1/cache/flush", headers={"Authorization": "Bearer test-admin-token"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "catalogGeneration" in data
+    assert "policyGeneration" in data
+    # Generations should have increased
+    assert data["catalogGeneration"] > 0
+    assert data["policyGeneration"] > 0
