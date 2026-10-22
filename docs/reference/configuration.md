@@ -70,6 +70,9 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_AOAI_MAX_RETRIES` | `2` | integer | Azure OpenAI retries (0 to 10). |
 | `MCPR_UI_DIST` | `./ui/dist` | string | Directory of the built dashboard served at `/`. |
 | `MCPR_DEDUP_MAX_PAIRS` | `5000` | integer | Cap on duplicate pairs one dedup scan stores (the run reports `truncated`). |
+| `MCPR_APPROVAL_WEBHOOK_URL` | unset | string | Webhook URL for approval notifications (https or http to localhost). When set, the router POSTs a JSON payload to this URL whenever an execution requires approval. |
+| `MCPR_APPROVAL_WEBHOOK_SECRET` | unset | string, secret | HMAC-SHA256 signing secret for webhook payloads. When set, the `X-MCPR-Signature` header is added to each webhook request. |
+| `MCPR_APPROVAL_WEBHOOK_SECRET_FILE` | unset | path, secret | File holding `MCPR_APPROVAL_WEBHOOK_SECRET` (Docker secret); wins over `MCPR_APPROVAL_WEBHOOK_SECRET`. |
 
 ## Compose, image and entrypoint
 

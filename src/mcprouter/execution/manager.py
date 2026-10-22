@@ -51,6 +51,7 @@ from mcprouter.execution.models import (
 from mcprouter.execution.ratelimit import KeyedLimiter
 from mcprouter.execution.redaction import redact, redact_value, scrub_log
 from mcprouter.execution.validation import ArgumentValidationError, validate_arguments
+from mcprouter.execution.webhooks import deliver_approval_webhook
 from mcprouter.interfaces import ToolCallResult, ToolInvocationError, ToolInvoker
 from mcprouter.limits import LimiterRegistry, make_limiters
 from mcprouter.models import (
@@ -173,6 +174,7 @@ class ExecutionManager:
         limiter: KeyedLimiter,
         clock: Callable[[], datetime] = utcnow,
         approval_ttl: timedelta = APPROVAL_TTL,
+        settings: Settings | None = None,
     ) -> None:
         self._factory = session_factory
         self._invoker = invoker
@@ -180,6 +182,7 @@ class ExecutionManager:
         self._limiter = limiter
         self._clock = clock
         self._approval_ttl = approval_ttl
+        self._settings = settings
 
     @classmethod
     def from_settings(
@@ -198,6 +201,7 @@ class ExecutionManager:
             invoker,
             timeout_s=settings.default_tool_timeout_s,
             limiter=registry.surface("execute"),
+            settings=settings,
         )
 
     # ----------------------------------------------------------- loading
@@ -431,7 +435,7 @@ class ExecutionManager:
         # (e) approval gate
         if decision.requires_approval:
             approval_id, rid = await anyio.to_thread.run_sync(
-                self._create_approval, loaded, args, rrid, prov
+                self._create_approval, loaded, args, rrid, prov, self._settings
             )
             return ExecutionResult(
                 PENDING_APPROVAL, "approval required", rid, approval_id=approval_id
@@ -502,6 +506,7 @@ class ExecutionManager:
         args: dict[str, Any],
         route_request_id: str | None = None,
         prov: _Prov = _NO_PROV,
+        settings: Settings | None = None,
     ) -> tuple[str, str]:
         now = self._clock()
         tool, server = loaded.tool, loaded.server
@@ -535,6 +540,18 @@ class ExecutionManager:
             route_request_id,
             prov,
         )
+        # Fire webhook notification (non-fatal)
+        if settings:
+            deliver_approval_webhook(
+                approval_id=approval_id,
+                agent_id=loaded.principal.agent_id,
+                tool_name=stable_tool_id(server.name, tool.name),
+                operation=effective_operation(tool.operation),
+                arguments=args,
+                created_at=now,
+                expires_at=now + self._approval_ttl,
+                settings=settings,
+            )
         return approval_id, rid
 
     def _claim(self, approval_id: str) -> ApprovalRequest:
