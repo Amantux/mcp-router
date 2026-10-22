@@ -24,11 +24,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-from urllib.error import URLError
 
-from mcprouter.net_policy import FORBIDDEN_NETS, LOOPBACK_HOSTS, resolve_and_check
+from mcprouter.net_policy import LOOPBACK_HOSTS, resolve_and_check
 from mcprouter.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -64,8 +64,21 @@ def _is_safe_url(url: str) -> bool:
         if host:
             resolve_and_check(host)
         return True
-    except Exception:
+    except Exception:  # noqa: BLE001 — a webhook fan-out must absorb any failure; status is reported
         return False
+
+
+def _wants_mask(key: str) -> bool:
+    """Keys whose values look like credentials get masked; others pass through."""
+    k = key.lower()
+    return any(part in k for part in ("password", "secret", "token", "key", "credential", "authorization", "repo"))
+
+
+def _mask(value: str) -> str:
+    """Masked value: first char + stars (capped at 6) + last char."""
+    if len(value) <= 3:
+        return "*" * len(value)
+    return value[0] + "*" * min(len(value) - 3, 6) + value[-1]
 
 
 def _redact_args(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -79,12 +92,8 @@ def _redact_args(arguments: dict[str, Any]) -> dict[str, Any]:
             redacted[key] = _redact_args(value)
         elif isinstance(value, list):
             redacted[key] = [_redact_args(v) if isinstance(v, dict) else v for v in value]
-        elif isinstance(value, str):
-            # Short strings: mask all but first/last char
-            if len(value) > 6:
-                redacted[key] = value[0] + "*" * (len(value) - 2) + value[-1]
-            else:
-                redacted[key] = "*" * len(value)
+        elif isinstance(value, str) and _wants_mask(str(key)):
+            redacted[key] = _mask(value)
         else:
             redacted[key] = value
     return redacted
@@ -93,6 +102,11 @@ def _redact_args(arguments: dict[str, Any]) -> dict[str, Any]:
 def _format_datetime(dt: datetime) -> str:
     """Format datetime as ISO 8601 UTC string."""
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_iso(value: str) -> datetime:
+    """Parse an ISO-8601 UTC string ('...Z' or naive-UTC)."""
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 @dataclass(frozen=True)
@@ -155,7 +169,7 @@ def deliver_webhook(
         parsed = urlsplit(webhook_url)
         if parsed.hostname:
             resolve_and_check(parsed.hostname)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a webhook fan-out must absorb any failure; status is reported
         log.warning(
             "webhook.refused url=%s reason=forbidden_address error=%s",
             webhook_url,
@@ -194,7 +208,7 @@ def deliver_webhook(
             type(exc).__name__,
             elapsed,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a webhook fan-out must absorb any failure; status is reported
         elapsed = (time.perf_counter() - t0) * 1000
         log.warning(
             "webhook.failed url=%s error=%s elapsed_ms=%.1f",
@@ -210,11 +224,13 @@ def create_webhook_payload(
     tool_name: str,
     operation: str,
     arguments: dict[str, Any],
-    created_at: datetime,
-    expires_at: datetime,
+    created_at: datetime | str,
+    expires_at: datetime | str,
     base_url: str,
 ) -> WebhookPayload:
     """Create a webhook payload for an approval."""
+    created_at = created_at if isinstance(created_at, datetime) else _parse_iso(created_at)
+    expires_at = expires_at if isinstance(expires_at, datetime) else _parse_iso(expires_at)
     # Build approve/deny URLs
     # These are relative paths; the operator is expected to prepend their base URL
     approve_path = f"/api/v1/approvals/{approval_id}/approve"
@@ -239,8 +255,8 @@ def deliver_approval_webhook(
     tool_name: str,
     operation: str,
     arguments: dict[str, Any],
-    created_at: datetime,
-    expires_at: datetime,
+    created_at: datetime | str,
+    expires_at: datetime | str,
     settings: Settings,
 ) -> None:
     """Fire webhook for an approval using app settings."""
@@ -252,7 +268,7 @@ def deliver_approval_webhook(
     try:
         parsed = urlsplit(webhook_url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
-    except Exception:
+    except Exception:  # noqa: BLE001 — a webhook fan-out must absorb any failure; status is reported
         base_url = webhook_url
 
     payload = create_webhook_payload(

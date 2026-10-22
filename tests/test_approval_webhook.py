@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,10 +19,8 @@ from mcprouter.execution.webhooks import (
     _is_safe_url,
     _redact_args,
     create_webhook_payload,
-    deliver_approval_webhook,
     deliver_webhook,
 )
-from mcprouter.models import AgentPrincipal, MCPServerRecord, MCPToolRecord, PolicyRule
 from tests.support.execution import Catalog, FakeInvoker, add_rule, seed
 
 from .conftest import requires_db
@@ -70,7 +67,7 @@ def test_redact_args_short_string() -> None:
 def test_redact_args_list() -> None:
     args = {"items": [{"secret": "abc123"}]}
     redacted = _redact_args(args)
-    assert redacted["items"][0]["secret"] == "a***c"
+    assert redacted["items"][0]["secret"] == "a***3"
 
 
 # ------------------------------------------------------------- URL safety tests
