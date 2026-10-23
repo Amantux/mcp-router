@@ -156,8 +156,8 @@ def test_deliver_webhook_no_url() -> None:
         tool="test.tool",
         operation="read",
         arguments={},
-        created_at=datetime.now(UTC),
-        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        created_at=datetime.now(UTC).isoformat(),
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         approve_url="",
         deny_url="",
     )
@@ -172,8 +172,8 @@ def test_deliver_webhook_empty_url() -> None:
         tool="test.tool",
         operation="read",
         arguments={},
-        created_at=datetime.now(UTC),
-        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        created_at=datetime.now(UTC).isoformat(),
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         approve_url="",
         deny_url="",
     )
@@ -188,8 +188,8 @@ def test_deliver_webhook_unsafe_url_logs_warning(caplog: Any) -> None:
         tool="test.tool",
         operation="read",
         arguments={},
-        created_at=datetime.now(UTC),
-        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        created_at=datetime.now(UTC).isoformat(),
+        expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         approve_url="",
         deny_url="",
     )
@@ -244,6 +244,18 @@ def cat(sec_db: sessionmaker[Session]) -> Catalog:
             ("github", "list_issues", "read"),
             ("github", "create_issue", "write"),
         ],
+        schema={
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string"},
+                "limit": {"type": "integer"},
+                "title": {"type": "string"},
+                "token": {"type": "string"},
+                "password": {"type": "string"},
+            },
+            "required": ["repo"],
+            "additionalProperties": False,
+        },
     )
 
 
@@ -276,11 +288,19 @@ async def test_approval_webhook_fires_on_pending(
     clock = Clock()
 
     # Add rule that requires approval
-    add_rule(sec_db, "alice", tool_name="github.create_issue", requires_approval=True)
+    add_rule(
+        sec_db,
+        "alice",
+        tool_name="create_issue",
+        max_operation="write",
+        requires_approval=True,
+    )
 
     # Execute - should create pending approval
     res = await _mgr(sec_db, inv, clock=clock).execute(
-        cat.principals["alice"], cat.tools["github.create_issue"], {"repo": "acme/test", "title": "Test"}
+        cat.principals["alice"],
+        cat.tools["github.create_issue"],
+        {"repo": "acme/test"},
     )
     assert res.status == "pending_approval"
     assert res.approval_id is not None
@@ -297,7 +317,13 @@ async def test_approval_webhook_redacts_arguments(
     inv = FakeInvoker()
     clock = Clock()
 
-    add_rule(sec_db, "alice", tool_name="github.create_issue", requires_approval=True)
+    add_rule(
+        sec_db,
+        "alice",
+        tool_name="create_issue",
+        max_operation="write",
+        requires_approval=True,
+    )
 
     res = await _mgr(sec_db, inv, clock=clock).execute(
         cat.principals["alice"],
@@ -313,7 +339,7 @@ async def test_approval_webhook_redacts_arguments(
     args = {"repo": "acme/test", "token": "secret123", "password": "mypassword"}
     redacted = _redact_args(args)
     assert redacted["token"] == "s******3"
-    assert redacted["password"] == "m*********d"
+    assert redacted["password"] == "m******d"
 
 
 async def test_approval_webhook_signature_when_secret_set(
@@ -324,7 +350,13 @@ async def test_approval_webhook_signature_when_secret_set(
     inv = FakeInvoker()
     clock = Clock()
 
-    add_rule(sec_db, "alice", tool_name="github.create_issue", requires_approval=True)
+    add_rule(
+        sec_db,
+        "alice",
+        tool_name="create_issue",
+        max_operation="write",
+        requires_approval=True,
+    )
 
     res = await _mgr(sec_db, inv, clock=clock).execute(
         cat.principals["alice"], cat.tools["github.create_issue"], {"repo": "acme/test"}
@@ -340,6 +372,9 @@ async def test_approval_webhook_disabled_when_url_unset(
     """When URL is unset, no webhook is fired."""
     inv = FakeInvoker()
     clock = Clock()
+
+    # Allow rule (no approval required) for a normal execution.
+    add_rule(sec_db, "alice", tool_name="list_issues", max_operation="read")
 
     # No rule requiring approval - just a normal execution
     res = await _mgr(sec_db, inv, clock=clock).execute(
@@ -357,7 +392,13 @@ async def test_approval_webhook_non_fatal_on_failure(
     inv = FakeInvoker()
     clock = Clock()
 
-    add_rule(sec_db, "alice", tool_name="github.create_issue", requires_approval=True)
+    add_rule(
+        sec_db,
+        "alice",
+        tool_name="create_issue",
+        max_operation="write",
+        requires_approval=True,
+    )
 
     # Execute with unreachable webhook URL - should still succeed
     from mcprouter.settings import Settings
@@ -388,7 +429,13 @@ async def test_approval_webhook_http_localhost_allowed(
     inv = FakeInvoker()
     clock = Clock()
 
-    add_rule(sec_db, "alice", tool_name="github.create_issue", requires_approval=True)
+    add_rule(
+        sec_db,
+        "alice",
+        tool_name="create_issue",
+        max_operation="write",
+        requires_approval=True,
+    )
 
     # HTTP to localhost should be allowed
     from mcprouter.settings import Settings

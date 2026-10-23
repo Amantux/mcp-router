@@ -71,7 +71,10 @@ def _is_safe_url(url: str) -> bool:
 def _wants_mask(key: str) -> bool:
     """Keys whose values look like credentials get masked; others pass through."""
     k = key.lower()
-    return any(part in k for part in ("password", "secret", "token", "key", "credential", "authorization", "repo"))
+    return any(
+        part in k
+        for part in ("password", "secret", "token", "key", "credential", "authorization", "repo")
+    )
 
 
 def _mask(value: str) -> str:
@@ -141,9 +144,7 @@ class WebhookPayload:
 
 def _sign_payload(body: bytes, secret: str) -> str:
     """Compute HMAC-SHA256 signature of body."""
-    signature = hmac.new(
-        secret.encode("utf-8"), body, hashlib.sha256
-    ).hexdigest()
+    signature = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return f"sha256={signature}"
 
 

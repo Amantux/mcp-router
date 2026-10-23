@@ -374,8 +374,18 @@ SETTINGS_SPEC: tuple[SettingSpec, ...] = (
     _s("ui_dist", "str", "Built dashboard directory served at /."),
     _s("dedup_max_pairs", "int", "Cap on duplicate pairs per dedup run.", lo=1, hi=10_000_000),
     # approval webhooks
-    _s("approval_webhook_url", "str", "Webhook URL for approval notifications (https or http to localhost)."),
-    _s("approval_webhook_secret", "secret", "HMAC-SHA256 signing secret for webhook payloads.", secret=True, file_var=True),
+    _s(
+        "approval_webhook_url",
+        "str",
+        "Webhook URL for approval notifications (https or http to localhost).",
+    ),
+    _s(
+        "approval_webhook_secret",
+        "secret",
+        "HMAC-SHA256 signing secret for webhook payloads.",
+        secret=True,
+        file_var=True,
+    ),
 )
 
 

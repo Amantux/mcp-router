@@ -97,6 +97,9 @@ FIXED_PORT_ALLOWLIST: dict[tuple[str, str], str] = {
         "tests/test_host_guard.py",
         '"127.0.0.1:8400", "[::1]:9"',
     ): "Host header values, nothing binds",
+    ("tests/test_approval_webhook.py", "localhost:8080"): "URL validation input, never dialled",
+    ("tests/test_approval_webhook.py", "127.0.0.1:8080"): "URL validation input, never dialled",
+    ("tests/test_approval_webhook.py", "localhost:8400"): "URL validation input, never dialled",
 }
 
 
