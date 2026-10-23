@@ -109,6 +109,10 @@ DOCS: dict[str, str] = {
     "`POST /api/v1/decision/systemone`.",
     "MCPR_DEDUP_MAX_PAIRS": "Cap on duplicate pairs one dedup scan stores "
     "(the run reports `truncated`).",
+    "MCPR_APPROVAL_WEBHOOK_URL": "Webhook URL for approval notifications (https or http to localhost). "
+    "When set, the router POSTs a JSON payload to this URL whenever an execution requires approval.",
+    "MCPR_APPROVAL_WEBHOOK_SECRET": "HMAC-SHA256 signing secret for webhook payloads. "
+    "When set, the `X-MCPR-Signature` header is added to each webhook request.",
     "MCPR_AOAI_ENDPOINT": "Azure OpenAI resource URL (`https://<resource>.openai.azure.com`).",
     "MCPR_AOAI_API_KEY": "Azure OpenAI API key.",
     "MCPR_AOAI_API_KEY_FILE": "File holding the Azure OpenAI key; wins over `MCPR_AOAI_API_KEY`.",

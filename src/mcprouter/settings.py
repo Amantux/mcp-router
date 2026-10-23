@@ -93,6 +93,9 @@ class Settings:
     mcp_max_sessions_per_agent: int = 32
     decision_rate_limit_per_min: int = 120
     dedup_max_pairs: int = 5000
+    # Approval webhooks
+    approval_webhook_url: str = ""
+    approval_webhook_secret: str = field(default="", repr=False)
     # wave-3 Azure OpenAI backends (folded in from AoaiSettings, wave-6 E1).
     # The endpoint is validated at point of use (inference/aoai.py).
     aoai_endpoint: str = ""
@@ -370,6 +373,19 @@ SETTINGS_SPEC: tuple[SettingSpec, ...] = (
     # dashboard / dedup
     _s("ui_dist", "str", "Built dashboard directory served at /."),
     _s("dedup_max_pairs", "int", "Cap on duplicate pairs per dedup run.", lo=1, hi=10_000_000),
+    # approval webhooks
+    _s(
+        "approval_webhook_url",
+        "str",
+        "Webhook URL for approval notifications (https or http to localhost).",
+    ),
+    _s(
+        "approval_webhook_secret",
+        "secret",
+        "HMAC-SHA256 signing secret for webhook payloads.",
+        secret=True,
+        file_var=True,
+    ),
 )
 
 

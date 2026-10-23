@@ -18,6 +18,7 @@ CANARIES = {
     "MCPR_ADMIN_TOKEN": "canary-admin-token-00000000000000000003",
     "MCPR_DECISION_API_KEY": "canary-decision-key-0004",
     "MCPR_AOAI_API_KEY": "canary-aoai-key-0005",
+    "MCPR_APPROVAL_WEBHOOK_SECRET": "canary-webhook-secret-00000000000000006",
 }
 # The distinctive part of each canary (what must never appear anywhere).
 NEEDLES = (
@@ -26,6 +27,7 @@ NEEDLES = (
     "canary-admin-token",
     "canary-decision",
     "canary-aoai",
+    "canary-webhook-secret",
 )
 
 
