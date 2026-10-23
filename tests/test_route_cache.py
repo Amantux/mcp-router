@@ -437,7 +437,7 @@ def test_cache_stats_endpoint(db: SF) -> None:
     from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_scope_resolver
 
     settings = Settings(database_url=TEST_DB_URL)
-    app = create_app(settings, env={})
+    app = create_app(settings, env={"MCPR_ADMIN_TOKEN": "test-admin-token"})
     factory = app.state.session_factory
     emb = FakeHashEmbedder()
     with factory() as s:
@@ -448,6 +448,7 @@ def test_cache_stats_endpoint(db: SF) -> None:
     )
     install_routing(app, pipeline, scope_resolver=synthetic_scope_resolver(factory))
     from mcprouter.api.routes_cache import router as cache_router
+
     app.include_router(cache_router)
 
     c = TestClient(app)
@@ -477,7 +478,7 @@ def test_cache_flush_endpoint(db: SF) -> None:
     from mcprouter.eval.synthetic_catalog import seed_synthetic_catalog, synthetic_scope_resolver
 
     settings = Settings(database_url=TEST_DB_URL)
-    app = create_app(settings, env={})
+    app = create_app(settings, env={"MCPR_ADMIN_TOKEN": "test-admin-token"})
     factory = app.state.session_factory
     emb = FakeHashEmbedder()
     with factory() as s:
@@ -488,6 +489,7 @@ def test_cache_flush_endpoint(db: SF) -> None:
     )
     install_routing(app, pipeline, scope_resolver=synthetic_scope_resolver(factory))
     from mcprouter.api.routes_cache import router as cache_router
+
     app.include_router(cache_router)
 
     c = TestClient(app)
