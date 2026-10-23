@@ -1,4 +1,5 @@
 """Tests for the diagnostics endpoint (admin-gated)."""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -6,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.routes_diag import install_diag
@@ -19,7 +20,7 @@ pytestmark = requires_db
 
 
 @pytest.fixture()
-def diag_client(sec_db: sessionmaker) -> Iterator[TestClient]:
+def diag_client(sec_db: sessionmaker[Session]) -> Iterator[TestClient]:
     app = FastAPI()
     app.state.settings = Settings(database_url=TEST_DB_URL)
     app.state.limiters = make_limiters(app.state.settings)
