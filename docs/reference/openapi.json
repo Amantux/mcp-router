@@ -1037,6 +1037,50 @@
         }
       }
     },
+    "/api/v1/cache": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Get Cache Stats",
+        "description": "Aggregate route cache stats.\n\nReturns:\n    - enabled: whether the cache is configured\n    - entry_count: current number of entries\n    - size: configured max entries\n    - ttl_s: configured TTL in seconds\n    - hits/misses/evictions: Prometheus counters\n    - catalog_generation/policy_generation: current generation numbers\n\nNever returns per-entry keys, agent ids or queries.",
+        "operationId": "get_cache_stats_api_v1_cache_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheStats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/flush": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Flush Cache",
+        "description": "Invalidate all cache entries by bumping both generation counters.\n\nThis invalidates every cached entry without requiring a restart.\nThe next route request will be a cache miss and will rebuild the cache\nwith fresh data.\n\nReturns the new catalog and policy generation numbers.",
+        "operationId": "flush_cache_api_v1_cache_flush_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheFlush"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/route": {
       "post": {
         "tags": [
@@ -3838,6 +3882,82 @@
           "clampedBy"
         ],
         "title": "BudgetClampOut"
+      },
+      "CacheFlush": {
+        "properties": {
+          "catalogGeneration": {
+            "type": "integer",
+            "title": "Cataloggeneration"
+          },
+          "policyGeneration": {
+            "type": "integer",
+            "title": "Policygeneration"
+          }
+        },
+        "type": "object",
+        "required": [
+          "catalogGeneration",
+          "policyGeneration"
+        ],
+        "title": "CacheFlush"
+      },
+      "CacheStats": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "entryCount": {
+            "type": "integer",
+            "title": "Entrycount"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "ttlS": {
+            "type": "number",
+            "title": "Ttls"
+          },
+          "hits": {
+            "type": "integer",
+            "title": "Hits"
+          },
+          "misses": {
+            "type": "integer",
+            "title": "Misses"
+          },
+          "evictionsCapacity": {
+            "type": "integer",
+            "title": "Evictionscapacity"
+          },
+          "evictionsExpired": {
+            "type": "integer",
+            "title": "Evictionsexpired"
+          },
+          "catalogGeneration": {
+            "type": "integer",
+            "title": "Cataloggeneration"
+          },
+          "policyGeneration": {
+            "type": "integer",
+            "title": "Policygeneration"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "entryCount",
+          "size",
+          "ttlS",
+          "hits",
+          "misses",
+          "evictionsCapacity",
+          "evictionsExpired",
+          "catalogGeneration",
+          "policyGeneration"
+        ],
+        "title": "CacheStats"
       },
       "CandidateOut": {
         "properties": {

@@ -793,3 +793,22 @@ export interface SkillActivation {
   resources: { path: string; size: number; kind: string }[];
   recordId: string | null;
 }
+
+// ------------------------------------------------------------- cache observability
+export interface CacheStats {
+  enabled: boolean;
+  entryCount: number;
+  size: number;
+  ttlS: number;
+  hits: number;
+  misses: number;
+  evictionsCapacity: number;
+  evictionsExpired: number;
+  catalogGeneration: number;
+  policyGeneration: number;
+}
+
+export interface CacheFlush {
+  catalogGeneration: number;
+  policyGeneration: number;
+}

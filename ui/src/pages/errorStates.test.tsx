@@ -98,7 +98,11 @@ const CASES: Case[] = [
     name: "Health",
     ui: <HealthPage />,
     route: "/health",
-    ok: { [`GET ${API}/models/health`]: { loaded: true, mode: "balanced", device: "cpu", embedding: { backend: "x" }, decision: { backend: "y" }, memory: {} }, "GET /healthz": { status: "ok" } },
+    ok: {
+      [`GET ${API}/models/health`]: { loaded: true, mode: "balanced", device: "cpu", embedding: { backend: "x" }, decision: { backend: "y" }, memory: {} },
+      "GET /healthz": { status: "ok" },
+      [`GET ${API}/cache`]: { enabled: true, entryCount: 0, size: 500, ttlS: 30, hits: 0, misses: 0, evictionsCapacity: 0, evictionsExpired: 0, catalogGeneration: 1, policyGeneration: 1 },
+    },
     fails: `GET ${API}/models/health`,
     emptyCopy: null,
     what: "Model health",

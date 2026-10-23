@@ -59,6 +59,8 @@ import type {
   RegisterServerRequest,
   RoutedTool,
   RoutedSkill,
+  CacheStats,
+  CacheFlush,
   AnalyticsKind,
   RouteKind,
   ToolDetail,
@@ -825,6 +827,17 @@ export async function activateSkill(id: string, opts: { agentId?: string } = {},
   if (opts.agentId) body.agentId = opts.agentId;
   const raw = await request<Partial<SkillActivation>>("POST", `${API_BASE}/skills/${encodeURIComponent(id)}/activate`, { body, signal, as: "agent" });
   return { body: typeof raw?.body === "string" ? raw.body : "", resources: raw?.resources ?? [], recordId: raw?.recordId ?? null };
+}
+
+// ------------------------------------------------------------- cache observability
+/** GET /api/v1/cache: aggregate route cache stats (admin-only). */
+export async function getCacheStats(signal?: AbortSignal): Promise<CacheStats> {
+  return await request("GET", `${API_BASE}/cache`, { signal });
+}
+
+/** POST /api/v1/cache/flush: invalidate all cache entries (admin-only). */
+export async function flushCache(signal?: AbortSignal): Promise<CacheFlush> {
+  return await request("POST", `${API_BASE}/cache/flush`, { signal });
 }
 
 // ---- wave-5 setup wizard ----

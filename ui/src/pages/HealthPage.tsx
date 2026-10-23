@@ -10,7 +10,7 @@ import {
   Text,
   tokens,
 } from "@fluentui/react-components";
-import { getHealthz, getModelsHealth, METRICS_URL } from "../api/client";
+import { getHealthz, getModelsHealth, getCacheStats, flushCache, METRICS_URL } from "../api/client";
 import type { ModelsHealth } from "../api/types";
 import { fmtInt, fmtMs, LoadingRow, PageHeader, useCommonStyles, ErrorState } from "../components/common";
 import { useLoader } from "../hooks/useLoader";
@@ -24,6 +24,69 @@ const useStyles = makeStyles({
   big: { fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold, fontVariantNumeric: "tabular-nums" },
   section: { marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalS },
 });
+
+// Route cache card
+function CacheCard() {
+  const s = useStyles();
+  const cacheStats = useLoader("Load route cache stats", (sig) => getCacheStats(sig), []);
+
+  const flush = async () => {
+    try {
+      await flushCache();
+      cacheStats.refresh();
+    } catch (e) {
+      // Error toast handled globally
+      console.error("Failed to flush cache:", e);
+    }
+  };
+
+  const ok = !cacheStats.failed && cacheStats.data?.enabled !== false;
+  const data = cacheStats.data;
+
+  return (
+    <Card size="small" aria-label="Route cache">
+      <CardHeader
+        header={<Subtitle2>Route cache</Subtitle2>}
+        action={
+          <Badge appearance="tint" color={ok ? "success" : "danger"}>
+            {ok ? "enabled" : "disabled"}
+          </Badge>
+        }
+      />
+      <div className={s.kv}>
+        {ok && data ? (
+          <>
+            <Caption1>Entries</Caption1>
+            <Text weight="semibold">{fmtInt(data.entryCount)}</Text>
+            <Caption1>Size</Caption1>
+            <Text weight="semibold">{fmtInt(data.size)}</Text>
+            <Caption1>TTL</Caption1>
+            <Text weight="semibold">{Math.round(data.ttlS)}s</Text>
+            <Caption1>Hit rate</Caption1>
+            <Text weight="semibold">
+              {data.hits + data.misses > 0
+                ? ((data.hits / (data.hits + data.misses)) * 100).toFixed(1) + "%"
+                : "—"}
+            </Text>
+            <Caption1>Catalog gen</Caption1>
+            <Text weight="semibold">{fmtInt(data.catalogGeneration)}</Text>
+            <Caption1>Policy gen</Caption1>
+            <Text weight="semibold">{fmtInt(data.policyGeneration)}</Text>
+          </>
+        ) : (
+          <Caption1>Route cache is disabled (size=0 or ttl_s=0)</Caption1>
+        )}
+      </div>
+      {ok && (
+        <div style={{ marginTop: tokens.spacingVerticalS }}>
+          <Link onClick={flush} style={{ cursor: "pointer" }}>
+            Flush cache
+          </Link>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function MemoryBar({ used, total, label }: { used?: number; total?: number; label: string }) {
   if (used == null) return <Caption1>{label}: —</Caption1>;
@@ -199,6 +262,12 @@ export function HealthPage() {
           )}
         </div>
       )}
+      <Subtitle2 as="h2" className={s.section} block>
+        Route cache
+      </Subtitle2>
+      <div className={s.grid}>
+        <CacheCard />
+      </div>
     </>
   );
 }

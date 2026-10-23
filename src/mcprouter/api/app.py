@@ -41,6 +41,7 @@ from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.errors import install_error_handlers
 from mcprouter.api.routes_analytics import install_analytics
+from mcprouter.api.routes_cache import router as cache_router
 from mcprouter.api.routes_decision import router as decision_router
 from mcprouter.api.routes_execute import router as execute_router
 from mcprouter.api.routes_executions import router as executions_router
@@ -195,6 +196,8 @@ def create_app(
     app.include_router(models_router)
     app.include_router(decision_router)
     app.include_router(executions_router)
+    # Cache observability (admin-gated)
+    app.include_router(cache_router)
 
     # Routing: policy-backed scope (ONE policy implementation) + model deadline.
     scope_resolver = policy_scope_resolver(factory, security)

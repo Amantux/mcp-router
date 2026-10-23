@@ -33,6 +33,13 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `GET` | `/api/v1/analytics/suggestions` | ADMIN | Suggestions |  |
 | `POST` | `/api/v1/analytics/rollup` | ADMIN | Rollup |  |
 
+## cache
+
+| method | path | auth | summary | description |
+|---|---|---|---|---|
+| `GET` | `/api/v1/cache` | ADMIN | Get Cache Stats | Aggregate route cache stats. |
+| `POST` | `/api/v1/cache/flush` | ADMIN | Flush Cache | Invalidate all cache entries by bumping both generation counters. |
+
 ## decision
 
 | method | path | auth | summary | description |
@@ -155,4 +162,4 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/tools/{tool_id}/enable` | ADMIN | Enable Tool |  |
 | `POST` | `/api/v1/tools/{tool_id}/disable` | ADMIN | Disable Tool |  |
 
-63 routes.
+65 routes.
