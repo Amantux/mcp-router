@@ -112,6 +112,7 @@ def _build_legacy(eng: Engine) -> None:
             "ALTER TABLE policy_rules DROP COLUMN resource_kind",
             "ALTER TABLE duplicate_suggestions ALTER COLUMN tool_a_id TYPE VARCHAR(36)",
             "DROP TABLE route_feedback",
+            "DROP TABLE server_health_events",
         ):
             c.execute(text(stmt))
         c.execute(
@@ -130,7 +131,7 @@ def _build_legacy(eng: Engine) -> None:
 
 def test_fresh_upgrade_head_matches_metadata(scratch: Engine) -> None:
     init_db(scratch)
-    assert _revision(scratch) == migrate.head_revision() == "0002"
+    assert _revision(scratch) == migrate.head_revision() == "0003"
     assert _diff(scratch) == []
     assert migrate.MIGRATION_ONLY_INDEXES <= _valid_indexes(scratch)
 
@@ -140,7 +141,7 @@ def test_legacy_database_is_bridged_stamped_and_equal(scratch: Engine) -> None:
     with scratch.connect() as c:
         assert migrate.schema_state(c) == "legacy"
     init_db(scratch)
-    assert _revision(scratch) == "0002"
+    assert _revision(scratch) == "0003"
     assert _diff(scratch) == []
     assert migrate.MIGRATION_ONLY_INDEXES <= _valid_indexes(scratch)
     with scratch.connect() as c:
@@ -215,7 +216,7 @@ def test_concurrent_init_db_both_succeed(scratch_url: str) -> None:
         t.join(timeout=120)
     try:
         assert errors == []
-        assert _revision(engines[0]) == "0002"
+        assert _revision(engines[0]) == "0003"
         assert _diff(engines[0]) == []
     finally:
         for e in engines:
@@ -254,23 +255,23 @@ def test_downgrade_one_step_and_back(scratch: Engine) -> None:
     init_db(scratch)
     hnsw = {"ix_mcp_tools_embedding_hnsw", "ix_skills_embedding_hnsw"}
     assert hnsw <= _valid_indexes(scratch)
-    assert migrate.downgrade(scratch, "-1") == "0001"
+    assert migrate.downgrade(scratch, "-2") == "0001"
     assert not (hnsw & _valid_indexes(scratch))
     assert _revision(scratch) == "0001"
     init_db(scratch)
-    assert _revision(scratch) == "0002"
+    assert _revision(scratch) == "0003"
     assert hnsw <= _valid_indexes(scratch)
     assert _diff(scratch) == []
 
 
-@pytest.mark.parametrize("target", ["base", "-2"])
+@pytest.mark.parametrize("target", ["base", "-3"])
 def test_downgrade_below_baseline_is_refused_before_anything_runs(
     scratch: Engine, target: str
 ) -> None:
     init_db(scratch)
     with pytest.raises(migrate.BaselineDowngradeRefused):
         migrate.downgrade(scratch, target)
-    assert _revision(scratch) == "0002"  # nothing ran, not even 0002's downgrade
+    assert _revision(scratch) == "0003"  # nothing ran, not even 0003's downgrade
     assert {"ix_mcp_tools_embedding_hnsw"} <= _valid_indexes(scratch)
 
 
@@ -278,7 +279,7 @@ def test_invalid_leftover_index_is_rebuilt(scratch: Engine, scratch_url: str) ->
     """A failed CREATE INDEX CONCURRENTLY leaves an INVALID index that
     IF NOT EXISTS would skip; 0002 must drop and rebuild it."""
     init_db(scratch)
-    migrate.downgrade(scratch, "-1")
+    migrate.downgrade(scratch, "-2")
     blocker = psycopg.connect(
         make_url(scratch_url).set(drivername="postgresql").render_as_string(hide_password=False)
     )
@@ -300,7 +301,7 @@ def test_invalid_leftover_index_is_rebuilt(scratch: Engine, scratch_url: str) ->
         builder.close()
     assert "ix_mcp_tools_embedding_hnsw" not in _valid_indexes(scratch)  # INVALID leftover
     init_db(scratch)
-    assert _revision(scratch) == "0002"
+    assert _revision(scratch) == "0003"
     assert "ix_mcp_tools_embedding_hnsw" in _valid_indexes(scratch)
 
 
@@ -311,7 +312,7 @@ def test_side_table_only_database_takes_the_bridge(scratch: Engine) -> None:
     with scratch.connect() as c:
         assert migrate.schema_state(c) == "legacy"
     init_db(scratch)
-    assert _revision(scratch) == "0002"
+    assert _revision(scratch) == "0003"
     assert _diff(scratch) == []
 
 
@@ -329,11 +330,11 @@ def test_cli_upgrade_current_heads(
     assert migrate.main(["current"]) == 0  # ...so the bare call left the schema alone
     assert capsys.readouterr().out.strip() == "(none)"
     assert migrate.main(["upgrade"]) == 0
-    assert capsys.readouterr().out.strip() == "0002"
+    assert capsys.readouterr().out.strip() == "0003"
     assert migrate.main(["heads"]) == 0
-    assert capsys.readouterr().out.strip() == "0002"
+    assert capsys.readouterr().out.strip() == "0003"
     assert migrate.main(["downgrade", "-1"]) == 0
-    assert capsys.readouterr().out.strip() == "0001"
+    assert capsys.readouterr().out.strip() == "0002"
     assert migrate.main(["downgrade", "base"]) == 1
     last = capsys.readouterr().err.strip().splitlines()[-1]
     assert last.startswith("FATAL: refusing to downgrade below the baseline")

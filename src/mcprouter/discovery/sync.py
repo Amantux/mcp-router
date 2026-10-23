@@ -55,7 +55,13 @@ from mcprouter.mcpclient import (
     ServerTarget,
     ToolDescriptor,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord, ServerHealthEvent, ToolVersionRecord, utcnow
+from mcprouter.models import (
+    MCPServerRecord,
+    MCPToolRecord,
+    ServerHealthEvent,
+    ToolVersionRecord,
+    utcnow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -314,7 +320,13 @@ class DiscoveryService:
             return server, target_for(s, server)
 
     def _record_health_event(
-        self, session: Session, server_id: str, prev_status: str, status: str, latency_ms: float | None, source: str
+        self,
+        session: Session,
+        server_id: str,
+        prev_status: str,
+        status: str,
+        latency_ms: float | None,
+        source: str,
     ) -> None:
         """Record a health status transition if it changed."""
         if prev_status == status:
@@ -340,11 +352,13 @@ class DiscoveryService:
             .order_by(ServerHealthEvent.created_at.desc())
             .offset(keep)
         )
-        session.query(ServerHealthEvent).filter(
-            ServerHealthEvent.id.in_(subq.subquery())
-        ).delete(synchronize_session=False)
+        session.query(ServerHealthEvent).filter(ServerHealthEvent.id.in_(subq)).delete(
+            synchronize_session=False
+        )
 
-    def _set_status(self, server_id: str, *, ok: bool, latency_ms: float, source: str = "check") -> str:
+    def _set_status(
+        self, server_id: str, *, ok: bool, latency_ms: float, source: str = "check"
+    ) -> str:
         with self._sf() as s, s.begin():
             server = s.get(MCPServerRecord, server_id, with_for_update=True)
             if server is None:
@@ -423,7 +437,9 @@ class DiscoveryService:
                     bump_catalog()  # after commit: invalidates cached routes
                 # Record health event outside the transaction to avoid transaction issues
                 with self._sf() as s2, s2.begin():
-                    self._record_health_event(s2, server_id, prev_status, srv.status, latency, "sync")
+                    self._record_health_event(
+                        s2, server_id, prev_status, srv.status, latency, "sync"
+                    )
                 return report
 
             try:

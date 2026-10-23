@@ -434,6 +434,7 @@ async def test_bulk_sync_refreshes_planner_statistics(db: SF) -> None:
     await svc.sync_all()  # nothing changed -> no ANALYZE
     assert _analyze_count(db) == unchanged
 
+
 # ------------------------------------------------------------------- health events
 @requires_db
 def test_health_event_records_status_transitions(db: SF) -> None:
@@ -446,7 +447,7 @@ def test_health_event_records_status_transitions(db: SF) -> None:
             id=str(uuid.uuid4()),
             name="test-server",
             transport="stdio",
-            command=["echo", "hello"],
+            stdio_command=["echo", "hello"],
         )
         s.add(srv)
 
@@ -477,7 +478,7 @@ def test_health_event_skips_noop_transitions(db: SF) -> None:
             id=str(uuid.uuid4()),
             name="test-server",
             transport="stdio",
-            command=["echo", "hello"],
+            stdio_command=["echo", "hello"],
         )
         s.add(srv)
 
@@ -510,7 +511,7 @@ def test_health_events_prune_to_500(db: SF) -> None:
             id=str(uuid_module.uuid4()),
             name="test-server",
             transport="stdio",
-            command=["echo", "hello"],
+            stdio_command=["echo", "hello"],
         )
         s.add(srv)
 
@@ -521,5 +522,7 @@ def test_health_events_prune_to_500(db: SF) -> None:
             svc._record_health_event(s, srv.id, "unknown", "healthy", float(i), "sync")
 
     with db() as s:
-        total = s.scalar(select(func.count(ServerHealthEvent.id)).where(ServerHealthEvent.server_id == srv.id))
+        total = s.scalar(
+            select(func.count(ServerHealthEvent.id)).where(ServerHealthEvent.server_id == srv.id)
+        )
         assert total == 500

@@ -118,6 +118,7 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/servers/import` | ADMIN | Import Servers | Body: a Claude-Desktop-style ``{"mcpServers": {...}}`` document. |
 | `POST` | `/api/v1/servers/{server_id}/refresh` | ADMIN | Refresh Server |  |
 | `DELETE` | `/api/v1/servers/{server_id}` | ADMIN | Remove Server |  |
+| `GET` | `/api/v1/servers/{server_id}/health-events` | ADMIN | List Server Health Events | Get health event history for a server. Admin-gated, returns newest-first. |
 
 ## setup
 
@@ -155,4 +156,4 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/tools/{tool_id}/enable` | ADMIN | Enable Tool |  |
 | `POST` | `/api/v1/tools/{tool_id}/disable` | ADMIN | Disable Tool |  |
 
-63 routes.
+64 routes.

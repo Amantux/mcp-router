@@ -43,10 +43,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        op.f("ix_server_health_events_created_at"), table_name="server_health_events"
-    )
-    op.drop_index(
-        op.f("ix_server_health_events_server_id"), table_name="server_health_events"
-    )
+    op.drop_index(op.f("ix_server_health_events_created_at"), table_name="server_health_events")
+    op.drop_index(op.f("ix_server_health_events_server_id"), table_name="server_health_events")
     op.drop_table("server_health_events")

@@ -323,11 +323,14 @@ def list_server_health_events(
         server = s.get(MCPServerRecord, server_id)
         if server is None:
             raise _not_found()
-        total = s.scalar(
-            select(func.count(ServerHealthEvent.id)).where(
-                ServerHealthEvent.server_id == server_id
+        total = (
+            s.scalar(
+                select(func.count(ServerHealthEvent.id)).where(
+                    ServerHealthEvent.server_id == server_id
+                )
             )
-        ) or 0
+            or 0
+        )
         events = list(
             s.scalars(
                 select(ServerHealthEvent)
