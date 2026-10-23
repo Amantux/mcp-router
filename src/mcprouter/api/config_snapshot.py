@@ -42,7 +42,7 @@ SNAPSHOT_VERSION = 1
 def _validate_transport(transport: str) -> Transport:
     if transport not in TRANSPORTS:
         raise ValueError(f"invalid transport: {transport}")
-    return Transport(transport)
+    return transport
 
 
 # ------------------------------------------------------------------ export schemas
@@ -111,6 +111,7 @@ class ServerImport(BaseModel):
     name: str
     transport: str
     endpoint: str | None = None
+    command: list[str] | None = None
     enabled: bool = True
 
 
@@ -148,10 +149,10 @@ class SnapshotIn(BaseModel):
     """Import request payload."""
 
     snapshot_version: int
-    servers: list[ServerImport]
-    principals: list[PrincipalImport]
-    policy_rules: list[PolicyRuleImport]
-    skill_sources: list[SkillSourceImport]
+    servers: list[ServerImport] = Field(default_factory=list)
+    principals: list[PrincipalImport] = Field(default_factory=list)
+    policy_rules: list[PolicyRuleImport] = Field(default_factory=list)
+    skill_sources: list[SkillSourceImport] = Field(default_factory=list)
 
 
 class ImportReportItem(BaseModel):
@@ -272,7 +273,7 @@ def _import_servers(session: Session, servers: list[ServerImport]) -> list[Impor
             name=item.name,
             transport=_validate_transport(item.transport),
             endpoint=item.endpoint,
-            command=None,
+            command=tuple(item.command) if item.command else None,
             env={},
             enabled=item.enabled,
         )

@@ -49,7 +49,7 @@ def app_with_data(db) -> tuple[TestClient, str]:
 
     # Create sample principal
     resp = client.post(
-        "/api/v1/policy/principals",
+        "/api/v1/principals",
         json={"agent_id": "test-agent", "enabled": True, "max_tools": 5},
         headers={"Authorization": f"Bearer {ADMIN}"},
     )
@@ -57,7 +57,7 @@ def app_with_data(db) -> tuple[TestClient, str]:
 
     # Create sample policy rule
     resp = client.post(
-        "/api/v1/policy/rules",
+        "/api/v1/policy-rules",
         json={
             "agent_id": "test-agent",
             "serverId": server_id,
@@ -192,11 +192,8 @@ def test_import_snapshot_creates_new_config(db) -> None:
     # Verify the key authenticates
     resp = client.post(
         "/api/v1/route",
-        json={
-            "agentId": "imported-agent",
-            "apiKey": new_key,
-            "query": "test",
-        },
+        json={"query": "test"},
+        headers={"Authorization": f"Bearer {new_key}"},
     )
     assert resp.status_code == 200, resp.json()
 
@@ -317,7 +314,8 @@ def test_import_snapshot_returns_keys_only_once(db) -> None:
     # Verify key authenticates
     resp = client.post(
         "/api/v1/route",
-        json={"agentId": "once-only-agent", "apiKey": key, "query": "test"},
+        json={"query": "test"},
+        headers={"Authorization": f"Bearer {key}"},
     )
     assert resp.status_code == 200, resp.json()
 
@@ -350,7 +348,7 @@ def test_import_snapshot_with_existing_data(db) -> None:
     assert resp.status_code == 201, resp.json()
 
     resp = client.post(
-        "/api/v1/policy/principals",
+        "/api/v1/principals",
         json={"agent_id": "existing-agent", "enabled": True},
         headers={"Authorization": f"Bearer {ADMIN}"},
     )

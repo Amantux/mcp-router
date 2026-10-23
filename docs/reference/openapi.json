@@ -3172,6 +3172,70 @@
         }
       }
     },
+    "/api/v1/config/snapshot": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Export Snapshot",
+        "description": "Export operator-visible configuration as versioned JSON.\n\nNever includes: server credential VALUES, agent key material.",
+        "operationId": "export_snapshot_api_v1_config_snapshot_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnapshotOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/snapshot/import": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Import Snapshot",
+        "description": "Import a configuration snapshot.\n\n- Validates snapshot_version (400 on mismatch/missing).\n- Servers: upsert by name (skip duplicates).\n- Policy rules: upsert by composite key (skip duplicates).\n- Principals: create-only with fresh keys returned once.\n- Skill sources: upsert by name (skip duplicates).",
+        "operationId": "import_snapshot_api_v1_config_snapshot_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnapshotIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Healthz",
@@ -4935,6 +4999,85 @@
         ],
         "title": "ImportOut"
       },
+      "ImportReport": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ImportReportItem"
+            },
+            "type": "array",
+            "title": "Servers"
+          },
+          "principals": {
+            "items": {
+              "$ref": "#/components/schemas/ImportReportItem"
+            },
+            "type": "array",
+            "title": "Principals"
+          },
+          "policy_rules": {
+            "items": {
+              "$ref": "#/components/schemas/ImportReportItem"
+            },
+            "type": "array",
+            "title": "Policy Rules"
+          },
+          "skill_sources": {
+            "items": {
+              "$ref": "#/components/schemas/ImportReportItem"
+            },
+            "type": "array",
+            "title": "Skill Sources"
+          },
+          "api_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Api Keys"
+          }
+        },
+        "type": "object",
+        "required": [
+          "servers",
+          "principals",
+          "policy_rules",
+          "skill_sources",
+          "api_keys"
+        ],
+        "title": "ImportReport",
+        "description": "Import response payload."
+      },
+      "ImportReportItem": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "ImportReportItem",
+        "description": "Single item in an import report."
+      },
       "ImportSkip": {
         "properties": {
           "name": {
@@ -5289,6 +5432,100 @@
         ],
         "title": "PolicyFilteredOut"
       },
+      "PolicyRuleImport": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Id"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "max_operation": {
+            "type": "string",
+            "title": "Max Operation",
+            "default": "read"
+          },
+          "requires_approval": {
+            "type": "boolean",
+            "title": "Requires Approval",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "title": "PolicyRuleImport",
+        "description": "Import shape for a policy rule."
+      },
+      "PolicyRuleSnapshot": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "server_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Id"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          },
+          "max_operation": {
+            "type": "string",
+            "title": "Max Operation"
+          },
+          "requires_approval": {
+            "type": "boolean",
+            "title": "Requires Approval"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "server_id",
+          "tool_name",
+          "max_operation",
+          "requires_approval"
+        ],
+        "title": "PolicyRuleSnapshot",
+        "description": "Export shape for a policy rule."
+      },
       "PrincipalCreated": {
         "properties": {
           "id": {
@@ -5351,6 +5588,46 @@
           "apiKey"
         ],
         "title": "PrincipalCreated"
+      },
+      "PrincipalImport": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
+          "max_tools": {
+            "type": "integer",
+            "title": "Max Tools",
+            "default": 8
+          },
+          "max_servers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Servers"
+          },
+          "max_skills": {
+            "type": "integer",
+            "title": "Max Skills",
+            "default": 3
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "title": "PrincipalImport",
+        "description": "Import shape for a principal."
       },
       "PrincipalIn": {
         "properties": {
@@ -5511,6 +5788,47 @@
         },
         "type": "object",
         "title": "PrincipalPatch"
+      },
+      "PrincipalSnapshot": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "max_tools": {
+            "type": "integer",
+            "title": "Max Tools"
+          },
+          "max_servers": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Servers"
+          },
+          "max_skills": {
+            "type": "integer",
+            "title": "Max Skills"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "enabled",
+          "max_tools",
+          "max_servers",
+          "max_skills"
+        ],
+        "title": "PrincipalSnapshot",
+        "description": "Export shape for a principal (no key material)."
       },
       "RankPointOut": {
         "properties": {
@@ -6166,6 +6484,55 @@
         "type": "object",
         "title": "RulePatch"
       },
+      "ServerImport": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "transport": {
+            "type": "string",
+            "title": "Transport"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "transport"
+        ],
+        "title": "ServerImport",
+        "description": "Import shape for a server."
+      },
       "ServerIn": {
         "properties": {
           "name": {
@@ -6348,6 +6715,47 @@
           "enabled"
         ],
         "title": "ServerPatch"
+      },
+      "ServerSnapshot": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "transport": {
+            "type": "string",
+            "title": "Transport"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "endpoint",
+          "enabled"
+        ],
+        "title": "ServerSnapshot",
+        "description": "Export shape for a server (no credential values)."
       },
       "SimulateBody": {
         "properties": {
@@ -6643,6 +7051,87 @@
         ],
         "title": "SkillResourceOut"
       },
+      "SkillSourceImport": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "location": {
+            "type": "string",
+            "title": "Location"
+          },
+          "git_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Ref"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "location"
+        ],
+        "title": "SkillSourceImport",
+        "description": "Import shape for a skill source."
+      },
+      "SkillSourceSnapshot": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "location": {
+            "type": "string",
+            "title": "Location"
+          },
+          "git_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Ref"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "location",
+          "git_ref",
+          "enabled"
+        ],
+        "title": "SkillSourceSnapshot",
+        "description": "Export shape for a skill source."
+      },
       "SkillsOverviewOut": {
         "properties": {
           "surfaced": {
@@ -6677,6 +7166,110 @@
           "bodyTokensNotSent"
         ],
         "title": "SkillsOverviewOut"
+      },
+      "SnapshotIn": {
+        "properties": {
+          "snapshot_version": {
+            "type": "integer",
+            "title": "Snapshot Version"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ServerImport"
+            },
+            "type": "array",
+            "title": "Servers"
+          },
+          "principals": {
+            "items": {
+              "$ref": "#/components/schemas/PrincipalImport"
+            },
+            "type": "array",
+            "title": "Principals"
+          },
+          "policy_rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRuleImport"
+            },
+            "type": "array",
+            "title": "Policy Rules"
+          },
+          "skill_sources": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSourceImport"
+            },
+            "type": "array",
+            "title": "Skill Sources"
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot_version"
+        ],
+        "title": "SnapshotIn",
+        "description": "Import request payload."
+      },
+      "SnapshotOut": {
+        "properties": {
+          "snapshot_version": {
+            "type": "integer",
+            "title": "Snapshot Version",
+            "default": 1
+          },
+          "exported_at": {
+            "type": "string",
+            "title": "Exported At"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ServerSnapshot"
+            },
+            "type": "array",
+            "title": "Servers"
+          },
+          "principals": {
+            "items": {
+              "$ref": "#/components/schemas/PrincipalSnapshot"
+            },
+            "type": "array",
+            "title": "Principals"
+          },
+          "policy_rules": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyRuleSnapshot"
+            },
+            "type": "array",
+            "title": "Policy Rules"
+          },
+          "skill_sources": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSourceSnapshot"
+            },
+            "type": "array",
+            "title": "Skill Sources"
+          },
+          "server_env_names": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Server Env Names"
+          }
+        },
+        "type": "object",
+        "required": [
+          "exported_at",
+          "servers",
+          "principals",
+          "policy_rules",
+          "skill_sources",
+          "server_env_names"
+        ],
+        "title": "SnapshotOut",
+        "description": "Export response payload."
       },
       "SourceIn": {
         "properties": {
