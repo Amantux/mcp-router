@@ -55,7 +55,13 @@ from mcprouter.mcpclient import (
     ServerTarget,
     ToolDescriptor,
 )
-from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolVersionRecord, utcnow
+from mcprouter.models import (
+    MCPServerRecord,
+    MCPToolRecord,
+    ServerHealthEvent,
+    ToolVersionRecord,
+    utcnow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -313,7 +319,46 @@ class DiscoveryService:
             server = get_server(s, server_id)
             return server, target_for(s, server)
 
-    def _set_status(self, server_id: str, *, ok: bool, latency_ms: float) -> str:
+    def _record_health_event(
+        self,
+        session: Session,
+        server_id: str,
+        prev_status: str,
+        status: str,
+        latency_ms: float | None,
+        source: str,
+    ) -> None:
+        """Record a health status transition if it changed."""
+        if prev_status == status:
+            return
+        event = ServerHealthEvent(
+            id=str(uuid.uuid4()),
+            server_id=server_id,
+            prev_status=prev_status,
+            status=status,
+            latency_ms=latency_ms,
+            source=source,
+        )
+        session.add(event)
+        # Prune per-server history to keep newest 500 rows
+        self._prune_health_events(session, server_id, keep=500)
+
+    def _prune_health_events(self, session: Session, server_id: str, keep: int) -> None:
+        """Remove old health events per server, keeping newest ``keep`` rows."""
+        # Delete oldest rows beyond the keep limit
+        subq = (
+            select(ServerHealthEvent.id)
+            .where(ServerHealthEvent.server_id == server_id)
+            .order_by(ServerHealthEvent.created_at.desc())
+            .offset(keep)
+        )
+        session.query(ServerHealthEvent).filter(ServerHealthEvent.id.in_(subq)).delete(
+            synchronize_session=False
+        )
+
+    def _set_status(
+        self, server_id: str, *, ok: bool, latency_ms: float, source: str = "check"
+    ) -> str:
         with self._sf() as s, s.begin():
             server = s.get(MCPServerRecord, server_id, with_for_update=True)
             if server is None:
@@ -327,6 +372,9 @@ class DiscoveryService:
             status = server.status
         if (before == "offline") != (status == "offline"):
             bump_catalog()  # routing eligibility changed; after commit (route cache)
+        # Record health event in a separate session to avoid transaction issues
+        with self._sf() as s2, s2.begin():
+            self._record_health_event(s2, server_id, before, status, latency_ms, source)
         return status
 
     async def _fetch(
@@ -380,12 +428,18 @@ class DiscoveryService:
                     srv = s.get(MCPServerRecord, server_id)
                     assert srv is not None  # locked inside apply_listing
                     was_offline = srv.status == "offline"
+                    prev_status = srv.status
                     srv.status = self.health.success(server_id, srv.status, latency)
                     srv.last_health_at = srv.last_discovered_at
                     crossed = was_offline != (srv.status == "offline")
                 report.latency_ms = latency
                 if report.changed or crossed:
                     bump_catalog()  # after commit: invalidates cached routes
+                # Record health event outside the transaction to avoid transaction issues
+                with self._sf() as s2, s2.begin():
+                    self._record_health_event(
+                        s2, server_id, prev_status, srv.status, latency, "sync"
+                    )
                 return report
 
             try:
@@ -410,10 +464,10 @@ class DiscoveryService:
             _, _, latency = await self._fetch(server, target)
         except ConnectorError:
             return await anyio.to_thread.run_sync(
-                lambda: self._set_status(server_id, ok=False, latency_ms=0.0)
+                lambda: self._set_status(server_id, ok=False, latency_ms=0.0, source="refresh")
             )
         return await anyio.to_thread.run_sync(
-            lambda: self._set_status(server_id, ok=True, latency_ms=latency)
+            lambda: self._set_status(server_id, ok=True, latency_ms=latency, source="refresh")
         )
 
     def server_ids(self, enabled_only: bool = True) -> list[str]:

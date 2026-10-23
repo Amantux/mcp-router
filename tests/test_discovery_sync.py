@@ -29,7 +29,7 @@ from mcprouter.discovery import (
 )
 from mcprouter.discovery.hashing import canonical_json, schema_hash
 from mcprouter.mcpclient import ConnectorError, ToolDescriptor
-from mcprouter.models import MCPServerRecord, MCPToolRecord, ToolVersionRecord
+from mcprouter.models import MCPServerRecord, MCPToolRecord, ServerHealthEvent, ToolVersionRecord
 
 from .conftest import requires_db
 
@@ -433,3 +433,96 @@ async def test_bulk_sync_refreshes_planner_statistics(db: SF) -> None:
     unchanged = _analyze_count(db)
     await svc.sync_all()  # nothing changed -> no ANALYZE
     assert _analyze_count(db) == unchanged
+
+
+# ------------------------------------------------------------------- health events
+@requires_db
+def test_health_event_records_status_transitions(db: SF) -> None:
+    """Health events are recorded when status changes."""
+    import uuid
+
+    # Create a server
+    with db() as s, s.begin():
+        srv = MCPServerRecord(
+            id=str(uuid.uuid4()),
+            name="test-server",
+            transport="stdio",
+            stdio_command=["echo", "hello"],
+        )
+        s.add(srv)
+
+    # Simulate status transitions via _record_health_event
+    svc = DiscoveryService(db)
+    with db() as s, s.begin():
+        # First transition: offline -> healthy
+        svc._record_health_event(s, srv.id, "offline", "healthy", 10.5, "sync")
+
+    # Verify event recorded
+    with db() as s:
+        events = list(s.scalars(select(ServerHealthEvent).order_by(ServerHealthEvent.created_at)))
+        assert len(events) == 1
+        assert events[0].prev_status == "offline"
+        assert events[0].status == "healthy"
+        assert events[0].latency_ms == 10.5
+        assert events[0].source == "sync"
+
+
+@requires_db
+def test_health_event_skips_noop_transitions(db: SF) -> None:
+    """No event is recorded when status doesn't change."""
+    import uuid
+
+    # Create a server
+    with db() as s, s.begin():
+        srv = MCPServerRecord(
+            id=str(uuid.uuid4()),
+            name="test-server",
+            transport="stdio",
+            stdio_command=["echo", "hello"],
+        )
+        s.add(srv)
+
+    svc = DiscoveryService(db)
+    with db() as s, s.begin():
+        # First transition
+        svc._record_health_event(s, srv.id, "offline", "healthy", 10.5, "sync")
+        # No-op: same status
+        svc._record_health_event(s, srv.id, "healthy", "healthy", 15.0, "sync")
+        # Another transition
+        svc._record_health_event(s, srv.id, "healthy", "degraded", None, "refresh")
+
+    with db() as s:
+        events = list(s.scalars(select(ServerHealthEvent).order_by(ServerHealthEvent.created_at)))
+        assert len(events) == 2
+        assert events[0].status == "healthy"
+        assert events[1].status == "degraded"
+        assert events[1].latency_ms is None
+        assert events[1].source == "refresh"
+
+
+@requires_db
+def test_health_events_prune_to_500(db: SF) -> None:
+    """Old health events are pruned to keep newest 500 per server."""
+    import uuid as uuid_module
+
+    # Create a server
+    with db() as s, s.begin():
+        srv = MCPServerRecord(
+            id=str(uuid_module.uuid4()),
+            name="test-server",
+            transport="stdio",
+            stdio_command=["echo", "hello"],
+        )
+        s.add(srv)
+
+    svc = DiscoveryService(db)
+    with db() as s, s.begin():
+        # Create 550 events
+        for i in range(550):
+            svc._record_health_event(s, srv.id, "unknown", "healthy", float(i), "sync")
+
+    with db() as s:
+        total = s.scalar(
+            select(func.count(ServerHealthEvent.id)).where(ServerHealthEvent.server_id == srv.id)
+        )
+        assert total == 500

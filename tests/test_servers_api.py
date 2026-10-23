@@ -285,3 +285,15 @@ def test_create_server_unknown_field_is_422(client: TestClient) -> None:
     r = client.post("/api/v1/servers", json=body)
     assert r.status_code == 422
     assert client.get("/api/v1/servers").json() == []
+
+
+def test_health_events_endpoint(client: TestClient, fleet: InprocFleet) -> None:
+    """GET .../health-events: empty for a fresh server, 404 for an unknown one."""
+    srv = _create_inproc(client, fleet, "health-events-server")
+    r = client.get(f"/api/v1/servers/{srv['id']}/health-events")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+    missing = "00000000-0000-0000-0000-000000000000"
+    assert client.get(f"/api/v1/servers/{missing}/health-events").status_code == 404

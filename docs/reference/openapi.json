@@ -281,6 +281,69 @@
         }
       }
     },
+    "/api/v1/servers/{server_id}/health-events": {
+      "get": {
+        "tags": [
+          "servers"
+        ],
+        "summary": "List Server Health Events",
+        "description": "Get health event history for a server. Admin-gated, returns newest-first.",
+        "operationId": "list_server_health_events_api_v1_servers__server_id__health_events_get",
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthEventsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tools": {
       "get": {
         "tags": [
@@ -4882,6 +4945,88 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HealthEventOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "serverId": {
+            "type": "string",
+            "title": "Serverid"
+          },
+          "prevStatus": {
+            "type": "string",
+            "title": "Prevstatus"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "latencyMs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latencyms"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "serverId",
+          "prevStatus",
+          "status",
+          "latencyMs",
+          "source",
+          "createdAt"
+        ],
+        "title": "HealthEventOut"
+      },
+      "HealthEventsOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HealthEventOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "HealthEventsOut"
       },
       "IdleUnloadHealth": {
         "properties": {

@@ -12,6 +12,7 @@ import {
   listDedupSuggestions,
   listRules,
   listServers,
+  listServerHealthEvents,
   listTools,
   refreshServer,
   normaliseSimulation,
@@ -98,6 +99,32 @@ describe("client requests", () => {
   it("defaults missing tool versions to an empty list", async () => {
     mockFetch({ "GET /api/v1/tools/t1": () => ({ json: { id: "t1", name: "x" } }) });
     expect((await getTool("t1")).versions).toEqual([]);
+  });
+
+  it("listServerHealthEvents maps snake_case fields and sends limit/offset query params", async () => {
+    const { calls } = mockFetch({
+      "GET /api/v1/servers/s1/health-events": () => ({
+        json: {
+          items: [
+            { id: "e1", server_id: "s1", prev_status: "up", status: "down", latency_ms: 42, source: "check", created_at: "2026-10-01T00:00:00Z" },
+          ],
+          total: 1,
+          limit: 10,
+          offset: 5,
+        },
+      }),
+    });
+    const page = await listServerHealthEvents("s1", { limit: 10, offset: 5 });
+    expect(page.total).toBe(1);
+    const e = page.items[0];
+    expect(e.serverId).toBe("s1");
+    expect(e.prevStatus).toBe("up");
+    expect(e.status).toBe("down");
+    expect(e.latencyMs).toBe(42);
+    expect(e.source).toBe("check");
+    const url = new URL(calls[0].url, "http://x");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("offset")).toBe("5");
   });
 
   it("executeTool sends agentId/routeRequestId only when given, and keeps result content opaque", async () => {

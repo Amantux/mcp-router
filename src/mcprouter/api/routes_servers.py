@@ -22,7 +22,7 @@ import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -45,7 +45,7 @@ from mcprouter.discovery.credentials import env_names
 from mcprouter.discovery.registry import get_server, set_server_enabled, tool_counts
 from mcprouter.generation import bump_catalog
 from mcprouter.mcpclient import ConnectorError
-from mcprouter.models import MCPServerRecord
+from mcprouter.models import MCPServerRecord, ServerHealthEvent
 
 # Admin-only (integration security blocker): stdio registration is arbitrary
 # command execution and refresh dials stored targets. The gateway's admin
@@ -118,6 +118,23 @@ class RefreshOut(_Wire):
     unchanged: int
     skipped: int
     latency_ms: float
+
+
+class HealthEventOut(_Wire):
+    id: str
+    serverId: str
+    prevStatus: str
+    status: str
+    latencyMs: float | None
+    source: str
+    createdAt: datetime
+
+
+class HealthEventsOut(_Wire):
+    items: list[HealthEventOut]
+    total: int
+    limit: int
+    offset: int
 
 
 # ----------------------------------------------------------------- helpers
@@ -292,3 +309,51 @@ def remove_server(server_id: str, request: Request) -> Response:
         raise HTTPException(status.HTTP_409_CONFLICT, exc.message) from None
     bump_catalog()  # route cache (wave 2)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{server_id}/health-events", response_model=HealthEventsOut)
+def list_server_health_events(
+    server_id: str,
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+) -> HealthEventsOut:
+    """Get health event history for a server. Admin-gated, returns newest-first."""
+    with _factory(request)() as s:
+        server = s.get(MCPServerRecord, server_id)
+        if server is None:
+            raise _not_found()
+        total = (
+            s.scalar(
+                select(func.count(ServerHealthEvent.id)).where(
+                    ServerHealthEvent.server_id == server_id
+                )
+            )
+            or 0
+        )
+        events = list(
+            s.scalars(
+                select(ServerHealthEvent)
+                .where(ServerHealthEvent.server_id == server_id)
+                .order_by(ServerHealthEvent.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+    return HealthEventsOut(
+        items=[
+            HealthEventOut(
+                id=e.id,
+                serverId=e.server_id,
+                prevStatus=e.prev_status,
+                status=e.status,
+                latencyMs=e.latency_ms,
+                source=e.source,
+                createdAt=e.created_at,
+            )
+            for e in events
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
