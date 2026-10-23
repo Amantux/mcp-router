@@ -33,6 +33,13 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `GET` | `/api/v1/analytics/suggestions` | ADMIN | Suggestions |  |
 | `POST` | `/api/v1/analytics/rollup` | ADMIN | Rollup |  |
 
+## config
+
+| method | path | auth | summary | description |
+|---|---|---|---|---|
+| `GET` | `/api/v1/config/snapshot` | ADMIN | Export Snapshot | Export operator-visible configuration as versioned JSON. |
+| `POST` | `/api/v1/config/snapshot/import` | ADMIN | Import Snapshot | Import a configuration snapshot. |
+
 ## decision
 
 | method | path | auth | summary | description |
@@ -155,4 +162,4 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/tools/{tool_id}/enable` | ADMIN | Enable Tool |  |
 | `POST` | `/api/v1/tools/{tool_id}/disable` | ADMIN | Disable Tool |  |
 
-63 routes.
+65 routes.

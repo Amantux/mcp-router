@@ -38,6 +38,7 @@ from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
 from mcprouter.api import hardening, routes_dedup, routes_skill_sources, routes_skills, routes_tools
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
+from mcprouter.api.config_snapshot import router as config_snapshot_router
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.errors import install_error_handlers
 from mcprouter.api.routes_analytics import install_analytics
@@ -233,6 +234,7 @@ def create_app(
     app.include_router(setup_router)  # wave-5 first-run wizard (admin-gated)
     app.include_router(routes_skills.agent_router)  # BEFORE router: /skills/bundle
     app.include_router(routes_skills.router)
+    app.include_router(config_snapshot_router)  # config export/import (admin-gated)
     build_gateway(
         app,
         manager=manager,

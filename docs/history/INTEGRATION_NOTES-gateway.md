@@ -13,12 +13,12 @@ from mcprouter.execution.manager import ExecutionManager
 from mcprouter.gateway.server import build_gateway
 
 # after app.state.settings / .engine / .session_factory are set:
-configure_security(app, os.environ)       # tables + env bootstrap + app.state.security;
-                                          # raises AgentKeysConfigError on bad config
+configure_security(app, os.environ)  # tables + env bootstrap + app.state.security;
+# raises AgentKeysConfigError on bad config
 manager = ExecutionManager.from_settings(settings, app.state.session_factory, tool_invoker)
 app.state.execution_manager = manager
-app.include_router(policy_router)         # /api/v1/principals, /policy-rules, /approvals, /me
-build_gateway(app, manager=manager, route_fn=route_fn)   # POST/GET/DELETE /mcp
+app.include_router(policy_router)  # /api/v1/principals, /policy-rules, /approvals, /me
+build_gateway(app, manager=manager, route_fn=route_fn)  # POST/GET/DELETE /mcp
 ```
 
 - `build_gateway` appends a Starlette `Route("/mcp")`. It also wraps

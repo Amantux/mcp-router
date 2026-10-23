@@ -12,8 +12,8 @@ from mcprouter.registry.schema import init_registry
 # in create_app(), right after init_db(engine):
 init_registry(engine)
 # with the other routers:
-app.include_router(routes_tools.router)   # /api/v1/tools
-app.include_router(routes_dedup.router)   # /api/v1/dedup
+app.include_router(routes_tools.router)  # /api/v1/tools
+app.include_router(routes_dedup.router)  # /api/v1/dedup
 ```
 
 `init_registry(engine)` is idempotent (`CREATE ... IF NOT EXISTS`) and creates:

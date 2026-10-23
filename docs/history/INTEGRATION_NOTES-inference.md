@@ -10,8 +10,8 @@ Items are tagged **[needed]** (functionality depends on it) or
 from mcprouter.api.routes_models import router as models_router
 from mcprouter.inference.engine import InferenceEngine
 
-engine = InferenceEngine(settings)          # never loads at construction
-app.state.inference_engine = engine         # routes_models reads exactly this
+engine = InferenceEngine(settings)  # never loads at construction
+app.state.inference_engine = engine  # routes_models reads exactly this
 app.include_router(models_router)
 # lifespan startup:  engine.load()          # SPEC §7 "load once at startup"
 # lifespan shutdown: engine.unload()

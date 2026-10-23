@@ -115,6 +115,8 @@ Goal: adding a handler, meta-tool or notification fails CI until a real-transpor
        expected |= {(era, f"tools/call:{t}") for era in ERAS for t in meta_tool_names(world["gw"])}
        assert expected <= set(SURFACE), f"uncovered: {sorted(expected - set(SURFACE))}"
        assert set(SURFACE) <= expected | UNSUPPORTED_ROWS, "stale row"
+
+
    @pytest.mark.parametrize("key", sorted(SURFACE))
    async def test_surface_row(served, key): ...  # runs row, then asserts key in COVERED
    ```

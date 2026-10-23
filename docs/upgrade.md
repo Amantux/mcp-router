@@ -35,6 +35,35 @@ Embeddings are derived data. They are stored with the backend that produced
 them and are recomputed on the next sync after you change
 `MCPR_EMBEDDING_BACKEND`, so you never need to back them up separately.
 
+## 1b. Curated config snapshot (backup/upgrades)
+
+For cloning a working setup to another machine or disaster recovery without
+shipping audit/analytics rows or secret material, use the config snapshot API:
+
+```bash
+# Export operator-visible configuration (no secrets)
+curl -H "Authorization: Bearer <admin-token>" \
+  http://localhost:8000/api/v1/config/snapshot > config-snapshot.json
+
+# Import into a fresh stack (returns one-time principal keys)
+curl -X POST -H "Authorization: Bearer <admin-token>" \
+  -H "Content-Type: application/json" \
+  -d @config-snapshot.json \
+  http://localhost:8000/api/v1/config/snapshot/import
+```
+
+What's included:
+- Servers (name, transport, endpoint, command, enabled status)
+- Principals (agent_id, max_tools, max_servers, max_skills)
+- Policy rules (agent_id, server_id, tool_name, max_operation, requires_approval)
+- Skill sources (name, kind, location, git_ref, enabled status)
+- Server env variable NAMES only (never credential VALUES)
+
+What's deliberately excluded:
+- Agent key material (shown once on import, never stored/exported)
+- Server credential VALUES (re-enter them on the target system)
+- Audit and analytics rows
+
 ## 2. Upgrade (Docker)
 
 ```bash

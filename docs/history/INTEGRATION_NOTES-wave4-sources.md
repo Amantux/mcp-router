@@ -13,7 +13,7 @@ from mcprouter.api.routes_skill_sources import router as skill_sources_router
 from mcprouter.api.routes_skills import router as skills_router
 
 app.include_router(skill_sources_router)  # /api/v1/skill-sources (admin)
-app.include_router(skills_router)         # /api/v1/skills (admin)
+app.include_router(skills_router)  # /api/v1/skills (admin)
 ```
 
 Both routers declare `dependencies=[Depends(require_admin)]` at the router level,

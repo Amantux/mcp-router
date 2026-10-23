@@ -288,7 +288,7 @@ redacted before logs, audit rows and model inputs. Details:
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | Connecting coding agents, identities and policy, API conventions |
 | [docs/deploy.md](docs/deploy.md) | Docker deployment, security posture, limits, troubleshooting |
-| [docs/upgrade.md](docs/upgrade.md) | Upgrades, downgrades, backups |
+| [docs/upgrade.md](docs/upgrade.md) | Upgrades, downgrades, backups, config snapshot export/import |
 | [docs/reference/configuration.md](docs/reference/configuration.md) | Every `MCPR_*` setting (generated) |
 | [docs/reference/api.md](docs/reference/api.md) | Every REST route with its auth class (generated) |
 | [docs/reference/cli.md](docs/reference/cli.md) | `testbed`, `bench` and `scripts/` commands |

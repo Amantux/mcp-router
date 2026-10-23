@@ -112,6 +112,15 @@ def test_pagination_bounds(client: TestClient, path: str) -> None:
 SNAKE_CASE_SCHEMAS = {
     "RouteResponse": "POST /route: SPEC §9 snake_case body (nests camel bodyTokensEst)",
     "EvaluateResponse": "POST /route/evaluate: snake_case like /route",
+    "PrincipalImport": "config snapshot: a portable backup/migration document, not UI wire format",
+    "PolicyRuleImport": "config snapshot: a portable backup/migration document, not UI wire format",
+    "PolicyRuleSnapshot": "config snapshot: a portable backup/migration document, not UI wire format",
+    "PrincipalSnapshot": "config snapshot: a portable backup/migration document, not UI wire format",
+    "SkillSourceImport": "config snapshot: a portable backup/migration document, not UI wire format",
+    "SkillSourceSnapshot": "config snapshot: a portable backup/migration document, not UI wire format",
+    "SnapshotIn": "config snapshot: a portable backup/migration document, not UI wire format",
+    "SnapshotOut": "config snapshot: a portable backup/migration document, not UI wire format",
+    "ImportReport": "config snapshot: a portable backup/migration document, not UI wire format",
 }
 # Untyped (dict) responses with snake_case keys: no schema to check, listed so
 # adding a typed model forces a decision here.
