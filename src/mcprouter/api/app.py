@@ -36,7 +36,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from mcprouter import __version__
 from mcprouter.analytics.scheduler import RollupLoop
-from mcprouter.api import hardening, routes_dedup, routes_skill_sources, routes_skills, routes_tools
+from mcprouter.api import (
+    hardening,
+    routes_dedup,
+    routes_skill_sources,
+    routes_skills,
+    routes_tools,
+)
 from mcprouter.api.body_limit import BodySizeLimitMiddleware
 from mcprouter.api.deps_auth import configure_security
 from mcprouter.api.errors import install_error_handlers
@@ -218,6 +224,10 @@ def create_app(
     app.include_router(execute_router)
     # /api/v1/analytics/* (admin) + the Prometheus funnel collector.
     install_analytics(app)
+    # Diagnostics endpoint (admin-gated)
+    from mcprouter.api.routes_diag import install_diag
+
+    install_diag(app)
     # Skills: S3 exposure gated by the ONE kind-aware policy engine (bridge).
     skill_exposure = SkillExposure(
         factory,

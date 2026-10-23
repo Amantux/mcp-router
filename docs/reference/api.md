@@ -48,6 +48,12 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/dedup/suggestions/{suggestion_id}/accept` | ADMIN | Accept | Empty body keeps the scanner's preferred tool (D12, backward compatible). |
 | `POST` | `/api/v1/dedup/suggestions/{suggestion_id}/dismiss` | ADMIN | Dismiss |  |
 
+## diagnostics
+
+| method | path | auth | summary | description |
+|---|---|---|---|---|
+| `GET` | `/api/v1/diag` | ADMIN | Diagnostics | Get comprehensive health status for all components. |
+
 ## execution
 
 | method | path | auth | summary | description |
@@ -155,4 +161,4 @@ Request bodies are limited to 1 MiB (413). Validation errors are 422 with
 | `POST` | `/api/v1/tools/{tool_id}/enable` | ADMIN | Enable Tool |  |
 | `POST` | `/api/v1/tools/{tool_id}/disable` | ADMIN | Disable Tool |  |
 
-63 routes.
+64 routes.
