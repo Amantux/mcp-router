@@ -21,7 +21,7 @@ RUN npm run build
 # Stage 2: the API image (zero-ML: hash embeddings + deterministic decisions).
 # Dockerfile.inference layers the [inference] extra on top of this image.
 # python:3.12-slim
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS base
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS base
 LABEL org.opencontainers.image.source="https://github.com/Amantux/mcp-router" \
       org.opencontainers.image.title="mcp-router" \
       org.opencontainers.image.description="MCP Router API + dashboard"
