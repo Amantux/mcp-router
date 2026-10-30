@@ -4,33 +4,33 @@ version = "0.6.0"
 description = "MCP Intelligent Routing Platform — local-first MCP discovery, cataloging, and intelligent tool routing"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi==0.142.4",
-  "uvicorn[standard]==0.52.3",
-  "sqlalchemy==2.0.52",
+  "fastapi==0.162.0",
+  "uvicorn[standard]==0.54.0",
+  "sqlalchemy==2.1.6",
   "psycopg[binary]==3.3.6",
-  "pgvector==0.5.0",
-  "alembic==1.17.1",
-  "pydantic==2.13.5",
+  "pgvector==0.5.1",
+  "alembic==1.20.1",
+  "pydantic==2.14.1",
   "mcp==2.3.0",
   "httpx==0.28.1",
-  "prometheus-client==0.24.1",
+  "prometheus-client==0.26.0",
   "structlog==26.1.0",
   "jsonschema==4.26.0",
   # SKILL.md frontmatter (wave-4 skills); only yaml.safe_load is used.
   "pyyaml==6.0.3",
   # Imported directly by mcpclient for transport-error mapping (transitive via
   # mcp); declared so a resolver change cannot silently drop it.
-  "httpx2==2.13.1",
+  "httpx2==2.16.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest==9.1.1",
-  "pytest-asyncio==1.4.0",
+  "pytest-asyncio==1.4.1",
   "pytest-xdist==3.8.0",
   "pytest-timeout==2.4.0",
-  "ruff==0.15.22",
-  "mypy==2.3.0",
+  "ruff==0.17.3",
+  "mypy==2.4.0",
   "types-requests",
   "types-jsonschema==4.26.0.20261006",
   "types-PyYAML==6.0.12.20260906",
@@ -41,7 +41,7 @@ inference = [
   "torch>=2.4",
   "transformers>=4.48",
   "sentence-transformers>=3.3",
-  "laya==0.4.0",
+  "laya==0.4.15",
 ]
 
 [build-system]
