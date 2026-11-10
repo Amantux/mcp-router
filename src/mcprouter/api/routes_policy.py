@@ -36,6 +36,7 @@ from mcprouter.execution.manager import ApprovalError, ApprovalView
 from mcprouter.execution.redaction import scrub_log
 from mcprouter.generation import bump_policy
 from mcprouter.models import AgentPrincipal, MCPServerRecord, PolicyRule, SkillSourceRecord
+from mcprouter.policy.simulate import simulate
 
 log = logging.getLogger(__name__)
 
@@ -465,3 +466,66 @@ async def my_approval(
     if view is None:  # someone else's approval is indistinguishable from none
         raise HTTPException(status_code=404, detail="approval not found")
     return _a_out(view)
+
+
+# ------------------------------------------------------------- policy dry-run
+class DryRunIn(_Wire):
+    agent_id: AgentId
+    server_id: str | None = None
+    tool_name: str | None = Field(default=None, min_length=1, max_length=200)
+    max_operation: Operation | None = None
+    requires_approval: bool | None = None
+    resource_kind: Literal["tool", "skill"] | None = None
+    window_days: int = Field(default=7, ge=1, le=365)
+
+
+class DryRunRecent(_Wire):
+    attempts: int
+    would_permit: int
+    of_which_approval: int
+    currently_denied_now_permitted: int
+
+
+class DryRunOut(_Wire):
+    newly_permitted: list[dict[str, Any]]
+    approval_added: list[dict[str, Any]]
+    recent: DryRunRecent
+
+
+@router.post(
+    "/policy-rules/dry-run",
+    response_model=DryRunOut,
+    dependencies=[Admin],
+)
+def policy_rule_dry_run(body: DryRunIn, request: Request) -> DryRunOut:
+    """Dry-run a candidate policy rule against an agent's catalog and history.
+
+    Evaluates what would change if the candidate rule were saved, without
+    persisting any changes. Reports:
+    - newly_permitted: tools/skills that would become allowed
+    - approval_added: tools/skills already allowed but would require approval
+    - recent: execution history replay over the lookback window
+
+    This is a read-only operation: no database writes, no policy generation bump.
+    """
+    with _session(request) as s:
+        principal = _get_principal_row(s, body.agent_id)
+
+        # Build candidate rule from input
+        candidate = PolicyRule(
+            agent_id=body.agent_id,
+            server_id=body.server_id,
+            tool_name=body.tool_name,
+            max_operation=body.max_operation or "read",
+            requires_approval=body.requires_approval if body.requires_approval is not None else False,
+            resource_kind=body.resource_kind or "tool",
+        )
+
+        # Run simulation
+        result = simulate(s, principal, candidate, window_days=body.window_days)
+
+    return DryRunOut(
+        newly_permitted=result["newly_permitted"],
+        approval_added=result["approval_added"],
+        recent=DryRunRecent(**result["recent"]),
+    )
