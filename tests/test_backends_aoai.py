@@ -388,4 +388,9 @@ def test_trickled_headers_hit_the_hard_stop(path: str, monkeypatch: pytest.Monke
     finally:
         shutdown()
         http.close()
-    assert _time.monotonic() - t0 < 0.8
+    # The point: the hard stop fired at the 0.5 s deadline instead of running
+    # the full retry ladder (~2.5 s with max_retries=2). The upper bound is
+    # slack, not the property: on loaded boxes close() can block until the
+    # trickle server's next tick (one interval, 0.3 s) — seen at ~0.9 s on
+    # macOS under load.
+    assert _time.monotonic() - t0 < 1.5
