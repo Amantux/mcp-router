@@ -70,6 +70,14 @@ def clamp_budget(
     return _clamp(name, requested, principal, global_cap)
 
 
+def context_budget(requested_context: int | None, settings: Settings) -> BudgetClamp:
+    """Applied ESTIMATED-token budget (hard-token-budgets spec):
+    min(request, global). A request may lower, never raise — and `None`
+    (request or settings) means "no cap", not "raise". Agent principals carry
+    no token axis, so this is the one clamp without a principal ceiling."""
+    return _clamp("maxContextTokens", requested_context, None, settings.max_context_tokens)
+
+
 def effective_budgets(
     principal: AgentPrincipal,
     settings: Settings,

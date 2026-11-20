@@ -12,6 +12,13 @@ catalog tokens use the same estimator over the same kind of text.
 
 Not counted: the `find_tools` meta-tool (sent either way), approval
 suffixes, MCP framing, and redaction-induced length changes.
+
+Enforcement (routing/pipeline.py, `max_context_tokens`) charges exactly
+this estimator — tool definitions via `estimate_tokens`, skills via
+`skill_metadata_tokens` (bodies are sent only on activation and never
+count against the exposure budget). The per-request exclusion list
+mirrors the rule above; it is stated here and in the pipeline docstring,
+not silently undefined.
 """
 
 from __future__ import annotations

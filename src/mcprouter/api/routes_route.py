@@ -31,6 +31,10 @@ Integration (identity + redaction):
   publishes exposure, never executes, and bypasses the route cache.
 * Budgets: request maxTools/maxServers may lower, never raise, the principal
   and global caps (routing.budgets); /route reports the applied values.
+  maxContextTokens (hard-token-budgets spec) rides the same envelope: a
+  request may lower, never raise, the global MCPR_MAX_CONTEXT_TOKENS knob;
+  `/route` reports the ESTIMATED tokens actually charged (max_tokens_applied)
+  next to the estimator label.
 
 Decision: unknown `allowed_servers` names are a 400 listing them, never
 silently ignored — dropping an unknown name could turn ["githb"] into "no
@@ -49,6 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 from pydantic.alias_generators import to_camel
 from sqlalchemy import select
 
+from mcprouter.analytics.tokens import ESTIMATOR
 from mcprouter.api.deps import session_factory
 from mcprouter.api.deps_auth import (
     DEV_AGENT_ID,
@@ -103,6 +108,9 @@ class RouteBody(_Body):
     # optional NARROWING kind filter (absent = tools + skills).
     max_skills: int | None = Field(default=None, ge=1, le=1000)
     kinds: list[Literal["tool", "skill"]] | None = Field(default=None, min_length=1, max_length=2)
+    # hard-token-budgets: ESTIMATED-token budget. May only LOWER the global
+    # MCPR_MAX_CONTEXT_TOKENS knob (the pipeline clamps; None = knob decides).
+    max_context_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
 
     @field_validator("query")
     @classmethod
@@ -159,12 +167,22 @@ class RouteResponse(BaseModel):
     max_tools_applied: int
     max_servers_applied: int | None
     max_skills_applied: int | None
+    # hard-token-budgets: ESTIMATED tokens actually charged for the exposed
+    # definitions (analytics/tokens.py chars/4 proxy — a documented estimate)
+    # plus the estimator label verbatim; never a "measured" count.
+    max_tokens_applied: int
+    estimator: str
     # Served from the route cache (authorization was re-checked on the hit).
     cached: bool
 
 
 def _route_request(
-    body: RouteBody, agent_id: str, max_tools: int, max_servers: int | None, allowed: Any
+    body: RouteBody,
+    agent_id: str,
+    max_tools: int,
+    max_servers: int | None,
+    allowed: Any,
+    max_context_tokens: int | None = None,
 ) -> RouteRequest:
     return RouteRequest(
         query=redact(body.query),  # model input AND the persisted decision row
@@ -174,6 +192,7 @@ def _route_request(
         max_servers=max_servers,
         max_skills=body.max_skills,
         kinds=tuple(dict.fromkeys(body.kinds)) if body.kinds is not None else None,
+        max_context_tokens=max_context_tokens,
     )
 
 
@@ -284,7 +303,9 @@ def route(
         requested_tools=body.max_tools,
         requested_servers=body.max_servers,
     )
-    route_req = _route_request(body, agent_id, budgets.max_tools, budgets.max_servers, allowed_ids)
+    route_req = _route_request(
+        body, agent_id, budgets.max_tools, budgets.max_servers, allowed_ids, body.max_context_tokens
+    )
     result = pipeline.route(route_req, scope)
     gateway = getattr(request.app.state, "gateway", None)
     if gateway is not None:
@@ -318,6 +339,8 @@ def route(
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
         max_skills_applied=pipeline.skills_budget(route_req, scope).applied,
+        max_tokens_applied=result.tokens_applied,
+        estimator=ESTIMATOR,
         cached=result.cached,
     )
 
@@ -403,6 +426,10 @@ class SimulateResponse(_Wire):
     max_tools_applied: int
     max_servers_applied: int | None
     max_skills_applied: int | None
+    # hard-token-budgets: ESTIMATED tokens charged + estimator label verbatim
+    # (camelCase on the wire via _Wire, like every other simulate field).
+    max_tokens_applied: int
+    estimator: str
     diagnostics: DiagnosticsOut
 
 
@@ -450,14 +477,20 @@ def simulate(
     )
     trace = RouteTrace()
     route_req = _route_request(
-        body, principal.agent_id, budgets.max_tools, budgets.max_servers, allowed_ids
+        body,
+        principal.agent_id,
+        budgets.max_tools,
+        budgets.max_servers,
+        allowed_ids,
+        body.max_context_tokens,
     )
     result = pipeline.route(route_req, scope, trace=trace)
     tools, skills = _split(result)
     tokens = _skill_tokens(request, skills)
-    # Trace carries the skills clamp when the pipeline ran the budget stage;
+    # Trace carries the clamps the pipeline ran its budget stages with;
     # otherwise (e.g. no candidates) compute the same clamp directly.
     skill_clamp = trace.skill_budget or pipeline.skills_budget(route_req, scope)
+    token_clamp = trace.context_budget or pipeline.context_budget(route_req)
     return SimulateResponse(
         request_id=result.request_id,
         agent_id=principal.agent_id,
@@ -485,6 +518,8 @@ def simulate(
         max_tools_applied=budgets.max_tools,
         max_servers_applied=budgets.max_servers,
         max_skills_applied=skill_clamp.applied,
+        max_tokens_applied=result.tokens_applied,
+        estimator=ESTIMATOR,
         diagnostics=DiagnosticsOut(
             candidates_considered=[
                 CandidateOut(
@@ -529,7 +564,7 @@ def simulate(
                     applied=c.applied,
                     clamped_by=c.clamped_by,
                 )
-                for c in (*budgets.clamps, skill_clamp)
+                for c in (*budgets.clamps, skill_clamp, token_clamp)
             ],
         ),
     )

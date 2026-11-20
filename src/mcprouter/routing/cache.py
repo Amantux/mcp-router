@@ -8,8 +8,9 @@ cached tool no longer passes, the hit is discarded and the route recomputed.
 
 Key = (agent_id, normalized query, scope fingerprint, catalog generation,
 policy generation, effective max_tools, effective max_servers, allowed server
-ids, decision-model name). The query is normalized by collapsing whitespace
-only — case is preserved because the decision model sees case.
+ids, effective max_skills, effective max_context_tokens, kinds, decision-model
+name). The query is normalized by collapsing whitespace only — case is
+preserved because the decision model sees case.
 
 Not cached: fallback results (a transient model timeout must not pin a
 degraded ranking for the TTL) and any scope without a `fingerprint()`
@@ -54,6 +55,9 @@ class CachedRoute:
     tools: tuple[CachedTool, ...]
     no_match: bool
     model_version: str
+    # hard-token-budgets spec: ESTIMATED tokens charged for the cached
+    # exposure, so a hit reports the same `max_tokens_applied` as a compute.
+    tokens_applied: int = 0
 
 
 class _Entry:
