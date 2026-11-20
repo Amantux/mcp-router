@@ -5,6 +5,7 @@ import { NotificationsProvider } from "../components/Notifications";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
 import { setCredentials } from "../api/auth";
+import { principalRow, withDefaults } from "../test/fixtures/api";
 import { ExecutionOutcomeView, PlaygroundPage, useRunAs } from "./PlaygroundPage";
 
 const TOOL = {
@@ -28,14 +29,13 @@ const TOOL = {
 };
 
 function mockTool(tool: Record<string, unknown>, execute: (body: unknown) => { status?: number; json?: unknown }) {
-  return mockFetch({
+  return mockFetch(withDefaults({
     "GET /api/v1/servers": () => ({ json: [{ id: "s1", name: "github" }] }),
     "GET /api/v1/tools": () => ({ json: { items: [tool], total: 1 } }),
     [`GET /api/v1/tools/${tool.id}`]: () => ({ json: tool }),
     [`POST /api/v1/tools/${tool.id}/execute`]: execute,
-    "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
-    "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
-  });
+    "GET /api/v1/principals": () => ({ json: [principalRow({ created_at: "2026-01-01T00:00:00Z" })] }),
+  }));
 }
 
 describe("PlaygroundPage", () => {
@@ -203,14 +203,12 @@ describe("ExecutionOutcomeView — pending approval", () => {
 const SKILL = { id: "k1", source_id: "src1", source_name: "team-skills", name: "deploy-helper", description: "Deploys things", operation: "execute", enabled: true };
 
 function mockSkill(activate: (body: unknown) => { status?: number; json?: unknown }) {
-  return mockFetch({
+  return mockFetch(withDefaults({
     "GET /api/v1/skills": () => ({ json: { items: [SKILL], total: 1 } }),
-    // The page resolves the agent key's id (the 429 test sets one).
-    "GET /api/v1/me": () => ({ json: { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8 } }),
     "GET /api/v1/skills/k1": () => ({ json: SKILL }),
     "POST /api/v1/skills/k1/activate": activate,
-    "GET /api/v1/principals": () => ({ json: [{ id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, created_at: "2026-01-01T00:00:00Z" }] }),
-  });
+    "GET /api/v1/principals": () => ({ json: [principalRow({ created_at: "2026-01-01T00:00:00Z" })] }),
+  }));
 }
 
 describe("PlaygroundPage skills tab", () => {

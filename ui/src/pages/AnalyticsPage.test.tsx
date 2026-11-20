@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
+import { withDefaults } from "../test/fixtures/api";
 import { AnalyticsPage } from "./AnalyticsPage";
 import { ToolFunnelPanel } from "./ToolDetailDrawer";
 import { FunnelBars } from "../components/analytics";
@@ -79,12 +80,12 @@ const AGENTS = {
 };
 
 function mockAnalytics(overview: unknown = OVERVIEW) {
-  return mockFetch({
+  return mockFetch(withDefaults({
     "GET /api/v1/analytics/overview": () => ({ json: overview }),
     "GET /api/v1/analytics/suggestions": () => ({ json: SUGGESTIONS }),
     "GET /api/v1/analytics/tools": () => ({ json: TOOLS }),
     "GET /api/v1/analytics/agents": () => ({ json: AGENTS }),
-  });
+  }));
 }
 
 describe("AnalyticsPage", () => {
@@ -159,7 +160,7 @@ describe("FunnelBars", () => {
 
 describe("ToolDetailDrawer funnel tab", () => {
   it("loads the per-tool funnel, rank curve and co-surfaced tools", async () => {
-    const { calls } = mockFetch({
+    const { calls } = mockFetch(withDefaults({
       "GET /api/v1/analytics/tools/t1": () => ({
         json: {
           window: WIN,
@@ -168,7 +169,7 @@ describe("ToolDetailDrawer funnel tab", () => {
           co_surfaced: [{ tool_id: "t5", tool_name: "get_pr", server_name: "github", co_surfaced: 80, this_selected: 30, other_selected: 25 }],
         },
       }),
-    });
+    }));
     renderWithProviders(<ToolFunnelPanel toolId="t1" />);
     expect(await screen.findByRole("img", { name: "list_prs: surfaced 200, selected 50, succeeded 45" })).toBeTruthy();
     expect(screen.getByRole("table", { name: "Co-surfaced tools" }).textContent).toContain("get_pr");
@@ -183,12 +184,12 @@ describe("ToolDetailDrawer funnel tab", () => {
       ],
       total: 2,
     };
-    const { calls } = mockFetch({
+    const { calls } = mockFetch(withDefaults({
       "GET /api/v1/analytics/overview": () => ({ json: OVERVIEW }),
       "GET /api/v1/analytics/suggestions": () => ({ json: SUGGESTIONS }),
       "GET /api/v1/analytics/tools": () => ({ json: mixed }),
       "GET /api/v1/analytics/agents": () => ({ json: AGENTS }),
-    });
+    }));
     renderWithProviders(<AnalyticsPage />);
     await screen.findByText("pdf-form-filler");
     await userEvent.click(screen.getByRole("button", { name: "Skills" }));
@@ -280,13 +281,13 @@ describe("estimate helpers", () => {
 describe("AnalyticsPage skill rows", () => {
   it("opens a skill funnel row in the skill drawer, never the tool drawer", async () => {
     const mixed = { ...TOOLS, items: [{ ...TOOLS.items[0], tool_id: "skill:k1", tool_name: "pdf-form-filler", server_name: "src-pdf", kind: "skill" }], total: 1 };
-    const { calls } = mockFetch({
+    const { calls } = mockFetch(withDefaults({
       "GET /api/v1/analytics/overview": () => ({ json: OVERVIEW }),
       "GET /api/v1/analytics/suggestions": () => ({ json: SUGGESTIONS }),
       "GET /api/v1/analytics/tools": () => ({ json: mixed }),
       "GET /api/v1/analytics/agents": () => ({ json: AGENTS }),
       "GET /api/v1/skills/k1": () => ({ json: { id: "k1", source_id: "s1", name: "pdf-form-filler", description: "Fills PDF forms", operation: "write", enabled: true, versions: [] } }),
-    });
+    }));
     renderWithProviders(<AnalyticsPage />, { route: "/analytics" });
     await userEvent.click(await screen.findByRole("button", { name: "pdf-form-filler" }));
     expect(await screen.findByText("Fills PDF forms")).toBeTruthy();

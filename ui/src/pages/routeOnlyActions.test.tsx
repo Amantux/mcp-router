@@ -1,9 +1,12 @@
 // P-409: operations the backend had with no UI. One test per action, asserting the
-// exact method + path + body through the strict mockFetch.
+// exact method + path + body through the strict mockFetch. Route tables come from the
+// shared API fixtures; per-test overrides stay only where the test needs its own rows.
 import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { callsTo, mockFetch, renderWithProviders, type FetchCall } from "../test/render";
+import { policyRuleRow, principalRow, skillSourceRow, toolRow, withDefaults } from "../test/fixtures/api";
+import { listSkillVersions } from "../api/client";
 import { ServersPage } from "./ServersPage";
 import { SkillSourcesPage } from "./SkillSourcesPage";
 import { PolicyPage } from "./PolicyPage";
@@ -22,10 +25,9 @@ async function confirm(name: string) {
 describe("delete server / skill source", () => {
   it("deletes a server after a confirmation naming it and the history rule", async () => {
     const user = userEvent.setup();
-    const { calls } = mockFetch({
-      [`GET ${API}/servers`]: () => ({ json: [{ id: "s1", name: "github", transport: "stdio", enabled: true, status: "healthy", tool_count: 4 }] }),
+    const { calls } = mockFetch(withDefaults({
       [`DELETE ${API}/servers/s1`]: () => ({ status: 204 }),
-    });
+    }));
     renderWithProviders(<ServersPage />, { route: "/servers" });
     await user.click(await screen.findByRole("button", { name: "Delete github" }));
     const dialog = await screen.findByRole("dialog");
@@ -38,10 +40,10 @@ describe("delete server / skill source", () => {
 
   it("deletes a skill source after a confirmation", async () => {
     const user = userEvent.setup();
-    const { calls } = mockFetch({
-      [`GET ${API}/skill-sources`]: () => ({ json: [{ id: "src1", name: "team-skills", kind: "directory", location: "/srv/skills", enabled: true, skill_count: 5 }] }),
+    const { calls } = mockFetch(withDefaults({
+      "GET /api/v1/skill-sources": () => ({ json: [skillSourceRow()] }),
       [`DELETE ${API}/skill-sources/src1`]: () => ({ status: 204 }),
-    });
+    }));
     renderWithProviders(<SkillSourcesPage />, { route: "/skill-sources" });
     await user.click(await screen.findByRole("button", { name: "Delete team-skills" }));
     const dialog = await screen.findByRole("dialog");
@@ -53,20 +55,15 @@ describe("delete server / skill source", () => {
 });
 
 describe("Policy principal and rule actions", () => {
-  const P = { id: "p1", agent_id: "billing-bot", enabled: true, max_tools: 8, max_servers: 4, max_skills: 3, created_at: "2026-10-01T00:00:00Z" };
-  const R = { id: "r1", agent_id: "billing-bot", resource_kind: "tool", server_id: "srv1", tool_name: "list_*", max_operation: "read", requires_approval: false, created_at: "2026-10-01T00:00:00Z" };
+  // The fixture defaults answer GET /principals and GET /policy-rules with
+  // billing-bot and its rule; rule labels resolve server names from this list
+  // and the fixture rule row references srv1, so both GETs stay overridden here.
   const routes = (extra: Parameters<typeof mockFetch>[0] = {}) =>
-    mockFetch({
-      [`GET ${API}/principals`]: () => ({ json: [P] }),
-      [`GET ${API}/policy-rules`]: () => ({ json: [R] }),
-      [`GET ${API}/servers`]: () => ({ json: [{ id: "srv1", name: "github" }] }),
-      [`GET ${API}/skill-sources`]: () => ({ json: [] }),
-      ...extra,
-    });
+    mockFetch(withDefaults({ [`GET ${API}/servers`]: () => ({ json: [{ id: "srv1", name: "github" }] }), [`GET ${API}/skill-sources`]: () => ({ json: [] }), ...extra }));
 
   it("disables a principal after a confirmation; re-enabling needs none", async () => {
     const user = userEvent.setup();
-    const { calls } = routes({ [`PATCH ${API}/principals/p1`]: (b) => ({ json: { ...P, ...(b as object) } }) });
+    const { calls } = routes({ [`PATCH ${API}/principals/p1`]: (b) => ({ json: { ...principalRow(), ...(b as object) } }) });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
     await user.click(await screen.findByRole("switch", { name: "Disable billing-bot" }));
     expect(within(await screen.findByRole("dialog")).getByText("Disable “billing-bot”?")).toBeTruthy();
@@ -76,7 +73,7 @@ describe("Policy principal and rule actions", () => {
 
   it("edits a principal's limits; blank servers clears the cap", async () => {
     const user = userEvent.setup();
-    const { calls } = routes({ [`PATCH ${API}/principals/p1`]: (b) => ({ json: { ...P, ...(b as object) } }) });
+    const { calls } = routes({ [`PATCH ${API}/principals/p1`]: (b) => ({ json: { ...principalRow(), ...(b as object) } }) });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
     await user.click(await screen.findByRole("button", { name: "Edit limits for billing-bot" }));
     const dialog = await screen.findByRole("dialog");
@@ -112,7 +109,7 @@ describe("Policy principal and rule actions", () => {
 
   it("edits a rule's glob, ceiling and approval", async () => {
     const user = userEvent.setup();
-    const { calls } = routes({ [`PATCH ${API}/policy-rules/r1`]: (b) => ({ json: { ...R, ...(b as object) } }) });
+    const { calls } = routes({ [`PATCH ${API}/policy-rules/r1`]: (b) => ({ json: { ...policyRuleRow(), ...(b as object) } }) });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
     await user.click(await screen.findByRole("button", { name: "Edit rule billing-bot · tool · github · list_*" }));
     const dialog = await screen.findByRole("dialog");
@@ -127,7 +124,10 @@ describe("Policy principal and rule actions", () => {
 
   it("retargets a rule (HS-U-015): serverId is sent only when the target changed", async () => {
     const user = userEvent.setup();
-    const { calls } = routes({ [`PATCH ${API}/policy-rules/r1`]: (b) => ({ json: { ...R, ...(b as object) } }) });
+    const { calls } = routes({
+      "GET /api/v1/servers": () => ({ json: [{ id: "srv1", name: "github" }] }),
+      [`PATCH ${API}/policy-rules/r1`]: (b) => ({ json: { id: "r1", agent_id: "billing-bot", resource_kind: "tool", server_id: "srv1", tool_name: "list_*", max_operation: "read", requires_approval: false, created_at: "2026-10-01T00:00:00Z", ...(b as object) } }),
+    });
     renderWithProviders(<PolicyPage />, { route: "/policy" });
     await user.click(await screen.findByRole("button", { name: "Edit rule billing-bot · tool · github · list_*" }));
     const dialog = await screen.findByRole("dialog");
@@ -157,11 +157,10 @@ describe("Policy principal and rule actions", () => {
 describe("tool and skill drawers", () => {
   it("disables a single tool from its drawer", async () => {
     const user = userEvent.setup();
-    const T = { id: "t1", server_id: "s1", name: "list_issues", description: "d", input_schema: {}, schema_hash: "h", tags: [], operation: "read", required_scopes: [], enabled: true, version: 1 };
-    const { calls } = mockFetch({
-      [`GET ${API}/tools/t1`]: () => ({ json: T }),
-      [`POST ${API}/tools/t1/disable`]: () => ({ json: { ...T, enabled: false } }),
-    });
+    const { calls } = mockFetch(withDefaults({
+      "GET /api/v1/tools/t1": () => ({ json: toolRow() }),
+      [`POST ${API}/tools/t1/disable`]: () => ({ json: { ...toolRow(), enabled: false } }),
+    }));
     renderWithProviders(<ToolDetailDrawer toolId="t1" onClose={() => {}} onChanged={() => {}} />, { route: "/tools" });
     await user.click(await screen.findByRole("button", { name: "Disable tool" }));
     await waitFor(() => expect(sent(calls, "POST")).toEqual([{ path: `${API}/tools/t1/disable`, body: undefined }]));
@@ -170,11 +169,10 @@ describe("tool and skill drawers", () => {
 
   it("enables a disabled tool from its drawer", async () => {
     const user = userEvent.setup();
-    const T = { id: "t2", server_id: "s1", name: "drop_table", description: "d", input_schema: {}, schema_hash: "h", tags: [], operation: "execute", required_scopes: [], enabled: false, version: 1 };
-    const { calls } = mockFetch({
-      [`GET ${API}/tools/t2`]: () => ({ json: T }),
-      [`POST ${API}/tools/t2/enable`]: () => ({ json: { ...T, enabled: true } }),
-    });
+    const { calls } = mockFetch(withDefaults({
+      "GET /api/v1/tools/t2": () => ({ json: toolRow({ id: "t2", name: "drop_table", operation: "execute", enabled: false }) }),
+      [`POST ${API}/tools/t2/enable`]: () => ({ json: { ...toolRow({ id: "t2", name: "drop_table", operation: "execute", enabled: false }), enabled: true } }),
+    }));
     renderWithProviders(<ToolDetailDrawer toolId="t2" onClose={() => {}} onChanged={() => {}} />, { route: "/tools" });
     await user.click(await screen.findByRole("button", { name: "Enable tool" }));
     await waitFor(() => expect(sent(calls, "POST")).toEqual([{ path: `${API}/tools/t2/enable`, body: undefined }]));
@@ -182,19 +180,13 @@ describe("tool and skill drawers", () => {
 
   it("the Versions tab reads GET /skills/{id}/versions, newest first", async () => {
     const user = userEvent.setup();
-    const { calls } = mockFetch({
-      [`GET ${API}/skills/k1`]: () => ({ json: { id: "k1", source_id: "s", name: "pdf-fill", operation: "write", enabled: true } }),
-      [`GET ${API}/skills/k1/versions`]: () => ({
-        json: [
-          { version: 1, changeKind: "added", contentHash: "aaaaaaaa11", manifestHash: null, recordedAt: "2026-10-01T00:00:00Z" },
-          { version: 2, changeKind: "changed", contentHash: "bbbbbbbb22", manifestHash: null, recordedAt: "2026-10-02T00:00:00Z" },
-        ],
-      }),
-    });
+    const { calls } = mockFetch(withDefaults());
     renderWithProviders(<SkillDrawer skillId="k1" onClose={() => {}} />, { route: "/skills" });
     await user.click(await screen.findByRole("tab", { name: "Versions" }));
     const list = await screen.findByRole("list", { name: "Versions" });
     expect(within(list).getAllByRole("listitem").map((li) => li.textContent?.split(" ")[0])).toEqual(["v2", "v1"]);
     expect(callsTo(calls, "GET", `${API}/skills/k1/versions`)).toHaveLength(1);
+    // Exercise the client export itself (meta MT-4): same mocked route, same rows.
+    await expect(listSkillVersions("k1")).resolves.toMatchObject([{ version: 1 }, { version: 2 }]);
   });
 });
