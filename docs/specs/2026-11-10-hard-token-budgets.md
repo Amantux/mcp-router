@@ -1,8 +1,8 @@
 # Spec — Enforce (not just estimate) a per-agent token budget
 
 Shortlist #1. Value 5 / Cost 2 → value/cost 2.5. **RECOMMENDED-NEXT.**
-Sourced from `docs/backlog/proposals-2026-11-10.md` (#3), refined per
-`docs/backlog/debate-2026-11-10.md` (VERDICT: KEEP).
+Sourced from docs/backlog/proposals-2026-11-10.md (#3), refined per
+docs/backlog/debate-2026-11-10.md (VERDICT: KEEP).
 
 ## Problem
 
@@ -147,8 +147,8 @@ Functional (`testbed.seed` fleet):
       Settings-page row reads `No cap` (bold `No cap` value, subtitle
       `Definitions may cost whatever the router selects`) — not an empty
       field, not `0`.
-- [ ] **Error state:** an out-of-range or negative `MCPR_MAX_CONTEXT_TOK
-      ENS` value fails with `MCPR_MAX_CONTEXT_TOKENS must be a positive
+- [ ] **Error state:** an out-of-range or negative `MCPR_MAX_CONTEXT_TOKENS`
+      value fails with `MCPR_MAX_CONTEXT_TOKENS must be a positive
       integer (got <redacted>): <hint>` naming the variable **without
       echoing the bad value** (CLAUDE.md: secrets/redaction rules, plus
       CR/LF scrubbed from any value-derived field).
@@ -160,7 +160,7 @@ Functional (`testbed.seed` fleet):
       `Enter` in the input triggers the same submit as the button.
 - [ ] **Copy tone:** every surfaced figure says *est
       imated* / *estimatedTokenSavings*, never "actual" / "real";
-      glossary words from `docs/copy-glossary.md` (per #8→#9:
+      glossary words from docs/copy-glossary.md (per #8→#9:
       `surfaced` not *shown*, `Estimated` not *approx.*)
       — one word per concept, same as the rest of the product.
 - [ ] **Deliberate non-feature:** no per-message, per-turn, or

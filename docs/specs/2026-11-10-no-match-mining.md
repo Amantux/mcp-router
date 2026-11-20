@@ -1,8 +1,8 @@
 # Spec — Mine `no_match` outcomes into "add a server" suggestions
 
 Shortlist #2. Value 4 / Cost 3 → value/cost 1.33.
-Sourced from `docs/backlog/proposals-2026-11-10.md` (#2), refined per
-`docs/backlog/debate-2026-11-10.md` (VERDICT: KEEP).
+Sourced from docs/backlog/proposals-2026-11-10.md (#2), refined per
+docs/backlog/debate-2026-11-10.md (VERDICT: KEEP).
 
 ## Problem
 
@@ -19,7 +19,7 @@ waiting to be labelled.
 
 ## Proposed behaviour (precise)
 
-1. **New pure-read module** `src/mcprouter/analytics/mining.py`,
+1. **New pure-read module** src/mcprouter/analytics/mining.py,
    exporting `mine_no_match_intents(session, window: Window) ->
    list[GapSuggestion]`. Read-only over `routing_decisions` and
    `route_feedback`; no new tables, no writes, no execution surface, no
@@ -47,7 +47,7 @@ waiting to be labelled.
    "underused" card or page — the critique's overlap point is
    binding: `no_match` mining must not become another "shown but unused"
    panel beside `wasted-exposure`.
-6. **Copy.** Use the vocabulary of `docs/copy-glossary.md` as written by
+6. **Copy.** Use the vocabulary of docs/copy-glossary.md as written by
    the focus-and-rhythm (#9, absorbing #8) spec — this card must say
    "surfaced" not "shown", "No match" not "Nothing found", etc.; the
    single-word-per-concept rule is a hard acceptance criterion, not
@@ -101,7 +101,7 @@ Functional (`testbed.seed`, 15-decision window):
       `route_feedback`; clusters deterministically; gate = 3 distinct
       misses; already-routed intents dropped.
 - [ ] Suggestion renders in the funnel card only; copy follows
-      `docs/copy-glossary.md`.
+      docs/copy-glossary.md.
 - [ ] No new `MCPR_*` setting; no writes; no creation buttons.
 - [ ] Unit cases 1–3 and functional cases 4–5 exist and pass under
       `make check`.

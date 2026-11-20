@@ -1,8 +1,8 @@
 # Spec — One-click policy presets (rule-template bundles with diff)
 
 Shortlist #3. Value 4 / Cost 5 → value/cost 0.8.
-Sourced from `docs/backlog/proposals-2026-11-10.md` (#5), refined per
-`docs/backlog/debate-2026-11-10.md` (VERDICT: KEEP).
+Sourced from docs/backlog/proposals-2026-11-10.md (#5), refined per
+docs/backlog/debate-2026-11-10.md (VERDICT: KEEP).
 
 ## Problem
 
@@ -12,7 +12,7 @@ and the setup wizard offers exactly one preset ("read-only starter") —
 everywhere else a new operator faces a blank, unexplained rule model.
 Verified in source:
 
-- `src/mcprouter/policy/rule_presets.py` ALREADY ships four curated
+- src/mcprouter/policy/rule_presets.py ALREADY ships four curated
   `PolicyRulePreset` templates (`read-only-agent`, `deny-execute`,
   `single-tool-no-approval`, `read-only-skill`), and
   `api/routes_policy.py` ALREADY exposes
@@ -49,7 +49,7 @@ Verified in source:
    Bundle names: `read-only starter`, `dev sandbox`, `trusted +
    approvals` (per the KEEP note — the third keeps approvals
    gating everything risky).
-4. **Guard, not vibes:** add `tests/test_rule_presets.py` asserting,
+4. **Guard, not vibes:** add tests/test_rule_presets.py asserting,
    per preset: every rule resolves through the policy engine to
    *deny* absent an explicit operator edit; and a mutation check —
    seed a bogus allow-through rule into a bundle and the named test
