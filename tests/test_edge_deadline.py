@@ -57,7 +57,10 @@ class _Slow:
 
 
 def test_answer_has_one_deadline_per_request_not_per_question() -> None:
-    model = DeadlineDecisionModel(lambda: _Slow(), 0.1)
+    # Per-question slack (0.5) leaves room for thread-spawn overhead on loaded
+    # boxes; the property under test is the REQUEST deadline (0.1 below), which
+    # every question still misses.
+    model = DeadlineDecisionModel(lambda: _Slow(), 0.5)
     parsed = {f"q{i}": ("noul", "x", []) for i in range(3)}
     with pytest.raises(InferenceError):
         serve.answer(model, "s", parsed, deadline_s=0.1)

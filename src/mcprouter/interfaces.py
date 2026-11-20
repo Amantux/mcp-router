@@ -107,6 +107,12 @@ class RouteRequest:
     max_skills: int | None = None
     # Wave 4 (S2d): optional NARROWING kind filter; None = tools + skills.
     kinds: tuple[str, ...] | None = None
+    # Appended (hard-token-budgets spec): cap on the ESTIMATED tokens of the
+    # exposed definitions (analytics/tokens.py `chars/4` proxy), applied after
+    # ranking in rank order, narrowing only. None = the settings decide
+    # (settings None there = no cap). Additions-only: existing callers that
+    # never pass it keep today's behaviour.
+    max_context_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +135,11 @@ class RouteResult:
     # Appended (wave 2, route cache): True when served from the route cache
     # (retrieval + model skipped; authorization re-checked on the hit).
     cached: bool = False
+    # Appended (hard-token-budgets spec): sum of ESTIMATED tokens of the
+    # definitions actually exposed (analytics/tokens.py `chars/4` proxy — a
+    # documented estimate, never a measured count; estimator label travels on
+    # the wire as `estimator`).
+    tokens_applied: int = 0
 
 
 # ------------------------------------------- appended: inference workstream

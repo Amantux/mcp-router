@@ -38,6 +38,7 @@ For a deployment, put these in `.env` next to `docker-compose.yml`
 | `MCPR_DECISION_TIMEOUT_S` | `2.0` | number | Per-question deadline for the decision model; on overrun the route falls back to deterministic ranking. |
 | `MCPR_MAX_EXPOSED_TOOLS` | `8` | integer | Global cap on tools exposed per route (requests and principals can lower it, never raise it). |
 | `MCPR_MAX_EXPOSED_SERVERS` | unset | integer (optional) | Optional global cap on distinct servers per route. Unset means no cap. |
+| `MCPR_MAX_CONTEXT_TOKENS` | unset | integer (optional) | Estimated tokens of exposed tool definitions per route (empty: no cap). |
 | `MCPR_RETRIEVAL_CANDIDATES` | `20` | integer | Hybrid-retrieval candidates passed to the decision model. |
 | `MCPR_ROUTE_CONFIDENCE_FLOOR` | `0.35` | number | Score below which a candidate is dropped. |
 | `MCPR_ROUTE_CACHE_TTL_S` | `60.0` | number | Route cache entry lifetime in seconds. 0 disables the cache. |

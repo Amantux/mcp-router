@@ -40,6 +40,9 @@ class RouteTrace:
     stages: list[StageTrace] = field(default_factory=list)
     # S2d: the applied skills budget (simulate's budgetClamps maxSkills row).
     skill_budget: BudgetClamp | None = None
+    # hard-token-budgets spec: the applied ESTIMATED-token budget (simulate's
+    # budgetClamps maxContextTokens row).
+    context_budget: BudgetClamp | None = None
 
     def stage(
         self,

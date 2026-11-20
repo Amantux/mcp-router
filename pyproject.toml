@@ -57,7 +57,9 @@ target-version = "py312"
 src = ["src", "tests", "testbed"]
 # Vendored verbatim from Amantux/lyla @ 013ff01 (MIT; see src/mcprouter/lyla/):
 # never re-formatted or auto-fixed here — change it upstream and re-vendor.
-extend-exclude = ["src/mcprouter/lyla"]
+# .worktrees: the parallel-task worktree flow creates scratch worktrees inside
+# the repo; CI never sees them, but a local `make lint` must not reformat them.
+extend-exclude = ["src/mcprouter/lyla", ".worktrees"]
 
 [tool.ruff.lint]
 # Pinned select (house rule): no version-default drift.

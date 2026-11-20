@@ -95,6 +95,8 @@ def test_simulate_shape_and_diagnostics(env: dict[str, Any]) -> None:
         "maxToolsApplied",
         "maxServersApplied",
         "maxSkillsApplied",
+        "maxTokensApplied",
+        "estimator",
         "diagnostics",
     }
     assert body["simulated"] is True and body["agentId"] == "ro"
@@ -126,7 +128,8 @@ def test_simulate_shape_and_diagnostics(env: dict[str, Any]) -> None:
     for st in diag["stages"]:
         assert set(st) == {"stage", "before", "after", "pruned", "detail"}
     clamps = {c["budget"]: c for c in diag["budgetClamps"]}
-    assert set(clamps) == {"maxTools", "maxServers", "maxSkills"}
+    assert set(clamps) == {"maxTools", "maxServers", "maxSkills", "maxContextTokens"}
+    assert clamps["maxContextTokens"]["budget"] == "maxContextTokens"  # token clamp row
     assert set(clamps["maxTools"]) == {
         "budget",
         "requested",

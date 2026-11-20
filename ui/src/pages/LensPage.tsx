@@ -61,8 +61,8 @@ const STAGE_LABEL: Record<string, string> = { policy: "Policy" };
 export const TOOL_LIMIT = 64; // PrincipalIn.max_tools le=64
 const SERVER_LIMIT = 16;
 const SKILL_LIMIT = 10;
-const BUDGET_LABEL: Record<string, string> = { maxTools: "Max tools", maxServers: "Max servers", maxSkills: "Max skills" };
-const GLOBAL_ENV: Record<string, string> = { maxTools: "MCPR_MAX_EXPOSED_TOOLS", maxServers: "MCPR_MAX_EXPOSED_SERVERS", maxSkills: "MCPR_MAX_EXPOSED_SKILLS" };
+const BUDGET_LABEL: Record<string, string> = { maxTools: "Max tools", maxServers: "Max servers", maxSkills: "Max skills", maxContextTokens: "Max context tokens" };
+const GLOBAL_ENV: Record<string, string> = { maxTools: "MCPR_MAX_EXPOSED_TOOLS", maxServers: "MCPR_MAX_EXPOSED_SERVERS", maxSkills: "MCPR_MAX_EXPOSED_SKILLS", maxContextTokens: "MCPR_MAX_CONTEXT_TOKENS" };
 const byLabel = (by: string, budget: string): string =>
   by === "principal" ? "the agent's own cap" : by === "global" ? `the global cap${GLOBAL_ENV[budget] ? ` (${GLOBAL_ENV[budget]})` : ""}` : by;
 
@@ -123,6 +123,12 @@ export function LensResult({ result, showFiltered, routeRequestId }: { result: S
         <Caption1>
           Latency <strong>{fmtMs(result.latencyMs)}</strong>
         </Caption1>
+        {result.maxTokensApplied != null && (
+          <Caption1 data-testid="tokens-applied">
+            Estimated exposure: <strong>{result.maxTokensApplied.toLocaleString()} est. tokens</strong>
+            {result.estimator == null ? "" : ` (${result.estimator})`}
+          </Caption1>
+        )}
         {result.candidates != null && <Caption1>{result.candidates} candidates considered</Caption1>}
         {result.requestId && <Caption1 className={c.mono}>request {result.requestId}</Caption1>}
       </div>

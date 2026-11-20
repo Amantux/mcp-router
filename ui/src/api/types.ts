@@ -392,7 +392,7 @@ export interface ApprovalDecision {
  * applied = min(requested ?? principal, principal, globalCap); null = no cap.
  */
 export interface BudgetClamp {
-  budget: "maxTools" | "maxServers" | "maxSkills" | string;
+  budget: "maxTools" | "maxServers" | "maxSkills" | "maxContextTokens" | string;
   requested: number | null;
   principal: number | null;
   globalCap: number | null;
@@ -446,6 +446,10 @@ export interface SimulateResponse {
   maxServersApplied: number | null;
   skills: RoutedSkill[];
   maxSkillsApplied: number | null;
+  /** hard-token-budgets: ESTIMATED tokens charged for the exposed definitions (never measured). */
+  maxTokensApplied?: number | null;
+  /** analytics/tokens.py ESTIMATOR label verbatim; absent on older backends. */
+  estimator?: string | null;
   clamps: BudgetClamp[];
   candidates: number | null;
   stages: PipelineStage[];

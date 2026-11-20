@@ -5776,6 +5776,19 @@
               }
             ],
             "title": "Kinds"
+          },
+          "maxContextTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxcontexttokens"
           }
         },
         "type": "object",
@@ -5842,6 +5855,14 @@
             ],
             "title": "Max Skills Applied"
           },
+          "max_tokens_applied": {
+            "type": "integer",
+            "title": "Max Tokens Applied"
+          },
+          "estimator": {
+            "type": "string",
+            "title": "Estimator"
+          },
           "cached": {
             "type": "boolean",
             "title": "Cached"
@@ -5858,6 +5879,8 @@
           "max_tools_applied",
           "max_servers_applied",
           "max_skills_applied",
+          "max_tokens_applied",
+          "estimator",
           "cached"
         ],
         "title": "RouteResponse"
@@ -6437,6 +6460,19 @@
               }
             ],
             "title": "Kinds"
+          },
+          "maxContextTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxcontexttokens"
           }
         },
         "type": "object",
@@ -6516,6 +6552,14 @@
             ],
             "title": "Maxskillsapplied"
           },
+          "maxTokensApplied": {
+            "type": "integer",
+            "title": "Maxtokensapplied"
+          },
+          "estimator": {
+            "type": "string",
+            "title": "Estimator"
+          },
           "diagnostics": {
             "$ref": "#/components/schemas/DiagnosticsOut"
           }
@@ -6534,6 +6578,8 @@
           "maxToolsApplied",
           "maxServersApplied",
           "maxSkillsApplied",
+          "maxTokensApplied",
+          "estimator",
           "diagnostics"
         ],
         "title": "SimulateResponse"

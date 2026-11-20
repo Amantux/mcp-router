@@ -33,6 +33,16 @@ each question line), and how the inference bench drives Laya.
      order; slots freed by a skipped server are back-filled from deeper
      ranks), then truncate to clamp(max_tools, 1, max_exposed_tools). The
      API computes both with routing.budgets (request may lower, never raise).
+     When max_context_tokens is set (route request or settings — a request
+     may lower, never raise), the merged list is truncated FURTHER in rank
+     order at the ESTIMATED token cost of its exposed definitions
+     (analytics/tokens.py `chars/4` proxy — no tokenizer, CI-reproducible).
+     Narrowing only: the surviving selection is always a prefix of the
+     ranking, and a budget below the cheapest single definition exposes
+     nothing (an honest no_match, not a cheaper look-alike). Never counted:
+     the find_tools meta-tool, approval suffixes, MCP framing and skill
+     bodies (mirrors analytics/tokens.py — stated here, not silently
+     undefined).
 
 Deterministic failure path (FR-06): ANY exception or contract-violating answer
 from the decision model => retrieval-score-only ranking, `fallback_used=True`.
@@ -52,11 +62,13 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from mcprouter.analytics.tokens import skill_token_maps, tool_token_map
 from mcprouter.generation import catalog_generation, policy_generation
 from mcprouter.interfaces import (
     BatchScoringDecisionModel,
@@ -76,7 +88,7 @@ from mcprouter.models import (
     SkillRecord,
     SkillSourceRecord,
 )
-from mcprouter.routing.budgets import BudgetClamp, cap_servers, clamp_budget
+from mcprouter.routing.budgets import BudgetClamp, cap_servers, clamp_budget, context_budget
 from mcprouter.routing.cache import CachedRoute, CachedTool, RouteCache, normalize_query
 from mcprouter.routing.retriever import eligibility_filters, skill_eligibility_filters
 from mcprouter.routing.scope import principal_skill_cap
@@ -163,15 +175,22 @@ class RoutePipeline:
             # A zero skills budget retrieves no skills: no candidate slots or
             # model questions spent on items that could never be routed.
             kinds = tuple(k for k in kinds if k != "skill")
+        # hard-token-budgets: the ESTIMATED-token budget is one more axis on
+        # this same envelope. Applied post-ranking in _cap, narrowing only.
+        token_clamp = self.context_budget(request)
+        applied_tokens: int | None = token_clamp.applied
         if trace is not None:
             trace.skill_budget = skill_clamp
+            trace.context_budget = token_clamp
 
         # Route cache: may skip retrieval + model calls, NEVER authorization —
         # `_revalidate` re-runs eligibility and scope.permits on every hit.
         base_key = (
             None
             if trace is not None
-            else self._cache_key(request, scope, max_tools, max_servers, max_skills, kinds)
+            else self._cache_key(
+                request, scope, max_tools, max_servers, max_skills, kinds, applied_tokens
+            )
         )
         if base_key is not None and self._cache is not None:
             # The model name is read at lookup AND at store time: an engine
@@ -194,6 +213,7 @@ class RoutePipeline:
                         model_version=model_version,
                         no_match=hit.no_match or not cached_tools,
                         cached=True,
+                        tokens_applied=hit.tokens_applied,
                     )
                 # Something it held is no longer eligible/permitted: recompute.
                 self._cache.discard(key)
@@ -202,13 +222,25 @@ class RoutePipeline:
         fallback = False
         no_match = False
         model_version = self._model.name[:80]  # RoutingDecisionRecord.model_version
+        # ESTIMATED tokens per catalog item (tool definitions + skill
+        # metadata; exclusions stated in analytics/tokens.py), one read per
+        # route. Charged even when no budget is set (max_tokens_applied
+        # reports the honest estimate of what the agent will receive).
+        token_costs = self._token_costs() if candidates else {}
         if not candidates:
             ranked: list[_Scored] = []
             no_match = True
         else:
             try:
                 ranked, no_match = self._decide(
-                    request.query, candidates, max_tools, max_servers, max_skills, trace
+                    request.query,
+                    candidates,
+                    max_tools,
+                    max_servers,
+                    max_skills,
+                    trace,
+                    token_costs,
+                    applied_tokens,
                 )
             except Exception as exc:  # noqa: BLE001 — FR-06: ANY model failure => fallback
                 log.warning(
@@ -232,8 +264,14 @@ class RoutePipeline:
                     )
 
         # Budgets: cap DISTINCT servers in rank order first (slots freed by a
-        # skipped server are back-filled from deeper ranks), then the count.
-        selected = [] if no_match else _cap(ranked, max_tools, max_servers, max_skills)
+        # skipped server are back-filled from deeper ranks), then the count,
+        # then (when set) the ESTIMATED-token budget truncates further in rank
+        # order — narrowing only, so the selection stays a ranking prefix.
+        selected = (
+            []
+            if no_match
+            else _cap(ranked, max_tools, max_servers, max_skills, applied_tokens, token_costs)
+        )
         if trace is not None and not no_match:
             _trace_budgets(trace, ranked, max_tools, max_servers, max_skills)
         # Defence in depth: re-assert scope on what is actually exposed.
@@ -248,6 +286,9 @@ class RoutePipeline:
             )
             for r in selected
         ]
+        # ESTIMATED tokens actually charged: the exposed definitions' estimate
+        # sum (never a tokenizer-measured count; analytics/tokens.py).
+        tokens_applied = sum(token_costs.get(_ckey(r.cand), 0) for r in selected)
         if base_key is not None and self._cache is not None and not fallback:
             # Fallback results are never cached: a transient model timeout
             # must not pin a degraded ranking for the TTL.
@@ -257,6 +298,7 @@ class RoutePipeline:
                     tools=tuple(CachedTool(t.tool_id, t.score, t.kind) for t in tools),
                     no_match=no_match or not tools,
                     model_version=model_version,
+                    tokens_applied=tokens_applied,
                 ),
             )
         if trace is not None:
@@ -270,6 +312,7 @@ class RoutePipeline:
             latency_ms=latency_ms,
             model_version=model_version,
             no_match=no_match or not tools,
+            tokens_applied=tokens_applied,
         )
 
     # ------------------------------------------------------------- cache
@@ -283,6 +326,23 @@ class RoutePipeline:
             self._settings.max_exposed_skills,
         )
 
+    def context_budget(self, request: RouteRequest) -> BudgetClamp:
+        """Applied ESTIMATED-token budget: min(request, global) — a request
+        may lower, never raise (hard-token-budgets spec)."""
+        return context_budget(request.max_context_tokens, self._settings)
+
+    def _token_costs(self) -> dict[str, int]:
+        """ESTIMATED tokens (analytics/tokens.py `chars/4`) for every catalog
+        item: tool definitions (`name+description+inputSchema`) and skill
+        metadata (`name+description` — bodies are sent only on activation and
+        never count against the exposure budget). One read per route; keys
+        are this pipeline's decision ids."""
+        with self._factory() as s:
+            costs = tool_token_map(s)
+            meta, _bodies = skill_token_maps(s)
+        costs.update(meta)
+        return costs
+
     def _cache_key(
         self,
         request: RouteRequest,
@@ -291,6 +351,7 @@ class RoutePipeline:
         max_servers: int | None,
         max_skills: int,
         kinds: tuple[str, ...],
+        max_context_tokens: int | None,
     ) -> tuple[object, ...] | None:
         if self._cache is None:
             return None
@@ -311,6 +372,7 @@ class RoutePipeline:
             max_servers,
             allowed,
             max_skills,
+            max_context_tokens,
             kinds,
         )
 
@@ -471,6 +533,8 @@ class RoutePipeline:
         max_servers: int | None = None,
         max_skills: int = 0,
         trace: RouteTrace | None = None,
+        token_costs: Mapping[str, int] | None = None,
+        token_budget: int | None = None,
     ) -> tuple[list[_Scored], bool]:
         m = self._model
         # b. domain (hard prune, with a calibrated multi-label margin)
@@ -547,10 +611,12 @@ class RoutePipeline:
                 scores={_ckey(r.cand): round(r.score, 6) for r in scored},
             )
 
-        # e. no-match detection over what would actually be exposed
+        # e. no-match detection over what would actually be exposed (the
+        # same caps the route applies, including the token budget, so a
+        # token-truncated selection is asked about honestly).
         shown = "\n".join(
             f"- {r.cand.server_name}/{r.cand.tool_name}: {r.cand.description[:_NOUL_DESC_MAX]}"
-            for r in _cap(scored, max_tools, max_servers, max_skills)
+            for r in _cap(scored, max_tools, max_servers, max_skills, token_budget, token_costs)
         )
         p_yes = m.noul(query, f"{NOUL_QUESTION}\n{shown}")
         if not _is_prob(p_yes):
@@ -644,14 +710,44 @@ def _trace_budgets(
 
 
 def _cap(
-    ranked: list[_Scored], max_tools: int, max_servers: int | None, max_skills: int = 0
+    ranked: list[_Scored],
+    max_tools: int,
+    max_servers: int | None,
+    max_skills: int = 0,
+    token_budget: int | None = None,
+    token_costs: Mapping[str, int] | None = None,
 ) -> list[_Scored]:
     """Per-kind budgets in rank order: tools via maxServers -> maxTools (MCP
-    servers only), skills via maxSkills alone; merged back in rank order."""
+    servers only), skills via maxSkills alone; merged back in rank order.
+    Then (hard-token-budgets spec) when a budget is set, `_cap_tokens`
+    truncates the merged list further in rank order — narrowing only, so any
+    selection stays a prefix of the ranking and access is never widened."""
     tools = [r for r in ranked if r.cand.kind != "skill"]
     keep = {id(r) for r in cap_servers(tools, lambda r: r.cand.server_id, max_servers)[:max_tools]}
     keep |= {id(r) for r in [r for r in ranked if r.cand.kind == "skill"][:max_skills]}
-    return [r for r in ranked if id(r) in keep]
+    out = [r for r in ranked if id(r) in keep]
+    if token_budget is None or not token_costs:
+        return out
+    return _cap_tokens(out, token_budget, token_costs)
+
+
+def _cap_tokens(items: list[_Scored], budget: int, costs: Mapping[str, int]) -> list[_Scored]:
+    """Truncate at the first item whose cumulative ESTIMATED tokens
+    (analytics/tokens.py `chars/4`) would exceed `budget`. A budget below the
+    cheapest single definition exposes nothing — an honest no_match, never a
+    "cheaper" look-alike. An item with no estimate is not exposed (there is
+    no bounded promise about it), and truncation keeps a ranking prefix."""
+    total = 0
+    out: list[_Scored] = []
+    for r in items:
+        cost = costs.get(_ckey(r.cand))
+        if cost is None:
+            break
+        if total + cost > budget:
+            break
+        total += cost
+        out.append(r)
+    return out
 
 
 def _route_kinds(request: RouteRequest) -> tuple[str, ...]:

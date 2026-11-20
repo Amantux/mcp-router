@@ -42,6 +42,10 @@ class Settings:
     max_exposed_tools: int = 8
     # Optional global cap on DISTINCT servers in one exposure (None = unlimited).
     max_exposed_servers: int | None = None
+    # Optional global cap on the ESTIMATED tokens of exposed definitions per
+    # route (analytics/tokens.py `chars/4` proxy; None = no cap). Enforced
+    # post-ranking inside the same _cap machinery, narrowing only.
+    max_context_tokens: int | None = None
     retrieval_candidates: int = 20
     route_confidence_floor: float = 0.35
     # In-process route cache (routing/cache.py). 0 on either knob disables it.
@@ -322,6 +326,12 @@ SETTINGS_SPEC: tuple[SettingSpec, ...] = (
     # routing
     _s("max_exposed_tools", "int", "Tools exposed per route.", lo=1, hi=1000),
     _s("max_exposed_servers", "opt_int", "Distinct servers per route (empty: no cap).", lo=1),
+    _s(
+        "max_context_tokens",
+        "opt_int",
+        "Estimated tokens of exposed tool definitions per route (empty: no cap).",
+        lo=1,
+    ),
     _s("retrieval_candidates", "int", "Retriever candidates before the decision.", lo=1, hi=10000),
     _s("route_confidence_floor", "float", "Minimum route confidence.", lo=0, hi=1),
     _s("route_cache_ttl_s", "float", "Route cache TTL (0 disables).", lo=0, hi=86400),

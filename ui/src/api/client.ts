@@ -695,6 +695,8 @@ export function normaliseSimulation(raw: Loose, agentId: string): SimulateRespon
     maxServersApplied: numOrNull(raw.maxServersApplied),
     skills: arr(raw.skills).map(normaliseRoutedSkill),
     maxSkillsApplied: numOrNull(raw.maxSkillsApplied),
+    maxTokensApplied: numOrNull(raw.maxTokensApplied),
+    estimator: typeof raw.estimator === "string" ? raw.estimator : undefined,
     clamps: clamps.map((c) => ({
       budget: String(c.budget),
       requested: numOrNull(c.requested),
