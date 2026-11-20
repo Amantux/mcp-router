@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockFetch, renderWithProviders } from "../test/render";
+import { withDefaults, emptyPage, errorResponse, toolRow, principalRow } from "../test/fixtures/api";
 import { setCredentials } from "../api/auth";
 import { AnalyticsPage } from "./AnalyticsPage";
 import { ApprovalsPage } from "./ApprovalsPage";
@@ -19,7 +20,7 @@ import { ToolDetailDrawer } from "./ToolDetailDrawer";
 import { SkillDrawer } from "./SkillsPage";
 
 const API = "/api/v1";
-const page = { items: [], total: 0, limit: 50, offset: 0 };
+const page = emptyPage();
 const WIN = { label: "7d", start: "2026-10-01T00:00:00Z", end: "2026-10-08T00:00:00Z" };
 const EMPTY_OVERVIEW = {
   window: WIN,
@@ -128,9 +129,9 @@ describe("first-load failure renders an error state with Retry, never empty copy
     const user = userEvent.setup();
     let failing = true;
     const routes = Object.fromEntries(
-      Object.entries(ok).map(([k, json]) => [k, () => (k === fails && failing ? { status: 500 } : { json })]),
+      Object.entries(ok).map(([k, json]) => [k, () => (k === fails && failing ? errorResponse(500, "boom")() : { json })]),
     );
-    const { calls } = mockFetch(routes);
+    const { calls } = mockFetch(withDefaults(routes as Record<string, (b: unknown) => { status?: number; json?: unknown }>));
     renderWithProviders(ui, { route });
     const alert = await screen.findByRole("alert", { name: `${what} couldn't be loaded` });
     if (emptyCopy) expect(screen.queryByText(emptyCopy)).toBeNull();
@@ -144,13 +145,12 @@ describe("first-load failure renders an error state with Retry, never empty copy
 
 describe("drawers", () => {
   it("tool drawer: reopening on another tool starts on Details; a failed load says so instead of loading forever", async () => {
-    const tool = (id: string, description: string) => ({ id, server_id: "s1", name: id, description, input_schema: {}, schema_hash: "h", tags: [], operation: "read", required_scopes: [], enabled: true, version: 1 });
-    mockFetch({
-      [`GET ${API}/tools/t1`]: () => ({ json: tool("t1", "Lists issues") }),
-      [`GET ${API}/tools/t2`]: () => ({ json: tool("t2", "Creates issues") }),
-      [`GET ${API}/tools/t3`]: () => ({ status: 500 }),
-      [`GET ${API}/analytics/tools/t1`]: () => ({ status: 404 }),
-    });
+    mockFetch(withDefaults({
+      "GET /api/v1/tools/t1": () => ({ json: toolRow({ description: "Lists issues" }) }),
+      "GET /api/v1/tools/t2": () => ({ json: toolRow({ id: "t2", name: "create_issues", description: "Creates issues", operation: "write" }) }),
+      "GET /api/v1/tools/t3": () => errorResponse(500, "boom")(),
+      "GET /api/v1/analytics/tools/t1": () => ({ status: 404, json: { detail: "gone" } }),
+    }));
     const user = userEvent.setup();
     function Switcher() {
       const [id, setId] = useState<string | null>(null);
@@ -180,7 +180,7 @@ describe("drawers", () => {
   });
 
   it("skill drawer: a failed load says so instead of loading forever", async () => {
-    mockFetch({ [`GET ${API}/skills/k9`]: () => ({ status: 500 }) });
+    mockFetch(withDefaults({ "GET /api/v1/skills/k9": () => errorResponse(500, "boom")() }));
     renderWithProviders(<SkillDrawer skillId="k9" onClose={() => {}} />, { route: "/skills" });
     expect(await screen.findByText("Skill details couldn't be loaded.")).toBeTruthy();
     expect(screen.queryByText("Loading skill…")).toBeNull();
@@ -191,23 +191,23 @@ describe("drawers", () => {
 
 describe("Playground Run-as picker explains an empty list", () => {
   const routes = (principals: () => { status?: number; json?: unknown }) =>
-    mockFetch({
-      [`GET ${API}/servers`]: () => ({ json: [] }),
-      [`GET ${API}/tools`]: () => ({ json: page }),
-      [`GET ${API}/tools/t1`]: () => ({ json: { id: "t1", server_id: "s1", name: "x", input_schema: { type: "object" }, schema_hash: "h", tags: [], operation: "read", required_scopes: [], enabled: true, version: 1 } }),
-      [`GET ${API}/principals`]: principals,
-    });
+    mockFetch(withDefaults({
+      "GET /api/v1/servers": () => ({ json: [] }),
+      "GET /api/v1/tools": () => ({ json: page }),
+      "GET /api/v1/tools/t1": () => ({ json: toolRow({ name: "x", input_schema: { type: "object" } }) }),
+      "GET /api/v1/principals": principals,
+    }));
 
   it("when /principals fails", async () => {
     setCredentials({ adminToken: "adm" });
-    routes(() => ({ status: 500 }));
+    routes(() => errorResponse(500, "boom")());
     renderWithProviders(<PlaygroundPage />, { route: "/playground?tool=t1" });
     expect((await screen.findByTestId("run-as-hint")).textContent).toMatch(/agent list couldn't be loaded/);
   });
 
   it("when no agent is enabled", async () => {
     setCredentials({ adminToken: "adm" });
-    routes(() => ({ json: [{ id: "p1", agent_id: "off-bot", enabled: false, max_tools: 8, created_at: "" }] }));
+    routes(() => ({ json: [principalRow({ id: "p1", agent_id: "off-bot", enabled: false, max_tools: 8, created_at: "" })] }));
     renderWithProviders(<PlaygroundPage />, { route: "/playground?tool=t1" });
     const hint = await screen.findByTestId("run-as-hint");
     expect(hint.textContent).toMatch(/No enabled agents to run as/);
